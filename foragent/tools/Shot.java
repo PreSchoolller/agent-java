@@ -12,6 +12,7 @@ import io.github.preschoolller.agentjava.store.Message;
 
 import javax.imageio.ImageIO;
 import javax.swing.JFrame;
+import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.WindowConstants;
@@ -37,9 +38,9 @@ import java.util.Properties;
  * </pre>
  * 输出：持久化往返 + 删尾/单条删除/置顶落盘/旧格式迁移测试（PERSIST_OK）、
  * 配置方案往返/重命名/平面键迁移测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
- * 流式落库断言（STREAM_OK）+ 十一张截图
+ * 流式落库断言（STREAM_OK）+ 十二张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
- * 9置顶,10搜索高亮,11搜索片段}.png（SHOT_OK）。
+ * 9置顶,10搜索高亮,11搜索片段,12右键菜单}.png（SHOT_OK）。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
@@ -303,6 +304,23 @@ public class Shot {
         edt(() -> WINDOW.getSidebar().setSearchQuery("并发"));
         Thread.sleep(400);
         capture(args[0] + "-11-search-snippet.png");
+
+        // —— 截图 12：会话右键菜单（清掉搜索后，对列表合成一个 popupTrigger 按下事件弹菜单） ——
+        edt(() -> WINDOW.getSidebar().setSearchQuery(""));
+        Thread.sleep(300);
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof JList) {
+                    component.dispatchEvent(new MouseEvent(component, MouseEvent.MOUSE_PRESSED,
+                            System.currentTimeMillis(), MouseEvent.BUTTON3_MASK, 30, 20, 1, true));
+                    break;
+                }
+            }
+        });
+        Thread.sleep(500);
+        capture(args[0] + "-12-context-menu.png");
 
         edt(() -> WINDOW.dispose());
         System.out.println("SHOT_OK");

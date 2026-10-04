@@ -306,18 +306,18 @@ public class Sidebar extends JPanel {
         convList.setSelectedIndex(index);
         Conversation conversation = convList.getSelectedValue();
 
-        JMenuItem pinItem = new JMenuItem(conversation.isPinned() ? "取消置顶" : "置顶");
+        JMenuItem pinItem = Ui.menuItem(conversation.isPinned() ? "取消置顶" : "置顶");
         pinItem.addActionListener(ev -> store.setPinned(conversation.getId(), !conversation.isPinned()));
-        JMenuItem renameItem = new JMenuItem("重命名");
+        JMenuItem renameItem = Ui.menuItem("重命名");
         renameItem.addActionListener(ev -> {
             String title = JOptionPane.showInputDialog(this, "新的对话标题", conversation.getTitle());
             if (title != null && !title.isBlank()) {
                 store.rename(conversation.getId(), title);
             }
         });
-        JMenuItem exportItem = new JMenuItem("导出 Markdown");
+        JMenuItem exportItem = Ui.menuItem("导出 Markdown");
         exportItem.addActionListener(ev -> exportMarkdown(conversation));
-        JMenuItem deleteItem = new JMenuItem("删除");
+        JMenuItem deleteItem = Ui.menuItem("删除", true);
         deleteItem.addActionListener(ev -> {
             int choice = JOptionPane.showConfirmDialog(this,
                     "删除对话「" + conversation.getTitle() + "」？",
@@ -327,6 +327,7 @@ public class Sidebar extends JPanel {
             }
         });
         JPopupMenu popup = new JPopupMenu();
+        Ui.stylePopupMenu(popup);
         popup.add(pinItem);
         popup.add(renameItem);
         popup.add(exportItem);

@@ -89,7 +89,7 @@ public class SettingsDialog extends JDialog {
         Ui.styleSpinner(temperatureSpinner);
         Ui.styleSpinner(maxTokensSpinner);
         Ui.styleSpinner(fontSizeSpinner);
-        profileCombo.setFont(Ui.FONT_PLAIN);
+        Ui.styleComboBox(profileCombo);
         profileCombo.setPreferredSize(new Dimension(150, 30));
         profileAddButton.setPreferredSize(new Dimension(58, 26));
         profileRenameButton.setPreferredSize(new Dimension(70, 26));

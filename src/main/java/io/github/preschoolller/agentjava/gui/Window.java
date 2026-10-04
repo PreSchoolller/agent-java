@@ -529,7 +529,8 @@ public class Window extends JFrame {
     /** "…"菜单：目前只有删除，之后加编辑/复制等直接往这里堆 */
     private void showDeleteMenu(JButton anchor, MessageCard owner) {
         JPopupMenu popup = new JPopupMenu();
-        JMenuItem delete = new JMenuItem("删除这条消息");
+        Ui.stylePopupMenu(popup);
+        JMenuItem delete = Ui.menuItem("删除这条消息", true);
         delete.addActionListener(e -> deleteMessage(owner));
         popup.add(delete);
         popup.show(anchor, 0, anchor.getHeight() + 2);

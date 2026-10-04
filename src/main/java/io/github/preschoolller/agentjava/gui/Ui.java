@@ -1,18 +1,27 @@
 package io.github.preschoolller.agentjava.gui;
 
 import javax.swing.BorderFactory;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
 import javax.swing.JComponent;
+import javax.swing.JComboBox;
+import javax.swing.JLabel;
+import javax.swing.JList;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
 import javax.swing.JTextField;
+import javax.swing.plaf.basic.BasicComboBoxUI;
+import javax.swing.plaf.basic.BasicMenuItemUI;
 import javax.swing.plaf.basic.BasicScrollBarUI;
 import javax.swing.plaf.basic.BasicSplitPaneDivider;
 import javax.swing.plaf.basic.BasicSplitPaneUI;
 import javax.swing.plaf.basic.BasicSpinnerUI;
+import javax.swing.plaf.basic.ComboPopup;
 import javax.swing.border.Border;
 import javax.swing.text.JTextComponent;
 import java.awt.Color;
@@ -71,6 +80,12 @@ final class Ui {
     static final Color QUOTE_BG = new Color(0xF7F8FA);
     static final Color QUOTE_BAR = new Color(0xD3D9E0);
     static final Color QUOTE_TEXT = new Color(0x5B6470);
+    /** 弹出层（菜单/下拉列表）描边 */
+    static final Color POPUP_BORDER = new Color(0xE0E3E8);
+    /** 菜单项/下拉列表选中底色 */
+    static final Color MENU_SELECTED = new Color(0xE9EEF6);
+    /** 危险操作文字（删除类菜单项） */
+    static final Color DANGER = new Color(0xD9453B);
 
     static final Font FONT_PLAIN = new Font("微软雅黑", Font.PLAIN, 12);
     static final Font FONT_BOLD = new Font("微软雅黑", Font.BOLD, 12);
@@ -236,6 +251,103 @@ final class Ui {
         button.setPreferredSize(new Dimension(18, 16));
         button.setFocusable(false);
         return button;
+    }
+
+    /** 弹出菜单：白底、浅灰细描边、四周留 4px 内衬（选中高亮与描边不贴边） */
+    static void stylePopupMenu(JPopupMenu menu) {
+        menu.setBackground(Color.WHITE);
+        menu.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(POPUP_BORDER),
+                BorderFactory.createEmptyBorder(4, 4, 4, 4)));
+    }
+
+    /** 现代菜单项：白底、圆角悬停底色、无虚线焦点框；danger 项（删除类）文字用警示红 */
+    static JMenuItem menuItem(String text) {
+        return menuItem(text, false);
+    }
+
+    static JMenuItem menuItem(String text, boolean danger) {
+        JMenuItem item = new JMenuItem(text);
+        item.setFont(FONT_PLAIN);
+        item.setForeground(danger ? DANGER : TEXT);
+        item.setBackground(Color.WHITE);
+        item.setFocusPainted(false);
+        item.setBorder(BorderFactory.createEmptyBorder(7, 12, 7, 28));
+        item.setUI(new BasicMenuItemUI() {
+            {
+                selectionBackground = MENU_SELECTED;
+                selectionForeground = item.getForeground();
+            }
+
+            @Override
+            protected void paintBackground(Graphics g, JMenuItem menuItem, Color bgColor) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(menuItem.getBackground());
+                g2.fillRect(0, 0, menuItem.getWidth(), menuItem.getHeight());
+                if (menuItem.isArmed()) {
+                    g2.setColor(selectionBackground);
+                    g2.fillRoundRect(2, 1, menuItem.getWidth() - 4, menuItem.getHeight() - 2, 8, 8);
+                }
+                g2.dispose();
+            }
+        });
+        return item;
+    }
+
+    /** 下拉框：圆角白底输入框同款描边，右侧细箭头复用微调框的按钮，弹出列表白底圆角选中 */
+    static void styleComboBox(JComboBox<?> combo) {
+        // installColors 会用 Metal 的 ComboBox.background（#EEEEEE）盖掉先前设的底色，
+        // setBackground 必须放在 setUI 之后
+        combo.setUI(new BasicComboBoxUI() {
+            @Override
+            protected ComboPopup createPopup() {
+                ComboPopup popup = super.createPopup();
+                if (popup instanceof JComponent component) {
+                    component.setBorder(BorderFactory.createCompoundBorder(
+                            BorderFactory.createLineBorder(POPUP_BORDER),
+                            BorderFactory.createEmptyBorder(3, 3, 3, 3)));
+                    component.setBackground(Color.WHITE);
+                }
+                return popup;
+            }
+
+            @Override
+            protected JButton createArrowButton() {
+                JButton button = spinnerButton("▼");
+                button.setPreferredSize(new Dimension(20, 14));
+                return button;
+            }
+
+            @Override
+            public void paintCurrentValueBackground(Graphics g, Rectangle bounds, boolean hasFocus) {
+                // JDK 的默认实现直接取 UI 默认 "ComboBox.background"（Metal 下 #EEEEEE）填值区，
+                // 无视组件实际背景（见踩坑 #18）；这里改成跟随组件背景
+                g.setColor(comboBox.getBackground());
+                g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+            }
+
+            @Override
+            public void paintCurrentValue(Graphics g, Rectangle bounds, boolean hasFocus) {
+                super.paintCurrentValue(g, bounds, false); // 聚焦时不画整条选中底色，白底黑字到底
+            }
+        });
+        combo.setFont(FONT_PLAIN);
+        combo.setForeground(TEXT);
+        combo.setBackground(Color.WHITE);
+        combo.setBorder(inputBorder(BORDER_STRONG));
+        combo.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                                                          boolean selected, boolean focus) {
+                JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, selected, focus);
+                label.setFont(FONT_PLAIN);
+                label.setForeground(TEXT);
+                label.setBackground(selected ? MENU_SELECTED : Color.WHITE);
+                label.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
+                return label;
+            }
+        });
     }
 
     /** 把滚动面板的纵横滚动条都换成现代细滚动条 */
