@@ -6,15 +6,21 @@ import io.github.preschoolller.agentjava.gui.Window;
 import io.github.preschoolller.agentjava.gui.MarkdownRenderer;
 import io.github.preschoolller.agentjava.store.Conversation;
 import io.github.preschoolller.agentjava.store.ConversationStore;
+import io.github.preschoolller.agentjava.store.Message;
 
 import javax.imageio.ImageIO;
 import javax.swing.JFrame;
+import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.WindowConstants;
+import java.awt.Component;
+import java.awt.Container;
+import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -24,9 +30,9 @@ import java.util.List;
  *   javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
  *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
- * 输出：持久化往返 + 删尾消息测试（PERSIST_OK）、Markdown 解析断言（MD_PARSE_OK）、
- * 流式落库断言（STREAM_OK）+ 八张截图
- * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式}.png（SHOT_OK）。
+ * 输出：持久化往返 + 删尾/单条删除测试（PERSIST_OK）、Markdown 解析断言（MD_PARSE_OK）、
+ * 流式落库断言（STREAM_OK）+ 九张截图
+ * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单}.png（SHOT_OK）。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
@@ -79,6 +85,13 @@ public class Shot {
         expect(second.getActive().getMessages().get(0).text().contains("\n"), "换行保留");
         expect("回复".equals(second.getActive().getMessages().get(1).text()), "删尾后落盘内容");
         expect("往返测试标题".equals(second.getActive().getTitle()), "标题");
+        // 单条删除：按消息对象同一性定位，删掉后旧引用失效、新文件只剩一条
+        Message middle = second.getActive().getMessages().get(1);
+        expect(second.removeMessage(second.getActive().getId(), middle), "按同一性删除");
+        expect(second.getActive().getMessages().size() == 1, "删除后消息数");
+        expect(!second.removeMessage(second.getActive().getId(), middle), "旧引用重复删除应失败");
+        ConversationStore third = new ConversationStore(dir.resolve("history.json"));
+        expect(third.getActive().getMessages().size() == 1, "删除后落盘消息数");
         System.out.println("PERSIST_OK");
 
         // —— Markdown 解析断言（块类型与数量） ——
@@ -194,6 +207,20 @@ public class Shot {
                 .getMessages().get(store.getActive().getMessages().size() - 1).text()), "流式落库");
         System.out.println("STREAM_OK");
 
+        // —— 截图 8：悬停"…"菜单（合成 mouseEntered 让浮层显示，不做真实鼠标移动） ——
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof JPanel) {
+                    component.dispatchEvent(new MouseEvent(component,
+                            MouseEvent.MOUSE_ENTERED, System.currentTimeMillis(), 0, 5, 5, 0, false));
+                }
+            }
+        });
+        Thread.sleep(400);
+        capture(args[0] + "-8-hover.png");
+
         edt(() -> WINDOW.dispose());
         System.out.println("SHOT_OK");
         System.exit(0);
@@ -220,6 +247,16 @@ public class Shot {
     private static void expect(boolean condition, String what) {
         if (!condition) {
             throw new AssertionError("校验失败: " + what);
+        }
+    }
+
+    /** 深度收集组件树，供合成鼠标事件用 */
+    private static void collectComponents(Component component, List<Component> out) {
+        out.add(component);
+        if (component instanceof Container container) {
+            for (Component child : container.getComponents()) {
+                collectComponents(child, out);
+            }
         }
     }
 }

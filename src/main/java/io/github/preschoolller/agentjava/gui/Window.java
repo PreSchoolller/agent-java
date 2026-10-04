@@ -10,7 +10,9 @@ import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JScrollBar;
 import javax.swing.JSplitPane;
@@ -22,6 +24,7 @@ import javax.swing.text.View;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.EventQueue;
 import java.awt.FlowLayout;
@@ -29,7 +32,13 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.HeadlessException;
+import java.awt.IllegalComponentStateException;
 import java.awt.Insets;
+import java.awt.MouseInfo;
+import java.awt.PointerInfo;
+import java.awt.Point;
+import java.awt.Rectangle;
+import java.awt.LayoutManager2;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.ComponentAdapter;
@@ -38,6 +47,8 @@ import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -136,9 +147,134 @@ public class Window extends JFrame {
         void finish();
     }
 
-    /** 一张消息卡片：卡片面板、内容区、是否为用户消息；AI 卡片另有 Markdown 内容面板与重新生成按钮 */
-    private record MessageCard(JPanel card, JComponent content, boolean user,
-                               MarkdownPane markdown, JButton regenerate) {
+    /** 一张消息卡片。message 持仓库消息的同一性引用（流式落库会替换成新记录，finish 时同步），删除按它定位 */
+    private static final class MessageCard {
+        final JPanel card;
+        final JComponent content;
+        final boolean user;
+        final MarkdownPane markdown;
+        final JButton regenerate;
+        final JButton menu;
+        Message message;
+
+        MessageCard(JPanel card, JComponent content, boolean user, Message message,
+                    MarkdownPane markdown, JButton regenerate, JButton menu) {
+            this.card = card;
+            this.content = content;
+            this.user = user;
+            this.message = message;
+            this.markdown = markdown;
+            this.regenerate = regenerate;
+            this.menu = menu;
+        }
+    }
+
+    /**
+     * 卡片布局：NORTH 角色行（可选）/ CENTER 内容 / SOUTH 尾行，外加一个不占排版空间的右上角"…"浮层。
+     * 三段的排布规则照搬 BorderLayout（南段钉底、中段撑满余量）。不直接用 BorderLayout 叠加浮层，
+     * 是因为它的约束不是占掉已有区域（无约束 add 顶掉 CENTER）就是抛异常，浮层只能自己管。
+     */
+    private static final class OverlayCardLayout implements LayoutManager2 {
+        private Component north;
+        private Component center;
+        private Component south;
+        private Component overlay;
+
+        @Override
+        public void addLayoutComponent(String name, Component comp) {
+            switch (name == null ? "" : name) {
+                case BorderLayout.NORTH -> north = comp;
+                case BorderLayout.CENTER -> center = comp;
+                case BorderLayout.SOUTH -> south = comp;
+                case "overlay" -> overlay = comp;
+                default -> throw new IllegalArgumentException("未知约束: " + name);
+            }
+        }
+
+        @Override
+        public void addLayoutComponent(Component comp, Object constraints) {
+            addLayoutComponent((String) constraints, comp);
+        }
+
+        @Override
+        public void removeLayoutComponent(Component comp) {
+            if (comp == north) {
+                north = null;
+            } else if (comp == center) {
+                center = null;
+            } else if (comp == south) {
+                south = null;
+            } else if (comp == overlay) {
+                overlay = null;
+            }
+        }
+
+        @Override
+        public Dimension preferredLayoutSize(Container parent) {
+            Insets insets = parent.getInsets();
+            int width = 0;
+            int height = 0;
+            for (Component c : new Component[]{north, center, south}) {
+                if (c == null || !c.isVisible()) {
+                    continue;
+                }
+                Dimension d = c.getPreferredSize();
+                width = Math.max(width, d.width);
+                height += d.height;
+            }
+            return new Dimension(width + insets.left + insets.right, height + insets.top + insets.bottom);
+        }
+
+        @Override
+        public Dimension minimumLayoutSize(Container parent) {
+            return preferredLayoutSize(parent);
+        }
+
+        @Override
+        public void layoutContainer(Container parent) {
+            Insets insets = parent.getInsets();
+            int width = parent.getWidth() - insets.left - insets.right;
+            int northHeight = sizedHeight(north);
+            int southHeight = sizedHeight(south);
+            if (north != null && north.isVisible()) {
+                north.setBounds(insets.left, insets.top, width, northHeight);
+            }
+            if (south != null && south.isVisible()) {
+                south.setBounds(insets.left, parent.getHeight() - insets.bottom - southHeight, width, southHeight);
+            }
+            if (center != null && center.isVisible()) {
+                int top = insets.top + northHeight;
+                int height = Math.max(0, parent.getHeight() - insets.bottom - southHeight - top);
+                center.setBounds(insets.left, top, width, height);
+            }
+            if (overlay != null && overlay.isVisible()) {
+                Dimension size = overlay.getPreferredSize();
+                overlay.setBounds(parent.getWidth() - size.width - 8, 5, size.width, size.height);
+            }
+        }
+
+        private int sizedHeight(Component component) {
+            return component == null || !component.isVisible() ? 0 : component.getPreferredSize().height;
+        }
+
+        @Override
+        public Dimension maximumLayoutSize(Container target) {
+            return new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE);
+        }
+
+        @Override
+        public float getLayoutAlignmentX(Container target) {
+            return 0.5f;
+        }
+
+        @Override
+        public float getLayoutAlignmentY(Container target) {
+            return 0.5f;
+        }
+
+        @Override
+        public void invalidateLayout(Container target) {
+        }
     }
 
     public Window(String title) throws HeadlessException {
@@ -285,8 +421,9 @@ public class Window extends JFrame {
             content = markdown;
         }
 
+        JButton menuButton = createMenuButton();
         Ui.RoundPanel card = Ui.card(user ? Ui.USER_CARD_BG : Ui.CARD_BG);
-        card.setLayout(new BorderLayout(0, 6));
+        card.setLayout(new OverlayCardLayout());
         card.setBorder(BorderFactory.createEmptyBorder(12, 16, 8, 16));
 
         if (!user) {
@@ -312,13 +449,19 @@ public class Window extends JFrame {
         }
         card.add(content, BorderLayout.CENTER);
         card.add(timeRow, BorderLayout.SOUTH);
+        // 浮层用 BorderLayout 不认识的约束名：布局器不会给它分配区域（无约束的 add 会被当成
+        // CENTER 顶掉真正的内容组件），位置完全由 OverlayCardLayout.layoutContainer 负责
+        card.add(menuButton, "overlay");
+
+        attachHoverMenu(card, menuButton);
 
         // 先按下限高度占位，等测量出文本实际高度后再修正；宽度交给 GridBag 的 fill/anchor 控制
         card.setPreferredSize(new Dimension(0, CARD_MIN_HEIGHT_AI));
 
         waterfallPanel.add(card, rowConstraints(user));
         waterfallRowCount++;
-        MessageCard messageCard = new MessageCard(card, content, user, markdown, regenerate);
+        MessageCard messageCard = new MessageCard(card, content, user, message, markdown, regenerate, menuButton);
+        menuButton.addActionListener(e -> showDeleteMenu(menuButton, messageCard));
         messageCards.add(messageCard);
         emptyHint.setVisible(false);
 
@@ -326,6 +469,81 @@ public class Window extends JFrame {
         refreshRegenerateButtons();
         waterfallPanel.revalidate();
         return messageCard;
+    }
+
+    /** 卡片右上角的"…"消息操作按钮：默认隐藏，悬停卡片时出现 */
+    private JButton createMenuButton() {
+        JButton menu = Ui.button("…");
+        menu.setFont(new Font("微软雅黑", Font.BOLD, 12));
+        menu.setPreferredSize(new Dimension(28, 20));
+        menu.setToolTipText("消息操作");
+        menu.setVisible(false);
+        return menu;
+    }
+
+    /** 悬停显示"…"、移出隐藏。进出子组件（文本区、按钮）也会触发父容器的 exited，用指针位置兜底 */
+    private void attachHoverMenu(JPanel card, JButton menuButton) {
+        card.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                setMenuVisible(menuButton, true);
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                if (isPointerInside(card)) {
+                    return; // 只是滑进了卡片内部的子组件
+                }
+                setMenuVisible(menuButton, false);
+            }
+        });
+    }
+
+    /** 指针当前是否仍在组件范围内（按屏幕坐标判断） */
+    private boolean isPointerInside(Component component) {
+        PointerInfo info = MouseInfo.getPointerInfo();
+        if (info == null) {
+            return false;
+        }
+        try {
+            Point location = component.getLocationOnScreen();
+            return new Rectangle(location, component.getSize()).contains(info.getLocation());
+        } catch (IllegalComponentStateException e) {
+            return false; // 组件已被移除或隐藏，悬停状态自然失效
+        }
+    }
+
+    private void setMenuVisible(JButton menuButton, boolean visible) {
+        boolean show = visible && !generating;
+        if (menuButton.isVisible() == show) {
+            return;
+        }
+        menuButton.setVisible(show);
+        if (show) {
+            Container card = menuButton.getParent();
+            card.doLayout(); // 浮层坐标在布局器里，先摆好再画
+            card.repaint();
+        }
+    }
+
+    /** "…"菜单：目前只有删除，之后加编辑/复制等直接往这里堆 */
+    private void showDeleteMenu(JButton anchor, MessageCard owner) {
+        JPopupMenu popup = new JPopupMenu();
+        JMenuItem delete = new JMenuItem("删除这条消息");
+        delete.addActionListener(e -> deleteMessage(owner));
+        popup.add(delete);
+        popup.show(anchor, 0, anchor.getHeight() + 2);
+    }
+
+    /** 删除一条消息：按卡片持有的消息引用删仓库记录，然后按当前会话重建瀑布流 */
+    private void deleteMessage(MessageCard card) {
+        if (generating) {
+            return;
+        }
+        if (!store.removeMessage(displayedConvId, card.message)) {
+            return;
+        }
+        showConversation(store.getActive());
     }
 
     /** 瀑布流一行的 GridBag 约束：用户卡片靠右上且不定宽，AI 卡片水平撑满 */
@@ -372,24 +590,27 @@ public class Window extends JFrame {
         return button;
     }
 
-    /** 只有最后一张 AI 卡片显示重新生成（且生成中隐藏），其余 AI 卡片的按钮一律藏掉 */
+    /** 只有最后一张 AI 卡片显示重新生成（且生成中隐藏），其余 AI 卡片的按钮一律藏掉；悬停菜单同步藏起 */
     private void refreshRegenerateButtons() {
         int last = messageCards.size() - 1;
         for (int i = 0; i < messageCards.size(); i++) {
-            JButton button = messageCards.get(i).regenerate();
-            if (button != null) {
-                button.setVisible(!generating && i == last);
+            MessageCard card = messageCards.get(i);
+            if (card.regenerate != null) {
+                card.regenerate.setVisible(!generating && i == last);
+            }
+            if (generating) {
+                card.menu.setVisible(false);
             }
         }
     }
 
     /** 重新生成：先把最后一张 AI 卡片从界面移除（仓库删除由后端在回调里做），再通知后端重新请求 */
     private void requestRegenerate() {
-        if (generating || messageCards.isEmpty() || messageCards.get(messageCards.size() - 1).user()) {
+        if (generating || messageCards.isEmpty() || messageCards.get(messageCards.size() - 1).user) {
             return;
         }
         MessageCard last = messageCards.remove(messageCards.size() - 1);
-        waterfallPanel.remove(last.card());
+        waterfallPanel.remove(last.card);
         waterfallRowCount = Math.max(0, waterfallRowCount - 1);
         refreshRegenerateButtons();
         waterfallPanel.revalidate();
@@ -438,21 +659,21 @@ public class Window extends JFrame {
         }
         int userWidth = Math.max(USER_CARD_MIN_WIDTH,
                 Math.min(USER_CARD_MAX_WIDTH, panelWidth * 2 / 3));
-        int textWidth = messageCard.user() ? userWidth - CARD_SIDE_INSETS : panelWidth - CARD_SIDE_INSETS;
-        int textHeight = messageCard.user()
-                ? measureTextHeight((JTextPane) messageCard.content(), textWidth)
-                : messageCard.markdown().preferredHeightAt(textWidth);
-        int minHeight = messageCard.user() ? CARD_MIN_HEIGHT_USER : CARD_MIN_HEIGHT_AI;
-        int frameHeight = messageCard.user() ? CARD_FRAME_HEIGHT_USER : CARD_FRAME_HEIGHT_AI;
+        int textWidth = messageCard.user ? userWidth - CARD_SIDE_INSETS : panelWidth - CARD_SIDE_INSETS;
+        int textHeight = messageCard.user
+                ? measureTextHeight((JTextPane) messageCard.content, textWidth)
+                : messageCard.markdown.preferredHeightAt(textWidth);
+        int minHeight = messageCard.user ? CARD_MIN_HEIGHT_USER : CARD_MIN_HEIGHT_AI;
+        int frameHeight = messageCard.user ? CARD_FRAME_HEIGHT_USER : CARD_FRAME_HEIGHT_AI;
         int height = Math.max(minHeight, textHeight + frameHeight);
         // AI 卡片首选宽保持 0、靠 fill 拉伸；用户卡片把宽度写进首选值供 fill=NONE 使用。
         // 都不能把面板宽度写回首选宽：JViewport 会按首选宽撑大面板，resize 再触发 fit，形成正反馈。
-        if (messageCard.user()) {
-            messageCard.card().setPreferredSize(new Dimension(userWidth, height));
+        if (messageCard.user) {
+            messageCard.card.setPreferredSize(new Dimension(userWidth, height));
         } else {
-            messageCard.card().setPreferredSize(new Dimension(0, height));
+            messageCard.card.setPreferredSize(new Dimension(0, height));
         }
-        messageCard.card().setMaximumSize(null);
+        messageCard.card.setMaximumSize(null);
         waterfallPanel.revalidate();
     }
 
@@ -545,7 +766,10 @@ public class Window extends JFrame {
             finished = true;
             flushTimer.stop();
             flush();
-            store.updateMessageText(conversationId, message, full.toString());
+            Message updated = store.updateMessageText(conversationId, message, full.toString());
+            if (updated != null) {
+                card.message = updated; // 仓库记录已换成新对象，卡片同步持有（删除消息按同一性定位）
+            }
         }
 
         /** 把缓冲内容渲染到卡片并按新高度重排；会话已切走或卡片不在显示中时静默丢弃 */
@@ -559,7 +783,7 @@ public class Window extends JFrame {
                 return;
             }
             boolean follow = isNearBottom(); // 高度马上要变，先记录用户是否本来就在底部
-            card.markdown().setMarkdown(full.toString());
+            card.markdown.setMarkdown(full.toString());
             fitCardHeight(index);
             if (follow) {
                 scrollToBottom();

@@ -78,16 +78,29 @@ public class Conversation {
         return removed;
     }
 
-    /** 流式输出结束后把已存在消息的文本替换为最终值（按消息对象同一性查找），找到并替换返回 true */
-    public boolean updateMessageText(Message target, String text) {
+    /** 删除一条消息（按消息对象同一性查找），成功返回 true */
+    public boolean removeMessage(Message target) {
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) == target) {
-                messages.set(i, new Message(target.role(), text, target.time()));
+                messages.remove(i);
                 touch();
                 return true;
             }
         }
         return false;
+    }
+
+    /** 流式输出结束后把已存在消息的文本替换为最终值（按消息对象同一性查找），返回替换后的新记录；没找到返回 null */
+    public Message updateMessageText(Message target, String text) {
+        for (int i = 0; i < messages.size(); i++) {
+            if (messages.get(i) == target) {
+                Message updated = new Message(target.role(), text, target.time());
+                messages.set(i, updated);
+                touch();
+                return updated;
+            }
+        }
+        return null;
     }
 
     private void touch() {

@@ -118,6 +118,17 @@ public class ConversationStore {
         return message;
     }
 
+    /** 删除指定会话中的一条消息（按消息对象同一性查找），删除成功返回 true */
+    public boolean removeMessage(String id, Message target) {
+        Conversation conversation = findById(id);
+        if (conversation == null || !conversation.removeMessage(target)) {
+            return false;
+        }
+        save();
+        fireChanged();
+        return true;
+    }
+
     /** 删除指定会话的最后一条消息（重新生成时由后端先删旧回答），返回被删消息；没有则返回 null */
     public Message removeLastMessage(String id) {
         Conversation conversation = findById(id);
@@ -132,13 +143,18 @@ public class ConversationStore {
         return removed;
     }
 
-    /** 流式输出结束后的落库：把消息文本替换为最终内容（按消息对象同一性查找） */
-    public void updateMessageText(String id, Message target, String text) {
+    /** 流式输出结束后的落库：把消息文本替换为最终内容（按消息对象同一性查找），返回替换后的新记录 */
+    public Message updateMessageText(String id, Message target, String text) {
         Conversation conversation = findById(id);
-        if (conversation != null && conversation.updateMessageText(target, text)) {
+        if (conversation == null) {
+            return null;
+        }
+        Message updated = conversation.updateMessageText(target, text);
+        if (updated != null) {
             save();
             fireChanged();
         }
+        return updated;
     }
 
     private Conversation findById(String id) {
