@@ -4,6 +4,7 @@ import io.github.preschoolller.agentjava.gui.SettingsDialog;
 import io.github.preschoolller.agentjava.gui.Sidebar;
 import io.github.preschoolller.agentjava.gui.Window;
 import io.github.preschoolller.agentjava.gui.MarkdownRenderer;
+import io.github.preschoolller.agentjava.store.AppSettings;
 import io.github.preschoolller.agentjava.store.Conversation;
 import io.github.preschoolller.agentjava.store.ConversationStore;
 import io.github.preschoolller.agentjava.store.JsonKit;
@@ -19,11 +20,13 @@ import java.awt.Container;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 
 /**
  * 前端回归工具（提交在库里，产物落在 gitignore 的 target/ 下）。每次改完 UI 跑一遍：
@@ -32,7 +35,8 @@ import java.util.Map;
  *   javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
  *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
- * 输出：持久化往返 + 删尾/单条删除/置顶落盘/旧格式迁移测试（PERSIST_OK）、Markdown 解析断言（MD_PARSE_OK）、
+ * 输出：持久化往返 + 删尾/单条删除/置顶落盘/旧格式迁移测试（PERSIST_OK）、
+ * 配置方案往返/重命名/平面键迁移测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
  * 流式落库断言（STREAM_OK）+ 十一张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段}.png（SHOT_OK）。
@@ -113,6 +117,44 @@ public class Shot {
         expect("旧消息".equals(legacyStore.getConversations().get(0).getMessages().get(0).text()), "旧格式消息");
         expect(!legacyStore.getConversations().get(0).isPinned(), "旧格式默认不置顶");
         System.out.println("PERSIST_OK");
+
+        // —— 配置方案（AppSettings.at 独立实例，不碰真实 ~/.agentjava/settings.properties） ——
+        Path settingsFile = dir.resolve("settings.properties");
+        AppSettings testSettings = AppSettings.at(settingsFile);
+        expect(testSettings.getProfileNames().equals(List.of("默认")), "首启默认方案");
+        testSettings.getActiveProfile().setModel("test-model");
+        expect("test-model".equals(testSettings.getModel()), "委托 getter 读当前方案");
+        testSettings.addProfile("写作", testSettings.getActiveProfile());
+        testSettings.setActiveProfileName("写作");
+        testSettings.getActiveProfile().setTemperature(0.3);
+        expect(!testSettings.addProfile("写作", testSettings.getActiveProfile()), "重名方案拒绝");
+        testSettings.save();
+        AppSettings reloaded = AppSettings.at(settingsFile);
+        expect(reloaded.getProfileNames().equals(List.of("默认", "写作")), "方案列表往返");
+        expect("写作".equals(reloaded.getActiveProfileName()), "活动方案往返");
+        expect(reloaded.getActiveProfile().getTemperature() == 0.3, "方案参数往返");
+        expect("test-model".equals(reloaded.getProfile("默认").getModel()), "首个方案参数往返");
+        reloaded.removeProfile("默认");
+        expect(reloaded.getActiveProfileName().equals("写作"), "删活动方案后兜底");
+        reloaded.renameProfile("写作", "写作2");
+        expect(reloaded.getProfileNames().equals(List.of("写作2")), "重命名");
+        // 旧版平面键迁移：backendUrl/model/... 归入"默认"，全局字号保留
+        Path legacySettings = dir.resolve("legacy-settings.properties");
+        Properties legacyProps = new Properties();
+        legacyProps.setProperty("backendUrl", "http://old:8080/chat");
+        legacyProps.setProperty("model", "legacy-model");
+        legacyProps.setProperty("temperature", "0.5");
+        legacyProps.setProperty("contentFontSize", "18");
+        try (OutputStream out = Files.newOutputStream(legacySettings)) {
+            legacyProps.store(out, "");
+        }
+        AppSettings migrated = AppSettings.at(legacySettings);
+        expect(migrated.getProfileNames().equals(List.of("默认")), "迁移方案数");
+        expect("legacy-model".equals(migrated.getActiveProfile().getModel()), "迁移模型");
+        expect("http://old:8080/chat".equals(migrated.getActiveProfile().getBackendUrl()), "迁移地址");
+        expect(migrated.getActiveProfile().getTemperature() == 0.5, "迁移温度");
+        expect(migrated.getContentFontSize() == 18, "全局字号保留");
+        System.out.println("SETTINGS_OK");
 
         // —— Markdown 解析断言（块类型与数量） ——
         List<MarkdownRenderer.Block> md = MarkdownRenderer.parse(SAMPLE_MD);
