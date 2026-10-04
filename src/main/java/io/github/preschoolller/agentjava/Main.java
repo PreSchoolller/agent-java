@@ -3,7 +3,6 @@ package io.github.preschoolller.agentjava;
 import io.github.preschoolller.agentjava.gui.Window;
 
 import javax.swing.SwingUtilities;
-import javax.swing.WindowConstants;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -11,7 +10,7 @@ public class Main {
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
             Window window = new Window("Agent");
-            window.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
+            // 关闭行为由 Window 自己接管（EXIT_ON_CLOSE 或最小化到托盘，设置里配置）
             window.setSize(1280, 720);
             window.setLocation(640, 360);
             window.setVisible(true);

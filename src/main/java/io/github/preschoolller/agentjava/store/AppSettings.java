@@ -33,6 +33,10 @@ public final class AppSettings {
     private String activeProfileName = DEFAULT_PROFILE_NAME;
     /** 消息卡片正文字号（全局 UI 偏好，不属于任何方案） */
     private int contentFontSize = 16;
+    /** 配色主题（全局 UI 偏好）："light" / "dark" */
+    private String uiTheme = "light";
+    /** 关闭按钮最小化到托盘（全局 UI 偏好，默认关闭=直接退出） */
+    private boolean minimizeToTray;
 
     private AppSettings(Path file) {
         this.file = file;
@@ -184,6 +188,25 @@ public final class AppSettings {
         this.contentFontSize = contentFontSize;
     }
 
+    public String getUiTheme() {
+        return uiTheme;
+    }
+
+    /** 仅接受 "light"/"dark"，其他值忽略 */
+    public void setUiTheme(String uiTheme) {
+        if ("light".equals(uiTheme) || "dark".equals(uiTheme)) {
+            this.uiTheme = uiTheme;
+        }
+    }
+
+    public boolean isMinimizeToTray() {
+        return minimizeToTray;
+    }
+
+    public void setMinimizeToTray(boolean minimizeToTray) {
+        this.minimizeToTray = minimizeToTray;
+    }
+
     // —— 变更通知与持久化 ——
 
     public void addChangeListener(Runnable listener) {
@@ -211,6 +234,8 @@ public final class AppSettings {
             properties.setProperty(prefix + "systemPrompt", profile.getSystemPrompt());
         }
         properties.setProperty("contentFontSize", String.valueOf(contentFontSize));
+        properties.setProperty("uiTheme", uiTheme);
+        properties.setProperty("minimizeToTray", String.valueOf(minimizeToTray));
         try {
             Files.createDirectories(file.getParent());
             try (OutputStream out = Files.newOutputStream(file)) {
@@ -235,6 +260,8 @@ public final class AppSettings {
             return;
         }
         contentFontSize = parseInt(properties.getProperty("contentFontSize"), contentFontSize);
+        setUiTheme(properties.getProperty("uiTheme"));
+        minimizeToTray = Boolean.parseBoolean(properties.getProperty("minimizeToTray", "false"));
         String names = properties.getProperty("profileNames");
         if (names == null) {
             loadLegacyFlat(properties); // v1 之前的平面键格式

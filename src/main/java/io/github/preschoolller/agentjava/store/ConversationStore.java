@@ -36,6 +36,11 @@ public class ConversationStore {
         changeListeners.add(listener);
     }
 
+    /** 注销监听（侧栏随主窗口重建换新时，旧实例用它解除订阅） */
+    public void removeChangeListener(Runnable listener) {
+        changeListeners.remove(listener);
+    }
+
     private void fireChanged() {
         changeListeners.forEach(Runnable::run);
     }

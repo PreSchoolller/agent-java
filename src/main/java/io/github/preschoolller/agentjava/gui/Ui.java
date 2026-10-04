@@ -14,7 +14,10 @@ import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.JTextPane;
+import javax.swing.UIManager;
 import javax.swing.plaf.basic.BasicComboBoxUI;
 import javax.swing.plaf.basic.BasicMenuItemUI;
 import javax.swing.plaf.basic.BasicScrollBarUI;
@@ -41,56 +44,123 @@ import java.awt.event.MouseEvent;
 
 /**
  * 统一配色与小组件：圆角面板 + 扁平按钮。
- * 最初照手绘图画的绿色边框、黑色粗边框已全部替换成这套浅色扁平风格，
+ * 最初照手绘图画的绿色边框、黑色粗边框已全部替换成这套扁平风格，
  * 层次感靠背景深浅和卡片阴影式描边体现。
+ * 颜色常量是"当前生效配色"的镜像，真正的色值在 Theme（浅/深两套，P2-1）：
+ * applyTheme 切换镜像后，构造期捕获了颜色的组件由 Window 重建界面换装；
+ * paintComponent 里现场读常量的自绘组件（按钮/滚动条/分隔条）重绘即生效。
+ * 新增颜色三处同步：Theme.light()/dark() 各一行 + 下面声明 + applyTheme 镜像。
  */
 final class Ui {
 
+    /** 当前生效的色板 */
+    private static Theme theme;
+
     /** 主区背景 */
-    static final Color BG = new Color(0xF4F5F7);
+    static Color BG;
     /** 侧栏背景 */
-    static final Color SIDEBAR_BG = new Color(0xEDEFF2);
+    static Color SIDEBAR_BG;
     /** 侧栏选中项背景 */
-    static final Color SIDEBAR_SELECTED = new Color(0xDCE3ED);
-    /** AI 消息卡片底色 */
-    static final Color CARD_BG = Color.WHITE;
+    static Color SIDEBAR_SELECTED;
+    /** 消息卡片底色 */
+    static Color CARD_BG;
     /** 用户消息卡片底色，微微偏蓝方便扫读 */
-    static final Color USER_CARD_BG = new Color(0xF3F7FF);
+    static Color USER_CARD_BG;
     /** 卡片描边 */
-    static final Color BORDER = new Color(0xE3E5E9);
+    static Color BORDER;
     /** 输入框描边 */
-    static final Color BORDER_STRONG = new Color(0xD6D9DE);
+    static Color BORDER_STRONG;
     /** 主要文字 */
-    static final Color TEXT = new Color(0x24292F);
+    static Color TEXT;
     /** 次要文字（时间、占位提示等） */
-    static final Color TEXT_SECONDARY = new Color(0x8A919F);
+    static Color TEXT_SECONDARY;
     /** 主题色：AI 角色名、主按钮、输入框聚焦 */
-    static final Color ACCENT = new Color(0x3D7EFF);
+    static Color ACCENT;
     /** 主题色悬停 */
-    static final Color ACCENT_PRESSED = new Color(0x2F66DB);
+    static Color ACCENT_PRESSED;
     /** 实时数据小胶囊底色 */
-    static final Color PILL_BG = new Color(0xE9EBEF);
+    static Color PILL_BG;
     /** 代码块底色与描边（AI 消息 Markdown 渲染） */
-    static final Color CODE_BG = new Color(0xF6F8FA);
-    static final Color CODE_BORDER = new Color(0xE2E6EB);
+    static Color CODE_BG;
+    static Color CODE_BORDER;
     /** 行内代码前景/底色 */
-    static final Color INLINE_CODE_FG = new Color(0x9C3B57);
-    static final Color INLINE_CODE_BG = new Color(0xF0F1F5);
+    static Color INLINE_CODE_FG;
+    static Color INLINE_CODE_BG;
     /** 引用块底色、左竖条与文字色 */
-    static final Color QUOTE_BG = new Color(0xF7F8FA);
-    static final Color QUOTE_BAR = new Color(0xD3D9E0);
-    static final Color QUOTE_TEXT = new Color(0x5B6470);
-    /** 弹出层（菜单/下拉列表）描边 */
-    static final Color POPUP_BORDER = new Color(0xE0E3E8);
+    static Color QUOTE_BG;
+    static Color QUOTE_BAR;
+    static Color QUOTE_TEXT;
+    /** 弹出层（菜单/下拉列表）描边与底色 */
+    static Color POPUP_BORDER;
+    static Color MENU_BG;
     /** 菜单项/下拉列表选中底色 */
-    static final Color MENU_SELECTED = new Color(0xE9EEF6);
+    static Color MENU_SELECTED;
+    /** 输入控件（文本框/微调框/下拉框值区）底色 */
+    static Color INPUT_BG;
+    /** 按钮常态/悬停底色 */
+    static Color BUTTON_BG;
+    static Color BUTTON_HOVER_BG;
+    /** 分隔线：侧栏右缘、分栏分隔条、Markdown 水平线 */
+    static Color DIVIDER_LINE;
+    /** 搜索命中词高亮底色（侧栏 HTML） */
+    static Color MARK_BG;
     /** 危险操作文字（删除类菜单项） */
-    static final Color DANGER = new Color(0xD9453B);
+    static Color DANGER;
+    /** 滚动条拇指配色：常态浅灰，悬停/拖动加深 */
+    static Color SCROLL_THUMB;
+    static Color SCROLL_THUMB_ACTIVE;
 
     static final Font FONT_PLAIN = new Font("微软雅黑", Font.PLAIN, 12);
     static final Font FONT_BOLD = new Font("微软雅黑", Font.BOLD, 12);
 
+    static {
+        applyTheme("light");
+    }
+
     private Ui() {
+    }
+
+    /** 切换配色（"light"/"dark"，其他值回落浅色）：更新镜像；组件换装靠 Window 重建界面 */
+    static void applyTheme(String name) {
+        theme = "dark".equals(name) ? Theme.DARK : Theme.LIGHT;
+        BG = theme.bg;
+        SIDEBAR_BG = theme.sidebarBg;
+        SIDEBAR_SELECTED = theme.sidebarSelected;
+        CARD_BG = theme.cardBg;
+        USER_CARD_BG = theme.userCardBg;
+        BORDER = theme.border;
+        BORDER_STRONG = theme.borderStrong;
+        TEXT = theme.text;
+        TEXT_SECONDARY = theme.textSecondary;
+        ACCENT = theme.accent;
+        ACCENT_PRESSED = theme.accentPressed;
+        PILL_BG = theme.pillBg;
+        CODE_BG = theme.codeBg;
+        CODE_BORDER = theme.codeBorder;
+        INLINE_CODE_FG = theme.inlineCodeFg;
+        INLINE_CODE_BG = theme.inlineCodeBg;
+        QUOTE_BG = theme.quoteBg;
+        QUOTE_BAR = theme.quoteBar;
+        QUOTE_TEXT = theme.quoteText;
+        POPUP_BORDER = theme.popupBorder;
+        MENU_BG = theme.menuBg;
+        MENU_SELECTED = theme.menuSelected;
+        INPUT_BG = theme.inputBg;
+        BUTTON_BG = theme.buttonBg;
+        BUTTON_HOVER_BG = theme.buttonHoverBg;
+        DIVIDER_LINE = theme.dividerLine;
+        MARK_BG = theme.markBg;
+        DANGER = theme.danger;
+        SCROLL_THUMB = theme.scrollThumb;
+        SCROLL_THUMB_ACTIVE = theme.scrollThumbActive;
+        // 提示气泡跟随主题；轻量弹层每次 show 时重建，下一次生效
+        UIManager.put("ToolTip.background", MENU_BG);
+        UIManager.put("ToolTip.foreground", TEXT);
+    }
+
+    /** 颜色转 HTML 十六进制（侧栏高亮等 Swing HTML 场景用，见踩坑 #17） */
+    static String hex(Color color) {
+        return String.format("#%06x", color.getRGB() & 0xFFFFFF);
     }
 
     /** 圆角面板：绘制圆角底色和（可选）描边；background/borderColor 可直接改后 repaint */
@@ -109,9 +179,12 @@ final class Ui {
                 BorderFactory.createEmptyBorder(6, 10, 6, 10));
     }
 
-    /** 给文本输入框套圆角边框，聚焦时描边变主题色 */
+    /** 给文本输入框套圆角边框，聚焦时描边变主题色；底色/文字/光标显式设过，深色下才不会黑字黑光标 */
     static void styleInput(JTextComponent field) {
         field.setBorder(inputBorder(BORDER_STRONG));
+        field.setBackground(INPUT_BG);
+        field.setForeground(TEXT);
+        field.setCaretColor(TEXT);
         field.addFocusListener(new FocusAdapter() {
             @Override
             public void focusGained(FocusEvent e) {
@@ -174,7 +247,7 @@ final class Ui {
                         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                         g2.setColor(SIDEBAR_BG);
                         g2.fillRect(0, 0, getWidth(), getHeight());
-                        g2.setColor(hover || pressed ? ACCENT : new Color(0xE0E3E8));
+                        g2.setColor(hover || pressed ? ACCENT : DIVIDER_LINE);
                         g2.fillRect(getWidth() / 2, 0, 1, getHeight());
                         g2.dispose();
                     }
@@ -206,14 +279,15 @@ final class Ui {
             field.setHorizontalAlignment(JTextField.LEFT);
             field.setFont(FONT_PLAIN);
             field.setForeground(TEXT);
-            field.setBackground(Color.WHITE);
+            field.setCaretColor(TEXT);
+            field.setBackground(INPUT_BG);
             field.setOpaque(true);
             field.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 2));
-            // Metal 会给编辑区自带一层灰色边框/底色，清掉后透出白底
+            // Metal 会给编辑区自带一层灰色边框/底色，清掉后透出主题底色
             editor.setBorder(BorderFactory.createEmptyBorder());
         }
         spinner.setBorder(new RoundBorder(10, BORDER_STRONG));
-        spinner.setBackground(Color.WHITE);
+        spinner.setBackground(INPUT_BG);
         spinner.setPreferredSize(new Dimension(160, 32));
     }
 
@@ -253,15 +327,15 @@ final class Ui {
         return button;
     }
 
-    /** 弹出菜单：白底、浅灰细描边、四周留 4px 内衬（选中高亮与描边不贴边） */
+    /** 弹出菜单：弹层底色、浅描边、四周留 4px 内衬（选中高亮与描边不贴边） */
     static void stylePopupMenu(JPopupMenu menu) {
-        menu.setBackground(Color.WHITE);
+        menu.setBackground(MENU_BG);
         menu.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(POPUP_BORDER),
                 BorderFactory.createEmptyBorder(4, 4, 4, 4)));
     }
 
-    /** 现代菜单项：白底、圆角悬停底色、无虚线焦点框；danger 项（删除类）文字用警示红 */
+    /** 现代菜单项：弹层底色、圆角悬停底色、无虚线焦点框；danger 项（删除类）文字用警示红 */
     static JMenuItem menuItem(String text) {
         return menuItem(text, false);
     }
@@ -270,7 +344,7 @@ final class Ui {
         JMenuItem item = new JMenuItem(text);
         item.setFont(FONT_PLAIN);
         item.setForeground(danger ? DANGER : TEXT);
-        item.setBackground(Color.WHITE);
+        item.setBackground(MENU_BG);
         item.setFocusPainted(false);
         item.setBorder(BorderFactory.createEmptyBorder(7, 12, 7, 28));
         item.setUI(new BasicMenuItemUI() {
@@ -295,7 +369,7 @@ final class Ui {
         return item;
     }
 
-    /** 下拉框：圆角白底输入框同款描边，右侧细箭头复用微调框的按钮，弹出列表白底圆角选中 */
+    /** 下拉框：圆角输入框同款描边，右侧细箭头复用微调框的按钮，弹出列表跟随弹层配色 */
     static void styleComboBox(JComboBox<?> combo) {
         // installColors 会用 Metal 的 ComboBox.background（#EEEEEE）盖掉先前设的底色，
         // setBackground 必须放在 setUI 之后
@@ -307,7 +381,7 @@ final class Ui {
                     component.setBorder(BorderFactory.createCompoundBorder(
                             BorderFactory.createLineBorder(POPUP_BORDER),
                             BorderFactory.createEmptyBorder(3, 3, 3, 3)));
-                    component.setBackground(Color.WHITE);
+                    component.setBackground(MENU_BG);
                 }
                 return popup;
             }
@@ -334,7 +408,7 @@ final class Ui {
         });
         combo.setFont(FONT_PLAIN);
         combo.setForeground(TEXT);
-        combo.setBackground(Color.WHITE);
+        combo.setBackground(INPUT_BG);
         combo.setBorder(inputBorder(BORDER_STRONG));
         combo.setRenderer(new DefaultListCellRenderer() {
             @Override
@@ -343,7 +417,7 @@ final class Ui {
                 JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, selected, focus);
                 label.setFont(FONT_PLAIN);
                 label.setForeground(TEXT);
-                label.setBackground(selected ? MENU_SELECTED : Color.WHITE);
+                label.setBackground(selected ? MENU_SELECTED : MENU_BG);
                 label.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
                 return label;
             }
@@ -362,10 +436,6 @@ final class Ui {
         bar.setOpaque(false);
         bar.setPreferredSize(new Dimension(8, 8));
     }
-
-    /** 滚动条拇指配色：常态浅灰，悬停/拖动加深 */
-    private static final Color SCROLL_THUMB = new Color(0xC7CCD5);
-    private static final Color SCROLL_THUMB_ACTIVE = new Color(0xA6AEBB);
 
     private static class ModernScrollBarUI extends BasicScrollBarUI {
 
@@ -418,7 +488,7 @@ final class Ui {
         }
     }
 
-    /** 扁平按钮：白底圆角细边框，悬停微微变灰 */
+    /** 扁平按钮：圆角细边框，悬停微微变色 */
     static JButton button(String text) {
         JButton button = new JButton(text) {
             private boolean hover;
@@ -446,9 +516,10 @@ final class Ui {
             protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(hover ? new Color(0xF0F2F6) : Color.WHITE);
+                // 现场读镜像常量：换主题后重绘即生效，不用等重建
+                g2.setColor(hover ? BUTTON_HOVER_BG : BUTTON_BG);
                 g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
-                g2.setColor(new Color(0xD6D9DE));
+                g2.setColor(BORDER_STRONG);
                 g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
                 g2.dispose();
                 super.paintComponent(g);
@@ -459,9 +530,30 @@ final class Ui {
         return button;
     }
 
+    /**
+     * 展示型文本面板（不可编辑、不透出底色、不参与焦点）。卡片正文这类组件嵌在滚动容器里，
+     * 光标的 adjustVisibility 会在组件 bounds 未就绪时把外层滚动容器一路拽到光标处（见踩坑 #20），
+     * 因此直接禁掉 scrollRectToVisible——纯展示组件没有任何需要滚到可见的场景。
+     */
+    static JTextPane displayTextPane() {
+        return new JTextPane() {
+            @Override
+            public void scrollRectToVisible(Rectangle rect) {
+            }
+        };
+    }
+
+    /** 同 displayTextPane：给代码块等展示型 JTextArea 用 */
+    static JTextArea displayTextArea() {
+        return new JTextArea() {
+            @Override
+            public void scrollRectToVisible(Rectangle rect) {
+            }
+        };
+    }
+
     /** 主按钮：主题色圆角底 + 白字 */
-    static JButton primaryButton(String text) {
-        JButton button = new JButton(text) {
+    static JButton primaryButton(String text) {        JButton button = new JButton(text) {
             private boolean hover;
             {
                 setContentAreaFilled(false);

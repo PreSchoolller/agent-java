@@ -90,9 +90,7 @@ public final class MarkdownRenderer {
     private record TextRow(List<Block> units) implements Row {
         @Override
         public Component component(Font base) {
-            JTextPane pane = new JTextPane();
-            pane.setEditable(false);
-            pane.setOpaque(false);
+            JTextPane pane = Ui.displayTextPane();
             pane.setFont(base);
             fillFlow(pane.getStyledDocument(), units, base);
             return pane;
@@ -169,9 +167,9 @@ public final class MarkdownRenderer {
         }
 
         private JTextArea codeArea(Font base) {
-            JTextArea area = new JTextArea(code.code());
-            area.setEditable(false);
+            JTextArea area = Ui.displayTextArea();
             area.setOpaque(false);
+            area.setText(code.code());
             area.setLineWrap(true);
             area.setWrapStyleWord(false);
             area.setFont(new Font("Monospaced", Font.PLAIN, Math.max(11, base.getSize() - 1)));
@@ -205,9 +203,7 @@ public final class MarkdownRenderer {
             };
             panel.setOpaque(false);
             panel.setLayout(new BorderLayout());
-            JTextPane pane = new JTextPane();
-            pane.setEditable(false);
-            pane.setOpaque(false);
+            JTextPane pane = Ui.displayTextPane();
             pane.setFont(base);
             fillQuote(pane.getStyledDocument(), quote, base);
             pane.setBorder(BorderFactory.createEmptyBorder(

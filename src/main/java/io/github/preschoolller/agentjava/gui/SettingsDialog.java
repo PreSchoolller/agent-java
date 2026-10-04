@@ -7,6 +7,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
@@ -49,6 +50,10 @@ public class SettingsDialog extends JDialog {
     private boolean suppressProfileSwitch;
 
     private final JComboBox<String> profileCombo = new JComboBox<>();
+    /** 配色主题：索引 0 浅色 / 1 深色，保存时写回 AppSettings，由主窗口重建生效 */
+    private final JComboBox<String> themeCombo = new JComboBox<>(new String[]{"浅色", "深色"});
+    /** 关闭按钮最小化到托盘（系统不支持托盘时勾了也只会直接退出） */
+    private final JCheckBox trayCheckBox = new JCheckBox("最小化到托盘");
     private final JButton profileAddButton = Ui.button("新建");
     private final JButton profileRenameButton = Ui.button("重命名");
     private final JButton profileDeleteButton = Ui.button("删除");
@@ -83,6 +88,16 @@ public class SettingsDialog extends JDialog {
         systemPromptArea.setWrapStyleWord(true);
         systemPromptArea.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
         systemPromptArea.setFont(new Font("微软雅黑", Font.PLAIN, 13));
+        // 没设过前景/光标色的文本组件默认黑字黑光标，深色下隐形（见踩坑 #19）
+        systemPromptArea.setBackground(Ui.INPUT_BG);
+        systemPromptArea.setForeground(Ui.TEXT);
+        systemPromptArea.setCaretColor(Ui.TEXT);
+        themeCombo.setSelectedIndex("dark".equals(settings.getUiTheme()) ? 1 : 0);
+        trayCheckBox.setSelected(settings.isMinimizeToTray());
+        trayCheckBox.setFont(Ui.FONT_PLAIN);
+        trayCheckBox.setForeground(Ui.TEXT);
+        trayCheckBox.setOpaque(false);
+        trayCheckBox.setToolTipText("系统不支持托盘时，关闭按钮仍会直接退出");
 
         Ui.styleInput(backendUrlField);
         Ui.styleInput(modelField);
@@ -90,6 +105,8 @@ public class SettingsDialog extends JDialog {
         Ui.styleSpinner(maxTokensSpinner);
         Ui.styleSpinner(fontSizeSpinner);
         Ui.styleComboBox(profileCombo);
+        Ui.styleComboBox(themeCombo);
+        themeCombo.setPreferredSize(new Dimension(150, 30));
         profileCombo.setPreferredSize(new Dimension(150, 30));
         profileAddButton.setPreferredSize(new Dimension(58, 26));
         profileRenameButton.setPreferredSize(new Dimension(70, 26));
@@ -122,32 +139,27 @@ public class SettingsDialog extends JDialog {
 
         JPanel chatCard = Ui.card(Ui.CARD_BG);
         chatCard.setLayout(new GridBagLayout());
+        int chatRow = 0;
+        chatRow = addRow(chatCard, chatRow, "主题", themeCombo);
+        chatRow = addRow(chatCard, chatRow, "正文字号", fontSizeSpinner);
+        chatRow = addRow(chatCard, chatRow, "关闭按钮", trayCheckBox);
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(6, 14, 6, 14);
         gbc.anchor = GridBagConstraints.WEST;
         gbc.gridx = 0;
-        gbc.gridy = 0;
+        gbc.gridy = chatRow;
         gbc.weightx = 0;
-        gbc.fill = GridBagConstraints.NONE;
-        chatCard.add(fieldLabel("正文字号"), gbc);
-        gbc.gridx = 1;
-        gbc.weightx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        chatCard.add(fontSizeSpinner, gbc);
-        gbc.gridx = 0;
-        gbc.gridy = 1;
-        gbc.weightx = 0;
-        gbc.weighty = 0;
         gbc.fill = GridBagConstraints.NONE;
         chatCard.add(fieldLabel("系统提示词"), gbc);
         gbc.gridx = 1;
-        gbc.gridy = 1;
         gbc.weightx = 1;
         gbc.weighty = 1;
         gbc.fill = GridBagConstraints.BOTH;
         JScrollPane promptScroll = new JScrollPane(systemPromptArea);
         promptScroll.setBorder(Ui.inputBorder(Ui.BORDER_STRONG));
-        promptScroll.getViewport().setBackground(java.awt.Color.WHITE);
+        // JScrollPane 自己的背景会从圆角边框的内衬里露出来（浅色下是白看不出，深色下一圈白边）
+        promptScroll.setBackground(Ui.INPUT_BG);
+        promptScroll.getViewport().setBackground(Ui.INPUT_BG);
         Ui.styleScrollPane(promptScroll);
         chatCard.add(promptScroll, gbc);
         groups.add(chatCard);
@@ -310,6 +322,8 @@ public class SettingsDialog extends JDialog {
         profile.setMaxTokens(((Number) maxTokensSpinner.getValue()).intValue());
         profile.setSystemPrompt(systemPromptArea.getText());
         settings.setContentFontSize(((Number) fontSizeSpinner.getValue()).intValue());
+        settings.setUiTheme(themeCombo.getSelectedIndex() == 1 ? "dark" : "light");
+        settings.setMinimizeToTray(trayCheckBox.isSelected());
         settings.applyProfiles(working, selectedName); // 内部落盘 + fireChanged
         saved = true;
         dispose();

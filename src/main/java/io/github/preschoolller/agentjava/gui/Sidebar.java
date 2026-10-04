@@ -68,6 +68,8 @@ public class Sidebar extends JPanel {
 
     private final ConversationStore store;
     private final Callbacks callbacks;
+    /** 仓库变更监听：存字段是为了 detach 时能注销同一个实例 */
+    private final Runnable refreshListener = this::refresh;
     private final DefaultListModel<Conversation> listModel = new DefaultListModel<>();
     private final JList<Conversation> convList = new JList<>(listModel);
     private final JScrollPane listScroll;
@@ -88,7 +90,7 @@ public class Sidebar extends JPanel {
         setLayout(new BorderLayout(0, 8));
         setBackground(Ui.SIDEBAR_BG);
         setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 0, 1, new Color(0xE0E3E8)),
+                BorderFactory.createMatteBorder(0, 0, 0, 1, Ui.DIVIDER_LINE),
                 BorderFactory.createEmptyBorder(10, 8, 10, 8)));
 
         initTopButtons();
@@ -104,7 +106,7 @@ public class Sidebar extends JPanel {
         Ui.styleScrollPane(listScroll);
         add(listScroll, BorderLayout.CENTER);
 
-        store.addChangeListener(this::refresh);
+        store.addChangeListener(refreshListener);
         refresh();
         setExpanded(true);
 
@@ -112,6 +114,11 @@ public class Sidebar extends JPanel {
         setPreferredSize(new Dimension(EXPANDED_WIDTH, 100));
         setMinimumSize(new Dimension(40, 0));
         setMaximumSize(new Dimension(520, Integer.MAX_VALUE));
+    }
+
+    /** 主窗口重建（换主题）时调用：注销仓库监听，旧实例随之可整体回收 */
+    void detach() {
+        store.removeChangeListener(refreshListener);
     }
 
     public boolean isExpanded() {
@@ -375,17 +382,19 @@ public class Sidebar extends JPanel {
                     ? "新对话"
                     : conversation.getTitle();
             String time = TIME_FORMAT.format(Instant.ofEpochMilli(conversation.getUpdatedAt()));
+            String secondary = Ui.hex(Ui.TEXT_SECONDARY);
             StringBuilder html = new StringBuilder("<html><body style='padding:2px 0'>");
             html.append(highlightHtml(title, currentQuery));
-            html.append("<br><small><font color='#8A919F'>");
+            html.append("<br><small><font color='").append(secondary).append("'>");
             if (conversation.isPinned()) {
-                html.append("<font color='#3D7EFF'>置顶</font> · ");
+                html.append("<font color='").append(Ui.hex(Ui.ACCENT)).append("'>置顶</font> · ");
             }
             html.append(time).append("</font></small>");
             if (!currentQuery.isEmpty() && !title.toLowerCase().contains(currentQuery)) {
                 String snippet = contentSnippet(conversation, currentQuery);
                 if (snippet != null) {
-                    html.append("<br><small><font color='#8A919F'>").append(snippet).append("</font></small>");
+                    html.append("<br><small><font color='").append(secondary).append("'>")
+                            .append(snippet).append("</font></small>");
                 }
             }
             html.append("</body></html>");
@@ -400,9 +409,12 @@ public class Sidebar extends JPanel {
 
     /**
      * 高亮写法见踩坑 #17：Swing 的 HTML 不认 HTML5 的 &lt;mark&gt;，行内背景只能靠 span 的 CSS。
-     * 底色选了在 SIDEBAR_BG/SIDEBAR_SELECTED 上都够显眼的暖黄。
+     * 底色取自主题（MARK_BG），浅色下是在侧栏两种底色上都够显眼的暖黄。
      */
-    private static final String MARK_OPEN = "<span style='background-color:#FFE28A'>";
+    private static String markOpen() {
+        return "<span style='background-color:" + Ui.hex(Ui.MARK_BG) + "'>";
+    }
+
     private static final String MARK_CLOSE = "</span>";
 
     /** 把 [from, to) 区间文本转义成 HTML 安全文本 */
@@ -435,7 +447,7 @@ public class Sidebar extends JPanel {
         int hit;
         while ((hit = lower.indexOf(query, from)) >= 0) {
             html.append(escapeHtml(text, from, hit))
-                    .append(MARK_OPEN)
+                    .append(markOpen())
                     .append(escapeHtml(text, hit, hit + query.length()))
                     .append(MARK_CLOSE);
             from = hit + query.length();

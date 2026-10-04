@@ -14,11 +14,16 @@ import javax.imageio.ImageIO;
 import javax.swing.JFrame;
 import javax.swing.JList;
 import javax.swing.JPanel;
+import javax.swing.JTextPane;
+import javax.swing.MenuSelectionManager;
 import javax.swing.SwingUtilities;
 import javax.swing.WindowConstants;
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.GraphicsEnvironment;
+import java.awt.SystemTray;
 import java.awt.event.MouseEvent;
+import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.OutputStream;
@@ -37,10 +42,10 @@ import java.util.Properties;
  *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
  * 输出：持久化往返 + 删尾/单条删除/置顶落盘/旧格式迁移测试（PERSIST_OK）、
- * 配置方案往返/重命名/平面键迁移测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
- * 流式落库断言（STREAM_OK）+ 十二张截图
+ * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
+ * 流式落库断言（STREAM_OK）、长会话窗口化断言（WINDOWING_OK）+ 十五张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
- * 9置顶,10搜索高亮,11搜索片段,12右键菜单}.png（SHOT_OK）。
+ * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置}.png（SHOT_OK）。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
@@ -75,8 +80,21 @@ public class Shot {
             结尾段落。
             """;
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
+        try {
+            run(args);
+        } catch (Throwable t) {
+            t.printStackTrace();
+            System.out.println("SHOT_FAILED");
+        } finally {
+            System.exit(0); // 失败也要退干净：AWT 线程不退会留下还能交互的僵尸窗口误导排查
+        }
+    }
+
+    private static void run(String[] args) throws Exception {
         Path dir = Files.createTempDirectory("agentjava-verify");
+        // 截图配色固定浅色：开发者本机存过深色时回归图才有确定基线（只改内存，不落盘）
+        AppSettings.get().setUiTheme("light");
 
         // —— 持久化往返（含特殊字符）+ 删尾消息，纯模型操作，不涉及 UI ——
         ConversationStore first = new ConversationStore(dir.resolve("history.json"));
@@ -155,6 +173,17 @@ public class Shot {
         expect("http://old:8080/chat".equals(migrated.getActiveProfile().getBackendUrl()), "迁移地址");
         expect(migrated.getActiveProfile().getTemperature() == 0.5, "迁移温度");
         expect(migrated.getContentFontSize() == 18, "全局字号保留");
+        // 主题偏好：默认浅色、非法值忽略、落盘往返
+        expect("light".equals(testSettings.getUiTheme()), "主题默认浅色");
+        testSettings.setUiTheme("深色");
+        expect("light".equals(testSettings.getUiTheme()), "非法主题值忽略");
+        testSettings.setUiTheme("dark");
+        testSettings.save();
+        expect("dark".equals(AppSettings.at(settingsFile).getUiTheme()), "主题落盘往返");
+        expect(!testSettings.isMinimizeToTray(), "托盘偏好默认关闭");
+        testSettings.setMinimizeToTray(true);
+        testSettings.save();
+        expect(AppSettings.at(settingsFile).isMinimizeToTray(), "托盘偏好落盘往返");
         System.out.println("SETTINGS_OK");
 
         // —— Markdown 解析断言（块类型与数量） ——
@@ -322,6 +351,120 @@ public class Shot {
         Thread.sleep(500);
         capture(args[0] + "-12-context-menu.png");
 
+        // —— 收尾：合成 MOUSE_EXITED 藏掉 8 号起的悬停"…"，clearSelectedPath 关掉右键菜单 ——
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof JPanel) {
+                    component.dispatchEvent(new MouseEvent(component,
+                            MouseEvent.MOUSE_EXITED, System.currentTimeMillis(), 0, 5, 5, 0, false));
+                }
+            }
+            MenuSelectionManager.defaultManager().clearSelectedPath();
+        });
+        Thread.sleep(400);
+
+        // —— 长会话窗口化（P2-2）：300 条消息，卡片全量占位、只物化视口附近的组件 ——
+        // 窗口挂着侧栏/主区监听，所有 store 操作（含 newConversation）都必须进 EDT（踩坑 #1）；
+        // 分批灌入让窗口保持响应，避免整块 EDT 长时间冻结
+        Conversation[] c4Holder = new Conversation[1];
+        edt(() -> c4Holder[0] = store.newConversation());
+        Conversation c4 = c4Holder[0];
+        for (int from = 0; from < 300; from += 50) {
+            final int base = from;
+            edt(() -> {
+                for (int i = base; i < base + 50; i++) {
+                    String text = i % 2 == 0
+                            ? "第 " + i + " 问：这段文字用来撑出一条足够折行的用户消息，长度比一行长不少，"
+                                    + "验证窗口化下卡片高度测量依然正确。"
+                            : "第 " + i + " 答：**加粗**与`行内代码`混排。\n\n- 列表项一\n- 列表项二\n\n> 引用一下\n\n第二段正文。";
+                    store.appendMessage(c4.getId(), i % 2 == 0 ? Conversation.ROLE_USER : Conversation.ROLE_AI, text);
+                }
+            });
+            Thread.sleep(30);
+        }
+        edt(() -> WINDOW.getStore().switchTo(c3.getId())); // 先切走，再切回 c4 走完整的重建路径
+        Thread.sleep(1000);
+        edt(() -> WINDOW.getStore().switchTo(c4.getId()));
+        Thread.sleep(2500);
+        int[] counters = new int[2];
+        edt(() -> {
+            counters[0] = WINDOW.getWaterfallPanel().getComponentCount();
+            counters[1] = countTextPanes(WINDOW);
+        });
+        expect(counters[0] == 300, "长会话卡片全量占位: " + counters[0]);
+        expect(counters[1] > 10 && counters[1] < 120, "窗口化后仅视口附近物化: " + counters[1]);
+        // 滚回顶部：首卡应被物化，组件总数仍受限
+        // 滚回顶部（走滚动条 setValue，与真实用户拖拽同路径）：首卡应被物化，组件总数仍受限
+        edt(() -> {
+            java.awt.Container viewportParent = WINDOW.getWaterfallPanel().getParent().getParent();
+            if (viewportParent instanceof javax.swing.JScrollPane scrollPane) {
+                scrollPane.getVerticalScrollBar().setValue(0);
+            }
+        });
+        Thread.sleep(600);
+        edt(() -> {
+            counters[0] = ((Container) WINDOW.getWaterfallPanel().getComponent(0)).getComponentCount();
+            counters[1] = countTextPanes(WINDOW);
+        });
+        expect(counters[0] > 0, "滚回顶部后首卡已物化");
+        expect(counters[1] < 120, "滚动后物化窗口仍受限: " + counters[1]);
+        capture(args[0] + "-13-long-conversation.png");
+        System.out.println("WINDOWING_OK");
+
+        // —— 截图 14：深色主题（retheme 原地重建整窗，Markdown 会话校验卡片/代码块/引用配色） ——
+        // 12 号的合成点击会把列表第一项选中切走会话，先切回 Markdown 样例会话
+        edt(() -> WINDOW.getStore().switchTo(c3.getId()));
+        Thread.sleep(1200);
+        edt(() -> {
+            AppSettings.get().setUiTheme("dark");
+            WINDOW.retheme();
+        });
+        Thread.sleep(1500);
+        capture(args[0] + "-14-dark.png");
+
+        // —— 截图 15：深色下的设置面板（主题下拉应显示"深色"，输入控件跟随弹层配色） ——
+        edt(() -> {
+            SettingsDialog dialog = new SettingsDialog(WINDOW, false);
+            dialog.setVisible(true);
+            dialogHolder[0] = dialog;
+        });
+        Thread.sleep(600);
+        edt(() -> {
+            SettingsDialog dialog = dialogHolder[0];
+            BufferedImage image = new BufferedImage(dialog.getWidth(), dialog.getHeight(), BufferedImage.TYPE_INT_RGB);
+            dialog.printAll(image.createGraphics());
+            try {
+                ImageIO.write(image, "png", new File(args[0] + "-15-dark-settings.png"));
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+            dialog.dispose();
+        });
+
+        // —— 托盘最小化（P2-3）：关按钮=隐藏到托盘而非退出；放最后，这一步会把窗口藏起来 ——
+        if (!GraphicsEnvironment.isHeadless() && SystemTray.isSupported()) {
+            SystemTray tray = SystemTray.getSystemTray();
+            edt(() -> {
+                // 前面建窗时设过 DISPOSE_ON_CLOSE，这里换回窗口自管的 DO_NOTHING 再验关闭路径
+                WINDOW.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+                WINDOW.setMinimizeToTray(true);
+            });
+            expect(tray.getTrayIcons().length == 1, "托盘图标已注册");
+            edt(() -> WINDOW.dispatchEvent(
+                    new WindowEvent(WINDOW, WindowEvent.WINDOW_CLOSING)));
+            Thread.sleep(400);
+            expect(!WINDOW.isVisible(), "关闭按钮最小化到托盘（窗口隐藏）");
+            expect(WINDOW.isDisplayable(), "窗口未销毁（托盘可恢复）");
+            edt(() -> {
+                WINDOW.setMinimizeToTray(false);
+                WINDOW.setVisible(true);
+            });
+            expect(tray.getTrayIcons().length == 0, "托盘图标已注销");
+        }
+        System.out.println("TRAY_OK");
+
         edt(() -> WINDOW.dispose());
         System.out.println("SHOT_OK");
         System.exit(0);
@@ -359,5 +502,16 @@ public class Shot {
                 collectComponents(child, out);
             }
         }
+    }
+
+    /** 全窗口里的 JTextPane 数量：物化窗口断言用（未窗口化的 300 条会话会有近千个） */
+    private static int countTextPanes(Component component) {
+        int count = component instanceof JTextPane ? 1 : 0;
+        if (component instanceof Container container) {
+            for (Component child : container.getComponents()) {
+                count += countTextPanes(child);
+            }
+        }
+        return count;
     }
 }

@@ -20,8 +20,10 @@ import javax.swing.JTextPane;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingConstants;
 import javax.swing.Timer;
+import javax.swing.WindowConstants;
 import javax.swing.text.View;
 import java.awt.BorderLayout;
+import java.awt.AWTException;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
@@ -29,17 +31,26 @@ import java.awt.Dimension;
 import java.awt.EventQueue;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.GraphicsEnvironment;
+import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.HeadlessException;
 import java.awt.IllegalComponentStateException;
+import java.awt.Image;
 import java.awt.Insets;
 import java.awt.MouseInfo;
 import java.awt.PointerInfo;
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.LayoutManager2;
+import java.awt.MenuItem;
+import java.awt.PopupMenu;
+import java.awt.SystemTray;
 import java.awt.Toolkit;
+import java.awt.TrayIcon;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
@@ -49,6 +60,9 @@ import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.awt.image.BufferedImage;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -96,26 +110,24 @@ public class Window extends JFrame {
 
     private final ConversationStore store;
 
-    /** 主区 */
-    private final JPanel innerPanel = new JPanel(new BorderLayout(10, 10));
+    /** 主区。以下组件都由 buildUi 创建，换主题时 Window 原地重建（retheme），所以不是 final */
+    private JPanel innerPanel;
 
     /** 瀑布流容器：纵向排列多张消息卡片 */
-    private final JPanel waterfallPanel = new JPanel();
-    private final JScrollPane waterfallScroll = new JScrollPane(waterfallPanel,
-            ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
-            ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+    private JPanel waterfallPanel;
+    private JScrollPane waterfallScroll;
     /** 瀑布流为空时的占位提示，加入第一张卡片后隐藏 */
-    private final JLabel emptyHint = new JLabel("在下方输入，或从左侧选一段历史对话", SwingConstants.CENTER);
+    private JLabel emptyHint;
 
     /** 圆角输入区 */
-    private final Ui.RoundPanel inputBox = Ui.panel(20, Ui.CARD_BG, Ui.BORDER_STRONG);
-    private final JTextPane inputTextArea = new JTextPane();
-    private final JButton sendButton = Ui.primaryButton("发送");
-    private final JButton stopButton = Ui.button("停止");
+    private Ui.RoundPanel inputBox;
+    private JTextPane inputTextArea;
+    private JButton sendButton;
+    private JButton stopButton;
 
     /** 实时数据小胶囊（底部居中） */
-    private final Ui.RoundPanel realtimePill = Ui.panel(16, Ui.PILL_BG, null);
-    private final JLabel realtimeLabel = new JLabel("就绪");
+    private Ui.RoundPanel realtimePill;
+    private JLabel realtimeLabel;
 
     /** 已渲染的消息卡片，瀑布流宽度变化时需要按折行结果重算高度 */
     private final List<MessageCard> messageCards = new ArrayList<>();
@@ -123,13 +135,20 @@ public class Window extends JFrame {
     private int waterfallRowCount;
 
     /** 左侧会话栏和主区之间的可拖拽分栏 */
-    private final JSplitPane splitPane;
+    private JSplitPane splitPane;
 
     private Sidebar sidebar;
+    private Sidebar.Callbacks sidebarCallbacks;
     /** 当前显示在瀑布流里的会话 id，仓库的当前会话变化时据此决定是否重建 */
     private String displayedConvId;
     /** 切换会话后等卡片高度测量完毕，滚到最底部（聊天应用的惯例：打开即最新消息） */
     private boolean pendingScrollToBottom;
+    /** 生成中保存了设置：换主题/字号的重建挂起，setGenerating(false) 时补做（流式卡片引用不能断） */
+    private boolean pendingRebuild;
+    /** 托盘图标（关闭最小化到托盘开启时注册，P2-3）；null=未注册 */
+    private TrayIcon trayIcon;
+    /** 关闭按钮行为：true=隐藏到托盘，false=退出 */
+    private boolean minimizeToTray;
     private BiConsumer<Conversation, String> inputHandler;
     private Runnable stopHandler;
     private Consumer<Conversation> regenerateHandler;
@@ -147,25 +166,27 @@ public class Window extends JFrame {
         void finish();
     }
 
-    /** 一张消息卡片。message 持仓库消息的同一性引用（流式落库会替换成新记录，finish 时同步），删除按它定位 */
+    /**
+     * 一张消息卡片。message 持仓库消息的同一性引用（流式落库会替换成新记录，finish 时同步），
+     * 删除按它定位。卡片骨架（圆角底）常驻瀑布流，内容组件（正文/尾行/悬停菜单）只有卡片位于
+     * 视口附近才物化（P2-2 窗口化）；AI 卡片的 markdown 面板恒非空，承载解析与测量数据。
+     */
     private static final class MessageCard {
         final JPanel card;
-        final JComponent content;
         final boolean user;
         final MarkdownPane markdown;
-        final JButton regenerate;
-        final JButton menu;
         Message message;
+        /** 物化后才存在的组件；drainCard 时置 null */
+        JComponent content;
+        JButton regenerate;
+        JButton menu;
+        boolean materialized;
 
-        MessageCard(JPanel card, JComponent content, boolean user, Message message,
-                    MarkdownPane markdown, JButton regenerate, JButton menu) {
+        MessageCard(JPanel card, boolean user, Message message, MarkdownPane markdown) {
             this.card = card;
-            this.content = content;
             this.user = user;
             this.message = message;
             this.markdown = markdown;
-            this.regenerate = regenerate;
-            this.menu = menu;
         }
     }
 
@@ -285,19 +306,156 @@ public class Window extends JFrame {
         super(title);
         this.store = store;
 
+        // 先把保存的主题应用到 Ui 镜像再构建；首次构建与换主题重建走同一条 buildUi 路
+        Ui.applyTheme(AppSettings.get().getUiTheme());
+        sidebarCallbacks = new Sidebar.Callbacks() {
+            @Override
+            public void onToggleCollapse() {
+                boolean expanded = !sidebar.isExpanded();
+                sidebar.setExpanded(expanded);
+                splitPane.setDividerLocation(expanded ? Sidebar.EXPANDED_WIDTH : Sidebar.COLLAPSED_WIDTH);
+                getContentPane().revalidate();
+            }
+
+            @Override
+            public void onNewConversation() {
+                showConversation(store.newConversation());
+            }
+
+            @Override
+            public void onSelectConversation(String conversationId) {
+                store.switchTo(conversationId); // 变更监听里会触发主区重建
+            }
+
+            @Override
+            public void onOpenSettings() {
+                openSettings();
+            }
+        };
+        store.addChangeListener(this::onStoreChanged);
+        buildUi();
+        showConversation(store.getActive());
+        initCloseBehavior();
+    }
+
+    /**
+     * 关闭行为（P2-3）：不用 EXIT_ON_CLOSE——会话与设置都是即改即存，点关闭要么直接退出、
+     * 要么（勾了"关闭时最小化到托盘"且系统支持）隐藏窗口挂托盘，生成中的回复在后台继续。
+     * Main 不再覆盖默认关闭操作。
+     */
+    private void initCloseBehavior() {
+        setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                if (minimizeToTray && trayIcon != null) {
+                    setVisible(false);
+                } else {
+                    exitApp();
+                }
+            }
+        });
+        setMinimizeToTray(AppSettings.get().isMinimizeToTray());
+    }
+
+    private void exitApp() {
+        dispose();
+        System.exit(0);
+    }
+
+    /** 开/关"关闭时最小化到托盘"：注册或注销托盘图标；系统不支持时静默退化为直接退出 */
+    public void setMinimizeToTray(boolean value) {
+        minimizeToTray = value;
+        boolean supported = !GraphicsEnvironment.isHeadless() && SystemTray.isSupported();
+        if (value && supported && trayIcon == null) {
+            TrayIcon icon = createTrayIcon();
+            try {
+                SystemTray.getSystemTray().add(icon);
+                trayIcon = icon;
+            } catch (AWTException e) {
+                System.err.println("注册托盘图标失败: " + e.getMessage());
+            }
+        } else if ((!value || !supported) && trayIcon != null) {
+            SystemTray.getSystemTray().remove(trayIcon);
+            trayIcon = null;
+        }
+    }
+
+    /** 托盘图标：主题色圆角 + "A"，左键/双击恢复主窗口，菜单可显示或退出 */
+    private TrayIcon createTrayIcon() {
+        BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = image.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.setColor(Ui.ACCENT);
+        g2.fillRoundRect(1, 1, 14, 14, 6, 6);
+        g2.setColor(Color.WHITE);
+        g2.setFont(new Font("微软雅黑", Font.BOLD, 10));
+        FontMetrics metrics = g2.getFontMetrics();
+        g2.drawString("A", (16 - metrics.stringWidth("A")) / 2 + 1,
+                (16 - metrics.getHeight()) / 2 + metrics.getAscent() - 1);
+        g2.dispose();
+        PopupMenu popup = new PopupMenu();
+        MenuItem showItem = new MenuItem("显示主窗口");
+        showItem.addActionListener(e -> showFromTray());
+        MenuItem exitItem = new MenuItem("退出");
+        exitItem.addActionListener(e -> exitApp());
+        popup.add(showItem);
+        popup.add(exitItem);
+        TrayIcon icon = new TrayIcon(image, "Agent", popup);
+        icon.setImageAutoSize(true);
+        icon.addActionListener(e -> showFromTray()); // Windows 下双击托盘图标
+        return icon;
+    }
+
+    private void showFromTray() {
+        setVisible(true);
+        setExtendedState(NORMAL);
+        toFront();
+    }
+
+    /** 按当前主题构建全部界面组件；组件构造期捕获颜色，换主题必须整体重建（见 retheme） */
+    private void buildUi() {
         initInputArea();
         initMainArea();
         initRealtimePill();
         initSidebar();
-
-        showConversation(store.getActive());
-        store.addChangeListener(this::onStoreChanged);
 
         setLayout(new BorderLayout());
         getContentPane().setBackground(Ui.BG);
         splitPane = Ui.flatSplitPane(sidebar, innerPanel);
         listenSidebarDragging();
         add(splitPane, BorderLayout.CENTER);
+    }
+
+    /** 应用设置里的主题并原地重建界面（设置保存后调用）。生成中先挂起，setGenerating(false) 补做 */
+    public void retheme() {
+        Ui.applyTheme(AppSettings.get().getUiTheme());
+        if (generating) {
+            pendingRebuild = true;
+            return;
+        }
+        rebuildUi();
+    }
+
+    /** 原地重建整个界面换装；只保留侧栏展开状态和分隔条位置，后端回调注册在 Window 上不受影响 */
+    private void rebuildUi() {
+        boolean expanded = sidebar == null || sidebar.isExpanded();
+        int divider = splitPane == null ? Sidebar.EXPANDED_WIDTH : splitPane.getDividerLocation();
+        if (sidebar != null) {
+            sidebar.detach(); // 旧侧栏注销仓库监听，否则每换一次主题多挂一个
+        }
+        messageCards.clear();
+        getContentPane().removeAll();
+        buildUi();
+        showConversation(store.getActive());
+        if (expanded) {
+            splitPane.setDividerLocation(Math.max(divider, Sidebar.EXPANDED_WIDTH));
+        } else {
+            sidebar.setExpanded(false);
+            splitPane.setDividerLocation(Sidebar.COLLAPSED_WIDTH);
+        }
+        getContentPane().revalidate();
+        getContentPane().repaint();
     }
 
     public ConversationStore getStore() {
@@ -312,10 +470,16 @@ public class Window extends JFrame {
         return splitPane;
     }
 
+    /** 瀑布流容器（回归工具 Shot 断言卡片数/物化窗口用） */
+    public JPanel getWaterfallPanel() {
+        return waterfallPanel;
+    }
+
     /** 往当前对话追加一张用户输入卡片 */
     public void addUserMessage(String text) {
         Message message = store.appendMessage(store.getActive().getId(), Conversation.ROLE_USER, text);
         insertMessageCard(message);
+        updateMaterialization(); // 新卡片在末尾，窗口化时补物化
         scrollToBottom();
     }
 
@@ -327,6 +491,7 @@ public class Window extends JFrame {
     public AiStream addAiMessage(String text) {
         Message message = store.appendMessage(store.getActive().getId(), Conversation.ROLE_AI, text);
         MessageCard card = insertMessageCard(message);
+        updateMaterialization(); // 流式卡片是最后一张，窗口化时保证它已物化
         scrollToBottom();
         return new AiStreamImpl(store.getActive().getId(), message, card);
     }
@@ -353,6 +518,11 @@ public class Window extends JFrame {
     /** 标记是否正在生成：发送/停止按钮互切，输入框置灰，实时数据胶囊显示"生成中…" */
     public void setGenerating(boolean value) {
         generating = value;
+        if (!value && pendingRebuild) {
+            pendingRebuild = false;
+            rebuildUi(); // 生成期间挂起的换装重建，现在界面空闲，补做
+            return;
+        }
         inputTextArea.setEnabled(!value);
         sendButton.setVisible(!value);
         stopButton.setVisible(value);
@@ -389,6 +559,7 @@ public class Window extends JFrame {
         for (Message message : conversation.getMessages()) {
             insertMessageCard(message);
         }
+        updateMaterialization(); // 长会话只物化视口附近；短会话在这里全量补齐
         setTitle("Agent - " + displayTitle(conversation));
         waterfallPanel.revalidate();
         waterfallPanel.repaint();
@@ -402,30 +573,59 @@ public class Window extends JFrame {
         }
     }
 
-    /** 把一条消息画成卡片插到瀑布流末尾：用户卡片定宽靠右、AI 卡片通栏（Markdown 渲染），返回卡片记录 */
+    /** 把一条消息的卡片骨架插到瀑布流末尾：用户卡片定宽靠右、AI 卡片通栏，返回卡片记录。
+     * 内容组件不在这里建（窗口化），由 updateMaterialization 决定哪些卡片 fillCard */
     private MessageCard insertMessageCard(Message message) {
         boolean user = Conversation.ROLE_USER.equals(message.role());
-
-        JComponent content;
         MarkdownPane markdown = null;
-        if (user) {
-            JTextPane textPane = new JTextPane();
-            textPane.setEditable(false);
-            textPane.setOpaque(false);
-            textPane.setFont(new Font("微软雅黑", Font.PLAIN, AppSettings.get().getContentFontSize()));
-            textPane.setText(message.text());
-            content = textPane;
-        } else {
+        if (!user) {
             markdown = new MarkdownPane(AppSettings.get().getContentFontSize());
-            markdown.setMarkdown(message.text());
-            content = markdown;
+            markdown.setContent(message.text()); // 只解析+测量，行组件等物化时才建
         }
 
-        JButton menuButton = createMenuButton();
         Ui.RoundPanel card = Ui.card(user ? Ui.USER_CARD_BG : Ui.CARD_BG);
         card.setLayout(new OverlayCardLayout());
         card.setBorder(BorderFactory.createEmptyBorder(12, 16, 8, 16));
+        // 先按下限高度占位，等测量出文本实际高度后再修正；宽度交给 GridBag 的 fill/anchor 控制
+        card.setPreferredSize(new Dimension(0, CARD_MIN_HEIGHT_AI));
 
+        waterfallPanel.add(card, rowConstraints(user));
+        waterfallRowCount++;
+        MessageCard messageCard = new MessageCard(card, user, message, markdown);
+        attachHoverMenu(messageCard);
+        messageCards.add(messageCard);
+        emptyHint.setVisible(false);
+
+        fitCardHeight(messageCards.size() - 1);
+        waterfallPanel.revalidate();
+        return messageCard;
+    }
+
+    /** 把卡片内容（角色行/正文/尾行/悬停菜单）建出来；只有视口附近的卡片才物化（P2-2 窗口化） */
+    private void fillCard(MessageCard messageCard) {
+        if (messageCard.materialized) {
+            return;
+        }
+        messageCard.materialized = true;
+        JPanel card = messageCard.card;
+        Message message = messageCard.message;
+        boolean user = messageCard.user;
+
+        JComponent content;
+        if (user) {
+            JTextPane textPane = Ui.displayTextPane();
+            textPane.setFont(new Font("微软雅黑", Font.PLAIN, AppSettings.get().getContentFontSize()));
+            // 没设过前景色的文本组件默认黑字，深色主题下必须显式给（见踩坑 #19）
+            textPane.setForeground(Ui.TEXT);
+            textPane.setText(message.text());
+            content = textPane;
+        } else {
+            messageCard.markdown.materialize();
+            content = messageCard.markdown;
+        }
+        messageCard.content = content;
+
+        JButton menuButton = createMenuButton();
         if (!user) {
             JLabel roleLabel = new JLabel("AI");
             roleLabel.setFont(new Font("微软雅黑", Font.BOLD, 13));
@@ -440,35 +640,83 @@ public class Window extends JFrame {
         timeLabel.setFont(new Font("微软雅黑", Font.PLAIN, 12));
         timeLabel.setForeground(Ui.TEXT_SECONDARY);
         timeRow.add(timeLabel);
-        JButton regenerate = null;
         if (!user) {
-            MarkdownPane pane = markdown;
+            MarkdownPane pane = messageCard.markdown;
             timeRow.add(createCopyButton(pane::getText));
-            regenerate = createRegenerateButton();
-            timeRow.add(regenerate);
+            messageCard.regenerate = createRegenerateButton();
+            timeRow.add(messageCard.regenerate);
         }
         card.add(content, BorderLayout.CENTER);
         card.add(timeRow, BorderLayout.SOUTH);
         // 浮层用 BorderLayout 不认识的约束名：布局器不会给它分配区域（无约束的 add 会被当成
         // CENTER 顶掉真正的内容组件），位置完全由 OverlayCardLayout.layoutContainer 负责
         card.add(menuButton, "overlay");
-
-        attachHoverMenu(card, menuButton);
-
-        // 先按下限高度占位，等测量出文本实际高度后再修正；宽度交给 GridBag 的 fill/anchor 控制
-        card.setPreferredSize(new Dimension(0, CARD_MIN_HEIGHT_AI));
-
-        waterfallPanel.add(card, rowConstraints(user));
-        waterfallRowCount++;
-        MessageCard messageCard = new MessageCard(card, content, user, message, markdown, regenerate, menuButton);
+        messageCard.menu = menuButton;
         menuButton.addActionListener(e -> showDeleteMenu(menuButton, messageCard));
-        messageCards.add(messageCard);
-        emptyHint.setVisible(false);
-
-        fitCardHeight(messageCards.size() - 1);
+        card.doLayout(); // 浮层坐标在布局器里，先摆好再画
         refreshRegenerateButtons();
-        waterfallPanel.revalidate();
-        return messageCard;
+    }
+
+    /** 摘掉卡片内容（滚出视口）：组件全部丢弃，解析与测量数据留在 MarkdownPane 里 */
+    private void drainCard(MessageCard messageCard) {
+        if (!messageCard.materialized) {
+            return;
+        }
+        messageCard.materialized = false;
+        messageCard.card.removeAll();
+        if (messageCard.markdown != null) {
+            messageCard.markdown.dematerialize();
+        }
+        messageCard.content = null;
+        messageCard.regenerate = null;
+        messageCard.menu = null;
+    }
+
+    /**
+     * 窗口化（P2-2）：短会话全量渲染；超过阈值的长会话只物化视口附近（上下各留余量）的卡片，
+     * 最后一张恒物化（流式追加与"重新生成"都挂在它上面）。滚动/重排后调用，按当前视口位置收敛。
+     */
+    private static final int MATERIALIZE_THRESHOLD = 60;
+    private static final int MATERIALIZE_MARGIN = 2;
+    /** GridBag 每行卡片下方的间距（rowConstraints 里的 insets.bottom），估算视口区间用 */
+    private static final int ROW_GAP = 12;
+
+    private void updateMaterialization() {
+        int n = messageCards.size();
+        if (n <= MATERIALIZE_THRESHOLD) {
+            for (MessageCard card : messageCards) {
+                fillCard(card);
+            }
+            return;
+        }
+        Rectangle visible = waterfallScroll.getViewport().getViewRect();
+        int start = 0;
+        int top = 0;
+        while (start < n && top + rowBlockHeight(start) <= visible.y) {
+            top += rowBlockHeight(start);
+            start++;
+        }
+        int end = start;
+        int bottom = top;
+        while (end < n && bottom < visible.y + visible.height) {
+            bottom += rowBlockHeight(end);
+            end++;
+        }
+        int from = Math.max(0, start - MATERIALIZE_MARGIN);
+        int to = Math.min(n - 1, end + MATERIALIZE_MARGIN);
+        for (int i = 0; i < n; i++) {
+            boolean want = i >= from && i <= to || i == n - 1;
+            if (want) {
+                fillCard(messageCards.get(i));
+            } else {
+                drainCard(messageCards.get(i));
+            }
+        }
+    }
+
+    /** 一张卡片在瀑布流里占的高度（卡高 + 行间距），供视口区间估算 */
+    private int rowBlockHeight(int index) {
+        return messageCards.get(index).card.getPreferredSize().height + ROW_GAP;
     }
 
     /** 卡片右上角的"…"消息操作按钮：默认隐藏，悬停卡片时出现 */
@@ -482,19 +730,22 @@ public class Window extends JFrame {
     }
 
     /** 悬停显示"…"、移出隐藏。进出子组件（文本区、按钮）也会触发父容器的 exited，用指针位置兜底 */
-    private void attachHoverMenu(JPanel card, JButton menuButton) {
+    private void attachHoverMenu(MessageCard messageCard) {
+        JPanel card = messageCard.card;
         card.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseEntered(MouseEvent e) {
-                setMenuVisible(menuButton, true);
+                if (messageCard.menu != null) {
+                    setMenuVisible(messageCard.menu, true);
+                }
             }
 
             @Override
             public void mouseExited(MouseEvent e) {
-                if (isPointerInside(card)) {
-                    return; // 只是滑进了卡片内部的子组件
+                if (messageCard.menu == null || isPointerInside(card)) {
+                    return; // 卡片已摘空，或只是滑进了卡片内部的子组件
                 }
-                setMenuVisible(menuButton, false);
+                setMenuVisible(messageCard.menu, false);
             }
         });
     }
@@ -599,7 +850,7 @@ public class Window extends JFrame {
             if (card.regenerate != null) {
                 card.regenerate.setVisible(!generating && i == last);
             }
-            if (generating) {
+            if (generating && card.menu != null) {
                 card.menu.setVisible(false);
             }
         }
@@ -627,6 +878,12 @@ public class Window extends JFrame {
 
     /** 主区：空态提示 + 纵向瀑布流排列的消息卡片，卡片多时可滚动 */
     private void initMainArea() {
+        innerPanel = new JPanel(new BorderLayout(10, 10));
+        waterfallPanel = new JPanel();
+        waterfallScroll = new JScrollPane(waterfallPanel,
+                ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        emptyHint = new JLabel("在下方输入，或从左侧选一段历史对话", SwingConstants.CENTER);
         innerPanel.setBackground(Ui.BG);
         waterfallPanel.setBackground(Ui.BG);
         waterfallPanel.setLayout(new GridBagLayout());
@@ -648,6 +905,10 @@ public class Window extends JFrame {
         waterfallScroll.getViewport().setBackground(Ui.BG);
         waterfallScroll.getVerticalScrollBar().setUnitIncrement(16);
         Ui.styleScrollPane(waterfallScroll);
+        // 滚动即换窗：长会话只物化视口附近的卡片（P2-2）。
+        // 监听视口而不是滚动条：滚动条事件到达时视口位置还没同步过来（慢一拍），视口的
+        // change 事件在 viewPosition 更新之后触发，getViewRect 才是准的
+        waterfallScroll.getViewport().addChangeListener(e -> updateMaterialization());
         innerPanel.add(waterfallScroll, BorderLayout.CENTER);
     }
 
@@ -662,7 +923,7 @@ public class Window extends JFrame {
                 Math.min(USER_CARD_MAX_WIDTH, panelWidth * 2 / 3));
         int textWidth = messageCard.user ? userWidth - CARD_SIDE_INSETS : panelWidth - CARD_SIDE_INSETS;
         int textHeight = messageCard.user
-                ? measureTextHeight((JTextPane) messageCard.content, textWidth)
+                ? measureTextHeight(messageCard.message.text(), AppSettings.get().getContentFontSize(), textWidth)
                 : messageCard.markdown.preferredHeightAt(textWidth);
         int minHeight = messageCard.user ? CARD_MIN_HEIGHT_USER : CARD_MIN_HEIGHT_AI;
         int frameHeight = messageCard.user ? CARD_FRAME_HEIGHT_USER : CARD_FRAME_HEIGHT_AI;
@@ -683,22 +944,30 @@ public class Window extends JFrame {
             fitCardHeight(i);
         }
         waterfallPanel.revalidate();
+        updateMaterialization(); // 宽度变了，视口里的卡片可能换了一批
         if (pendingScrollToBottom) {
             pendingScrollToBottom = false;
             scrollToBottom(); // 高度都量完了再滚，value/max 才是准的
         }
     }
 
-    /** 按给定宽度折行后量出文本高度。
+    /** 按给定宽度折行后量出文本高度（宽度先落 8px 档位，命中 MeasureCache 则免测）。
      * 用一次性克隆的 JTextPane 测量，绝不能用显示中组件的 View：
      * setSize 会污染它的视图状态，首选宽度会变成十几亿像素，把整个瀑布流撑爆。 */
-    private int measureTextHeight(JTextPane area, int width) {
+    private int measureTextHeight(String text, int fontSize, int width) {
+        int w = MeasureCache.bucketWidth(width);
+        int[] cached = MeasureCache.get(text, fontSize, w, false);
+        if (cached != null) {
+            return cached[0];
+        }
         JTextPane measurer = new JTextPane();
-        measurer.setFont(area.getFont());
-        measurer.setText(area.getText());
+        measurer.setFont(new Font("微软雅黑", Font.PLAIN, fontSize));
+        measurer.setText(text);
         View view = measurer.getUI().getRootView(measurer);
-        view.setSize(width, Integer.MAX_VALUE);
-        return (int) view.getPreferredSpan(View.VERTICAL);
+        view.setSize(w, Integer.MAX_VALUE);
+        int height = (int) view.getPreferredSpan(View.VERTICAL);
+        MeasureCache.put(text, fontSize, w, false, new int[]{height});
+        return height;
     }
 
     /** 新卡片加入后把瀑布流滚到底部 */
@@ -784,7 +1053,7 @@ public class Window extends JFrame {
                 return;
             }
             boolean follow = isNearBottom(); // 高度马上要变，先记录用户是否本来就在底部
-            card.markdown.setMarkdown(full.toString());
+            card.markdown.setContent(full.toString());
             fitCardHeight(index);
             if (follow) {
                 scrollToBottom();
@@ -794,6 +1063,8 @@ public class Window extends JFrame {
 
     /** 底部：输入区（圆角，聚焦变主题色描边）+ 实时数据胶囊 */
     private void initRealtimePill() {
+        realtimePill = Ui.panel(16, Ui.PILL_BG, null);
+        realtimeLabel = new JLabel("就绪");
         realtimeLabel.setFont(new Font("微软雅黑", Font.PLAIN, 12));
         realtimeLabel.setForeground(Ui.TEXT_SECONDARY);
         realtimePill.setLayout(new FlowLayout(FlowLayout.CENTER, 0, 0));
@@ -827,9 +1098,16 @@ public class Window extends JFrame {
     }
 
     private void initInputArea() {
+        inputBox = Ui.panel(20, Ui.CARD_BG, Ui.BORDER_STRONG);
+        inputTextArea = new JTextPane();
+        sendButton = Ui.primaryButton("发送");
+        stopButton = Ui.button("停止");
         inputTextArea.setEditable(true);
         inputTextArea.setOpaque(false);
         inputTextArea.setFont(new Font("微软雅黑", Font.PLAIN, 16));
+        // 卡片是深色圆角底，文字与光标必须显式设浅色（见踩坑 #19）
+        inputTextArea.setForeground(Ui.TEXT);
+        inputTextArea.setCaretColor(Ui.TEXT);
         inputTextArea.setPreferredSize(new Dimension(0, 48));
         inputTextArea.setToolTipText("回车发送，Shift+回车换行");
         inputTextArea.addKeyListener(new KeyAdapter() {
@@ -880,30 +1158,7 @@ public class Window extends JFrame {
     }
 
     private void initSidebar() {
-        sidebar = new Sidebar(store, new Sidebar.Callbacks() {
-            @Override
-            public void onToggleCollapse() {
-                boolean expanded = !sidebar.isExpanded();
-                sidebar.setExpanded(expanded);
-                splitPane.setDividerLocation(expanded ? Sidebar.EXPANDED_WIDTH : Sidebar.COLLAPSED_WIDTH);
-                getContentPane().revalidate();
-            }
-
-            @Override
-            public void onNewConversation() {
-                showConversation(store.newConversation());
-            }
-
-            @Override
-            public void onSelectConversation(String conversationId) {
-                store.switchTo(conversationId); // 变更监听里会触发主区重建
-            }
-
-            @Override
-            public void onOpenSettings() {
-                openSettings();
-            }
-        });
+        sidebar = new Sidebar(store, sidebarCallbacks);
     }
 
     /** 拖动分隔条时联动侧栏内容：拖到贴边自动收起，往右拖开自动展开 */
@@ -922,7 +1177,7 @@ public class Window extends JFrame {
         SettingsDialog dialog = new SettingsDialog(this);
         dialog.setVisible(true);
         if (dialog.isSaved()) {
-            showConversation(store.getActive()); // 字号等变化后按新设置重建卡片
+            retheme(); // 主题/字号等变化后按新设置整体重建（内部含 showConversation）
         }
     }
 }
