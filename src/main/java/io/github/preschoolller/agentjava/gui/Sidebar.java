@@ -38,11 +38,14 @@ import java.nio.file.Files;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * 左侧面板：顶部是汉堡按钮（折叠/展开，收起后仍留在窗口左上角）和"新对话"主按钮，
- * 下面是会话搜索框（按标题/内容过滤），中间是历史会话列表（点击切换，右键重命名/删除/导出），
- * 底部是设置入口。
+ * 下面是会话搜索框（按标题/内容过滤，命中词在列表里高亮），中间是历史会话列表
+ * （置顶优先、其余按最近使用；点击切换，右键置顶/重命名/删除/导出），底部是设置入口。
  */
 public class Sidebar extends JPanel {
 
@@ -75,6 +78,8 @@ public class Sidebar extends JPanel {
     private boolean expanded = true;
     private boolean refreshingList;
     private boolean searchPlaceholder = true;
+    /** 当前生效的搜索词（小写、已去空白；占位状态下为空），渲染器高亮时用 */
+    private String currentQuery = "";
 
     public Sidebar(ConversationStore store, Callbacks callbacks) {
         this.store = store;
@@ -94,6 +99,8 @@ public class Sidebar extends JPanel {
         listScroll = new JScrollPane(convList);
         listScroll.setBorder(BorderFactory.createEmptyBorder());
         listScroll.getViewport().setBackground(Ui.SIDEBAR_BG);
+        // 片段预览/超长标题宁可裁切也不出横向滚动条（侧栏宽度是固定的）
+        listScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         Ui.styleScrollPane(listScroll);
         add(listScroll, BorderLayout.CENTER);
 
@@ -125,20 +132,38 @@ public class Sidebar extends JPanel {
     /** 按仓库最新状态 + 当前搜索词重建会话列表并高亮当前会话 */
     public void refresh() {
         refreshingList = true;
+        currentQuery = searchPlaceholder ? "" : searchField.getText().strip().toLowerCase();
         listModel.clear();
-        String query = searchPlaceholder ? "" : searchField.getText().strip().toLowerCase();
-        for (Conversation conversation : store.getConversations()) {
-            if (matches(conversation, query)) {
+        List<Conversation> conversations = new ArrayList<>(store.getConversations());
+        // 置顶优先，其余保持"最近使用在前"
+        conversations.sort(Comparator
+                .comparingInt((Conversation conversation) -> conversation.isPinned() ? 0 : 1)
+                .thenComparing(Comparator.comparingLong(Conversation::getUpdatedAt).reversed()));
+        for (Conversation conversation : conversations) {
+            if (matches(conversation, currentQuery)) {
                 listModel.addElement(conversation);
             }
         }
         Conversation active = store.getActive();
-        if (matches(active, query)) {
+        if (matches(active, currentQuery)) {
             convList.setSelectedValue(active, true);
         } else {
             convList.clearSelection(); // 过滤时当前会话不在结果里就不高亮，也不切换
         }
         refreshingList = false;
+    }
+
+    /**
+     * 以"已聚焦"状态设置搜索词并刷新（等价于聚焦搜索框后手动输入）。
+     * 给回归工具用，真实交互仍走输入框自己的焦点/文档监听。
+     */
+    public void setSearchQuery(String query) {
+        if (searchPlaceholder) {
+            searchPlaceholder = false;
+            searchField.setText("");
+            searchField.setForeground(Ui.TEXT);
+        }
+        searchField.setText(query);
     }
 
     /** 标题或任意消息内容包含关键词即命中 */
@@ -281,6 +306,8 @@ public class Sidebar extends JPanel {
         convList.setSelectedIndex(index);
         Conversation conversation = convList.getSelectedValue();
 
+        JMenuItem pinItem = new JMenuItem(conversation.isPinned() ? "取消置顶" : "置顶");
+        pinItem.addActionListener(ev -> store.setPinned(conversation.getId(), !conversation.isPinned()));
         JMenuItem renameItem = new JMenuItem("重命名");
         renameItem.addActionListener(ev -> {
             String title = JOptionPane.showInputDialog(this, "新的对话标题", conversation.getTitle());
@@ -300,6 +327,7 @@ public class Sidebar extends JPanel {
             }
         });
         JPopupMenu popup = new JPopupMenu();
+        popup.add(pinItem);
         popup.add(renameItem);
         popup.add(exportItem);
         popup.add(deleteItem);
@@ -335,7 +363,7 @@ public class Sidebar extends JPanel {
         return cleaned.length() > 40 ? cleaned.substring(0, 40) : cleaned;
     }
 
-    /** 会话条目：标题一行 + 更新时间小字 */
+    /** 会话条目：标题一行（命中词高亮）+ 置顶标签与更新时间小字 + 内容命中片段（可选） */
     private class ConversationRenderer extends DefaultListCellRenderer {
         @Override
         public Component getListCellRendererComponent(JList<?> list, Object value, int index,
@@ -346,17 +374,91 @@ public class Sidebar extends JPanel {
                     ? "新对话"
                     : conversation.getTitle();
             String time = TIME_FORMAT.format(Instant.ofEpochMilli(conversation.getUpdatedAt()));
-            label.setText("<html><body style='padding:2px 0'>" + escapeHtml(title)
-                    + "<br><small><font color='#8A919F'>" + time + "</font></small></body></html>");
+            StringBuilder html = new StringBuilder("<html><body style='padding:2px 0'>");
+            html.append(highlightHtml(title, currentQuery));
+            html.append("<br><small><font color='#8A919F'>");
+            if (conversation.isPinned()) {
+                html.append("<font color='#3D7EFF'>置顶</font> · ");
+            }
+            html.append(time).append("</font></small>");
+            if (!currentQuery.isEmpty() && !title.toLowerCase().contains(currentQuery)) {
+                String snippet = contentSnippet(conversation, currentQuery);
+                if (snippet != null) {
+                    html.append("<br><small><font color='#8A919F'>").append(snippet).append("</font></small>");
+                }
+            }
+            html.append("</body></html>");
+            label.setText(html.toString());
             label.setToolTipText(title);
             label.setBackground(selected ? Ui.SIDEBAR_SELECTED : Ui.SIDEBAR_BG);
             label.setForeground(Ui.TEXT);
             label.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
             return label;
         }
+    }
 
-        private String escapeHtml(String text) {
-            return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    /**
+     * 高亮写法见踩坑 #17：Swing 的 HTML 不认 HTML5 的 &lt;mark&gt;，行内背景只能靠 span 的 CSS。
+     * 底色选了在 SIDEBAR_BG/SIDEBAR_SELECTED 上都够显眼的暖黄。
+     */
+    private static final String MARK_OPEN = "<span style='background-color:#FFE28A'>";
+    private static final String MARK_CLOSE = "</span>";
+
+    /** 把 [from, to) 区间文本转义成 HTML 安全文本 */
+    private static String escapeHtml(String text, int from, int to) {
+        StringBuilder sb = new StringBuilder(to - from);
+        for (int i = from; i < to; i++) {
+            char c = text.charAt(i);
+            switch (c) {
+                case '&' -> sb.append("&amp;");
+                case '<' -> sb.append("&lt;");
+                case '>' -> sb.append("&gt;");
+                default -> sb.append(c);
+            }
         }
+        return sb.toString();
+    }
+
+    private static String escapeHtml(String text) {
+        return escapeHtml(text, 0, text.length());
+    }
+
+    /** 文本中所有 query 命中片段包上高亮底色（大小写不敏感）；query 为空原样转义返回 */
+    private static String highlightHtml(String text, String query) {
+        if (query.isEmpty()) {
+            return escapeHtml(text);
+        }
+        String lower = text.toLowerCase();
+        StringBuilder html = new StringBuilder();
+        int from = 0;
+        int hit;
+        while ((hit = lower.indexOf(query, from)) >= 0) {
+            html.append(escapeHtml(text, from, hit))
+                    .append(MARK_OPEN)
+                    .append(escapeHtml(text, hit, hit + query.length()))
+                    .append(MARK_CLOSE);
+            from = hit + query.length();
+        }
+        html.append(escapeHtml(text, from, text.length()));
+        return html.toString();
+    }
+
+    /** 标题未命中时取第一条命中消息的片段做预览（命中词同样高亮）；内容没命中返回 null */
+    private static String contentSnippet(Conversation conversation, String query) {
+        for (Message message : conversation.getMessages()) {
+            String text = message.text();
+            int hit = text.toLowerCase().indexOf(query);
+            if (hit < 0) {
+                continue;
+            }
+            int start = Math.max(0, hit - 6);
+            int end = Math.min(text.length(), hit + query.length() + 10);
+            // 换行替换成空格但长度不变，截取区间里的命中位置不受影响
+            String raw = text.substring(start, end).replace('\n', ' ').replace('\r', ' ');
+            String prefix = start > 0 ? "…" : "";
+            String suffix = end < text.length() ? "…" : "";
+            return prefix + highlightHtml(raw, query) + suffix;
+        }
+        return null;
     }
 }

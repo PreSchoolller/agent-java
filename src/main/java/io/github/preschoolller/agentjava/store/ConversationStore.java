@@ -10,10 +10,13 @@ import java.util.Map;
 
 /**
  * 会话仓库：内存里的会话列表 + 本地 JSON 持久化（默认 ~/.agentjava/history.json，构造时可换文件）。
- * 列表保持"最近使用在前"，UI 直接按这个顺序渲染。
+ * 列表保持"最近使用在前"，侧栏渲染时置顶会话优先（置顶只改标记不动仓库顺序）。
  * 任何变更都会通知 changeListeners（侧栏刷新、主区切换会话都靠它）。
  */
 public class ConversationStore {
+
+    /** 历史文件格式版本：v0 = 顶层数组；v1 = {"version":1,"conversations":[...]}。以后加字段先升它再改 load */
+    private static final int HISTORY_VERSION = 1;
 
     private final Path file;
     private final List<Conversation> conversations = new ArrayList<>();
@@ -91,6 +94,17 @@ public class ConversationStore {
             return;
         }
         conversation.setTitle(title.strip());
+        save();
+        fireChanged();
+    }
+
+    /** 置顶/取消置顶（侧栏排序时置顶优先），变更落盘并通知 */
+    public void setPinned(String id, boolean pinned) {
+        Conversation conversation = findById(id);
+        if (conversation == null || conversation.isPinned() == pinned) {
+            return;
+        }
+        conversation.setPinned(pinned);
         save();
         fireChanged();
     }
@@ -181,6 +195,7 @@ public class ConversationStore {
             map.put("title", conversation.getTitle());
             map.put("createdAt", conversation.getCreatedAt());
             map.put("updatedAt", conversation.getUpdatedAt());
+            map.put("pinned", conversation.isPinned());
             List<Object> messages = new ArrayList<>();
             for (Message message : conversation.getMessages()) {
                 Map<String, Object> item = new LinkedHashMap<>();
@@ -192,9 +207,12 @@ public class ConversationStore {
             map.put("messages", messages);
             array.add(map);
         }
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("version", HISTORY_VERSION);
+        root.put("conversations", array);
         try {
             Files.createDirectories(file.getParent());
-            Files.writeString(file, JsonKit.write(array));
+            Files.writeString(file, JsonKit.write(root));
         } catch (IOException e) {
             System.err.println("保存会话历史失败: " + e.getMessage());
         }
@@ -206,11 +224,23 @@ public class ConversationStore {
         }
         try {
             Object root = JsonKit.parse(Files.readString(file));
-            for (Object item : (List<?>) root) {
+            // v0 旧格式顶层数组直接当会话列表读；v1 起从 conversations 字段取。
+            // 以后升版本时在 version 分支里做字段迁移，别把用户旧历史读丢。
+            List<?> items = null;
+            if (root instanceof Map<?, ?> map) {
+                items = (List<?>) map.get("conversations");
+            } else if (root instanceof List<?> list) {
+                items = list;
+            }
+            if (items == null) {
+                return;
+            }
+            for (Object item : items) {
                 Map<?, ?> map = (Map<?, ?>) item;
                 Conversation conversation = new Conversation(
                         str(map.get("id")), str(map.get("title")),
                         num(map.get("createdAt")), num(map.get("updatedAt")));
+                conversation.setPinned(Boolean.TRUE.equals(map.get("pinned")));
                 for (Object raw : (List<?>) map.get("messages")) {
                     Map<?, ?> messageMap = (Map<?, ?>) raw;
                     conversation.getMessages().add(new Message(

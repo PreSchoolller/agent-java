@@ -14,6 +14,7 @@ public class Conversation {
     private String title;
     private final long createdAt;
     private long updatedAt;
+    private boolean pinned;
     private final List<Message> messages = new ArrayList<>();
 
     public Conversation(String id, String title, long createdAt, long updatedAt) {
@@ -42,6 +43,15 @@ public class Conversation {
 
     public long getUpdatedAt() {
         return updatedAt;
+    }
+
+    /** 置顶标记：侧栏排序时置顶优先（不 touch，updatedAt 保持"最后消息时间"语义） */
+    public boolean isPinned() {
+        return pinned;
+    }
+
+    public void setPinned(boolean pinned) {
+        this.pinned = pinned;
     }
 
     /** 内部装载用：返回的是实时列表，请勿在遍历时增删 */

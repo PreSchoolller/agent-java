@@ -6,6 +6,7 @@ import io.github.preschoolller.agentjava.gui.Window;
 import io.github.preschoolller.agentjava.gui.MarkdownRenderer;
 import io.github.preschoolller.agentjava.store.Conversation;
 import io.github.preschoolller.agentjava.store.ConversationStore;
+import io.github.preschoolller.agentjava.store.JsonKit;
 import io.github.preschoolller.agentjava.store.Message;
 
 import javax.imageio.ImageIO;
@@ -22,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 前端回归工具（提交在库里，产物落在 gitignore 的 target/ 下）。每次改完 UI 跑一遍：
@@ -30,9 +32,10 @@ import java.util.List;
  *   javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
  *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
- * 输出：持久化往返 + 删尾/单条删除测试（PERSIST_OK）、Markdown 解析断言（MD_PARSE_OK）、
- * 流式落库断言（STREAM_OK）+ 九张截图
- * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单}.png（SHOT_OK）。
+ * 输出：持久化往返 + 删尾/单条删除/置顶落盘/旧格式迁移测试（PERSIST_OK）、Markdown 解析断言（MD_PARSE_OK）、
+ * 流式落库断言（STREAM_OK）+ 十一张截图
+ * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
+ * 9置顶,10搜索高亮,11搜索片段}.png（SHOT_OK）。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
@@ -92,6 +95,23 @@ public class Shot {
         expect(!second.removeMessage(second.getActive().getId(), middle), "旧引用重复删除应失败");
         ConversationStore third = new ConversationStore(dir.resolve("history.json"));
         expect(third.getActive().getMessages().size() == 1, "删除后落盘消息数");
+        // 置顶落盘（v1 文件格式）：置顶→重读→取消置顶→重读
+        first.setPinned(conv.getId(), true);
+        ConversationStore fourth = new ConversationStore(dir.resolve("history.json"));
+        expect(fourth.getConversations().get(0).isPinned(), "置顶落盘");
+        fourth.setPinned(conv.getId(), false);
+        expect(!new ConversationStore(dir.resolve("history.json")).getConversations()
+                .get(0).isPinned(), "取消置顶落盘");
+        // v0 旧格式（顶层数组）迁移读取：字段照常还原，pinned 缺省 false
+        Path legacyFile = dir.resolve("legacy.json");
+        Files.writeString(legacyFile, JsonKit.write(List.of(Map.of(
+                "id", "legacy-1", "title", "旧格式会话", "createdAt", 1L, "updatedAt", 2L,
+                "messages", List.of(Map.of("role", "user", "text", "旧消息", "time", 3L))))));
+        ConversationStore legacyStore = new ConversationStore(legacyFile);
+        expect(legacyStore.getConversations().size() == 1, "旧格式会话数");
+        expect("旧格式会话".equals(legacyStore.getConversations().get(0).getTitle()), "旧格式标题");
+        expect("旧消息".equals(legacyStore.getConversations().get(0).getMessages().get(0).text()), "旧格式消息");
+        expect(!legacyStore.getConversations().get(0).isPinned(), "旧格式默认不置顶");
         System.out.println("PERSIST_OK");
 
         // —— Markdown 解析断言（块类型与数量） ——
@@ -220,6 +240,27 @@ public class Shot {
         });
         Thread.sleep(400);
         capture(args[0] + "-8-hover.png");
+
+        // —— 截图 9：置顶排序（c2 置顶后跳到列表最前，时间行带"置顶"标签；先把 4 号折叠的侧栏展开回来） ——
+        edt(() -> {
+            WINDOW.getSidebar().setExpanded(true);
+            WINDOW.getSplitPane().setDividerLocation(Sidebar.EXPANDED_WIDTH);
+            WINDOW.getContentPane().revalidate();
+        });
+        Thread.sleep(400);
+        edt(() -> WINDOW.getStore().setPinned(c2.getId(), true));
+        Thread.sleep(400);
+        capture(args[0] + "-9-pinned.png");
+
+        // —— 截图 10：搜索标题命中高亮（"今天"命中 c2 标题） ——
+        edt(() -> WINDOW.getSidebar().setSearchQuery("今天"));
+        Thread.sleep(400);
+        capture(args[0] + "-10-search-highlight.png");
+
+        // —— 截图 11：搜索内容命中片段（"并发"只在 c1 内容里，条目显示片段预览行） ——
+        edt(() -> WINDOW.getSidebar().setSearchQuery("并发"));
+        Thread.sleep(400);
+        capture(args[0] + "-11-search-snippet.png");
 
         edt(() -> WINDOW.dispose());
         System.out.println("SHOT_OK");
