@@ -168,7 +168,6 @@ public final class MarkdownRenderer {
 
         private JTextArea codeArea(Font base) {
             JTextArea area = Ui.displayTextArea();
-            area.setOpaque(false);
             area.setText(code.code());
             area.setLineWrap(true);
             area.setWrapStyleWord(false);

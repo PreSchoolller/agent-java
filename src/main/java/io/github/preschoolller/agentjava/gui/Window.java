@@ -46,8 +46,6 @@ import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.LayoutManager2;
-import java.awt.MenuItem;
-import java.awt.PopupMenu;
 import java.awt.SystemTray;
 import java.awt.Toolkit;
 import java.awt.TrayIcon;
@@ -381,7 +379,8 @@ public class Window extends JFrame {
         }
     }
 
-    /** 托盘图标：主题色圆角 + "A"，左键/双击恢复主窗口，菜单可显示或退出 */
+    /** 托盘图标：主题色圆角 + "A"，左键/双击恢复主窗口，右键弹跟随主题的 Swing 菜单。
+     * 不用 AWT PopupMenu：原生菜单在部分环境中文渲染成方块，且无法跟随应用主题。 */
     private TrayIcon createTrayIcon() {
         BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2 = image.createGraphics();
@@ -394,16 +393,38 @@ public class Window extends JFrame {
         g2.drawString("A", (16 - metrics.stringWidth("A")) / 2 + 1,
                 (16 - metrics.getHeight()) / 2 + metrics.getAscent() - 1);
         g2.dispose();
-        PopupMenu popup = new PopupMenu();
-        MenuItem showItem = new MenuItem("显示主窗口");
+
+        JPopupMenu popup = new JPopupMenu();
+        popup.setLightWeightPopupEnabled(false); // 托盘区在其他窗口之上，必须用重量级弹层
+        JMenuItem showItem = Ui.menuItem("显示主窗口");
         showItem.addActionListener(e -> showFromTray());
-        MenuItem exitItem = new MenuItem("退出");
+        JMenuItem exitItem = Ui.menuItem("退出");
         exitItem.addActionListener(e -> exitApp());
         popup.add(showItem);
         popup.add(exitItem);
-        TrayIcon icon = new TrayIcon(image, "Agent", popup);
+
+        TrayIcon icon = new TrayIcon(image, "Agent");
         icon.setImageAutoSize(true);
         icon.addActionListener(e -> showFromTray()); // Windows 下双击托盘图标
+        MouseAdapter popupShower = new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                maybeShow(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                maybeShow(e);
+            }
+
+            private void maybeShow(MouseEvent e) {
+                if (e.isPopupTrigger()) {
+                    popup.setLocation(e.getX(), e.getY()); // TrayIcon 的鼠标事件坐标就是屏幕坐标
+                    popup.setVisible(true);
+                }
+            }
+        };
+        icon.addMouseListener(popupShower);
         return icon;
     }
 

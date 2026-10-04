@@ -94,9 +94,7 @@ public class SettingsDialog extends JDialog {
         systemPromptArea.setCaretColor(Ui.TEXT);
         themeCombo.setSelectedIndex("dark".equals(settings.getUiTheme()) ? 1 : 0);
         trayCheckBox.setSelected(settings.isMinimizeToTray());
-        trayCheckBox.setFont(Ui.FONT_PLAIN);
-        trayCheckBox.setForeground(Ui.TEXT);
-        trayCheckBox.setOpaque(false);
+        Ui.styleCheckBox(trayCheckBox);
         trayCheckBox.setToolTipText("系统不支持托盘时，关闭按钮仍会直接退出");
 
         Ui.styleInput(backendUrlField);

@@ -11,6 +11,7 @@ import io.github.preschoolller.agentjava.store.JsonKit;
 import io.github.preschoolller.agentjava.store.Message;
 
 import javax.imageio.ImageIO;
+import javax.swing.JCheckBox;
 import javax.swing.JFrame;
 import javax.swing.JList;
 import javax.swing.JPanel;
@@ -429,6 +430,16 @@ public class Shot {
             SettingsDialog dialog = new SettingsDialog(WINDOW, false);
             dialog.setVisible(true);
             dialogHolder[0] = dialog;
+        });
+        // 勾上"最小化到托盘"，顺带验证选中态的对勾图标在深色下的渲染
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(dialogHolder[0], all);
+            for (Component component : all) {
+                if (component instanceof JCheckBox box) {
+                    box.setSelected(true);
+                }
+            }
         });
         Thread.sleep(600);
         edt(() -> {

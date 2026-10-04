@@ -3,6 +3,8 @@ package io.github.preschoolller.agentjava.gui;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
+import javax.swing.Icon;
+import javax.swing.JCheckBox;
 import javax.swing.JComponent;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
@@ -27,6 +29,7 @@ import javax.swing.plaf.basic.BasicSpinnerUI;
 import javax.swing.plaf.basic.ComboPopup;
 import javax.swing.border.Border;
 import javax.swing.text.JTextComponent;
+import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
@@ -534,20 +537,72 @@ final class Ui {
      * 展示型文本面板（不可编辑、不透出底色、不参与焦点）。卡片正文这类组件嵌在滚动容器里，
      * 光标的 adjustVisibility 会在组件 bounds 未就绪时把外层滚动容器一路拽到光标处（见踩坑 #20），
      * 因此直接禁掉 scrollRectToVisible——纯展示组件没有任何需要滚到可见的场景。
+     * editable/opaque 必须在这里设全：调用方各自补容易漏（漏了 opaque 就是白底方块，浅色下几乎看不出）。
      */
     static JTextPane displayTextPane() {
-        return new JTextPane() {
+        JTextPane pane = new JTextPane() {
             @Override
             public void scrollRectToVisible(Rectangle rect) {
             }
         };
+        pane.setEditable(false);
+        pane.setOpaque(false);
+        pane.setFocusable(false);
+        return pane;
     }
 
     /** 同 displayTextPane：给代码块等展示型 JTextArea 用 */
     static JTextArea displayTextArea() {
-        return new JTextArea() {
+        JTextArea area = new JTextArea() {
             @Override
             public void scrollRectToVisible(Rectangle rect) {
+            }
+        };
+        area.setEditable(false);
+        area.setOpaque(false);
+        area.setFocusable(false);
+        return area;
+    }
+
+    /** 扁平勾选框：圆角方框，未选中为输入底色 + 描边，选中为主题色底 + 白色对勾 */
+    static void styleCheckBox(JCheckBox box) {
+        box.setOpaque(false);
+        box.setFont(FONT_PLAIN);
+        box.setForeground(TEXT); // 默认黑字，深色下隐形（踩坑 #19）
+        box.setFocusPainted(false);
+        box.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        box.setIcon(checkBoxIcon(false));
+        box.setSelectedIcon(checkBoxIcon(true));
+    }
+
+    private static Icon checkBoxIcon(boolean checked) {
+        int size = 15;
+        return new Icon() {
+            @Override
+            public int getIconWidth() {
+                return size;
+            }
+
+            @Override
+            public int getIconHeight() {
+                return size;
+            }
+
+            @Override
+            public void paintIcon(Component c, Graphics g, int x, int y) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(checked ? ACCENT : INPUT_BG);
+                g2.fillRoundRect(x, y, size - 1, size - 1, 5, 5);
+                g2.setColor(checked ? ACCENT : BORDER_STRONG);
+                g2.drawRoundRect(x, y, size - 1, size - 1, 5, 5);
+                if (checked) {
+                    g2.setColor(Color.WHITE);
+                    g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g2.drawLine(x + 4, y + 8, x + 7, y + 11);
+                    g2.drawLine(x + 7, y + 11, x + 11, y + 4);
+                }
+                g2.dispose();
             }
         };
     }
