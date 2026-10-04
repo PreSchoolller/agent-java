@@ -7,6 +7,7 @@ import io.github.preschoolller.agentjava.store.Message;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -43,6 +44,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Agent 应用主窗口。布局：
@@ -53,7 +56,13 @@ import java.util.function.BiConsumer;
  *
  * 后端接入方式：
  * onInputSubmitted((conversation, text) -> ...) 在用户回车后拿到文本（输入已自动画成卡片），
- * 异步请求 agent，回复用 addAiMessage 展示（返回 JTextPane，可流式追加），期间 setGenerating(true)；
+ * 期间 setGenerating(true)。拿到回复后回到 EDT（SwingUtilities.invokeLater）展示，两种写法：
+ * 1) 一次性：addAiMessage(完整回复)（内部已落库）；
+ * 2) 流式：AiStream stream = addAiMessage("") 起一张空卡片，逐段 stream.appendChunk(增量)
+ *    （内部按 120ms 节流重渲染），结束调 stream.finish() 把最终文本写回会话仓库。
+ * AI 回复按 Markdown 渲染（MarkdownRenderer）；重新生成：onRegenerate(conv -> ...) 注册回调，
+ * 点击最后一张 AI 卡片上的"重新生成"按钮时旧回复已先从界面移除，后端应调
+ * store.removeLastMessage 删掉旧回答再重新请求（回调在 EDT 上执行，耗时操作自己开线程）。
  * setRealtimeInfo 更新底部实时数据框；getStore() 可直接读写会话数据（本地持久化到 ~/.agentjava）。
  */
 public class Window extends JFrame {
@@ -112,10 +121,25 @@ public class Window extends JFrame {
     private boolean pendingScrollToBottom;
     private BiConsumer<Conversation, String> inputHandler;
     private Runnable stopHandler;
+    private Consumer<Conversation> regenerateHandler;
     private boolean generating;
 
-    /** 一张消息卡片：卡片面板、文本内容区、是否为用户消息 */
-    private record MessageCard(JPanel card, JTextPane content, boolean user) {}
+    /** AI 回复的流式句柄：addAiMessage 返回。所有方法须在 EDT 上调用。 */
+    public interface AiStream {
+        /** 追加一段增量文本；内部按 ~120ms 节流重渲染，无需自己攒批 */
+        void appendChunk(String delta);
+
+        /** 整体替换当前内容并立即渲染（流式中途修正用；一次性后端直接 addAiMessage(全文) 即可） */
+        void setText(String value);
+
+        /** 结束流式：渲染剩余内容并把最终文本写回会话仓库 */
+        void finish();
+    }
+
+    /** 一张消息卡片：卡片面板、内容区、是否为用户消息；AI 卡片另有 Markdown 内容面板与重新生成按钮 */
+    private record MessageCard(JPanel card, JComponent content, boolean user,
+                               MarkdownPane markdown, JButton regenerate) {
+    }
 
     public Window(String title) throws HeadlessException {
         this(title, new ConversationStore());
@@ -154,23 +178,21 @@ public class Window extends JFrame {
 
     /** 往当前对话追加一张用户输入卡片 */
     public void addUserMessage(String text) {
-        addMessageCard(Conversation.ROLE_USER, text);
-    }
-
-    /** 往当前对话追加一张 AI 输出卡片，返回内容区，流式输出时可以拿着它继续 setText */
-    public JTextPane addAiMessage(String text) {
-        return addMessageCard(Conversation.ROLE_AI, text);
+        Message message = store.appendMessage(store.getActive().getId(), Conversation.ROLE_USER, text);
+        insertMessageCard(message);
+        scrollToBottom();
     }
 
     /**
-     * 往当前对话追加一张消息卡片并写入会话仓库，返回内容区。
-     * role 取 Conversation.ROLE_USER / ROLE_AI。
+     * 往当前对话追加一张 AI 输出卡片（Markdown 渲染），返回流式句柄。
+     * 一次性后端直接 addAiMessage(完整回复)；流式后端先 addAiMessage("")，再逐段
+     * appendChunk，结束时 finish()（会把最终文本写回会话仓库）。须在 EDT 上调用。
      */
-    public JTextPane addMessageCard(String role, String text) {
-        Message message = store.appendMessage(store.getActive().getId(), role, text);
-        JTextPane content = insertMessageCard(message);
+    public AiStream addAiMessage(String text) {
+        Message message = store.appendMessage(store.getActive().getId(), Conversation.ROLE_AI, text);
+        MessageCard card = insertMessageCard(message);
         scrollToBottom();
-        return content;
+        return new AiStreamImpl(store.getActive().getId(), message, card);
     }
 
     /** 设置输入框回车提交后的回调：输入会先自动加为用户卡片并清空输入框，然后 (会话, 文本) 交给回调 */
@@ -183,6 +205,15 @@ public class Window extends JFrame {
         this.stopHandler = handler;
     }
 
+    /**
+     * 设置"重新生成"回调：点击最后一张 AI 卡片上的"重新生成"按钮后触发（EDT 上执行）。
+     * 触发时旧回复已从界面移除，后端应先 store.removeLastMessage(conv.getId()) 删掉旧回答，
+     * 再重新请求并照常走 addAiMessage / 流式句柄展示新回复。
+     */
+    public void onRegenerate(Consumer<Conversation> handler) {
+        this.regenerateHandler = handler;
+    }
+
     /** 标记是否正在生成：发送/停止按钮互切，输入框置灰，实时数据胶囊显示"生成中…" */
     public void setGenerating(boolean value) {
         generating = value;
@@ -192,6 +223,7 @@ public class Window extends JFrame {
         inputBox.revalidate();
         inputBox.repaint();
         setRealtimeInfo(value ? "生成中…" : "就绪");
+        refreshRegenerateButtons(); // 生成中隐藏"重新生成"，避免叠着两次请求
     }
 
     /** 更新底部实时数据胶囊的文本，例如 token 用量、耗时等 */
@@ -234,15 +266,24 @@ public class Window extends JFrame {
         }
     }
 
-    /** 把一条消息画成卡片插到瀑布流末尾：用户卡片定宽靠右、AI 卡片通栏，返回内容区 */
-    private JTextPane insertMessageCard(Message message) {
+    /** 把一条消息画成卡片插到瀑布流末尾：用户卡片定宽靠右、AI 卡片通栏（Markdown 渲染），返回卡片记录 */
+    private MessageCard insertMessageCard(Message message) {
         boolean user = Conversation.ROLE_USER.equals(message.role());
 
-        JTextPane content = new JTextPane();
-        content.setEditable(false);
-        content.setOpaque(false);
-        content.setFont(new Font("微软雅黑", Font.PLAIN, AppSettings.get().getContentFontSize()));
-        content.setText(message.text());
+        JComponent content;
+        MarkdownPane markdown = null;
+        if (user) {
+            JTextPane textPane = new JTextPane();
+            textPane.setEditable(false);
+            textPane.setOpaque(false);
+            textPane.setFont(new Font("微软雅黑", Font.PLAIN, AppSettings.get().getContentFontSize()));
+            textPane.setText(message.text());
+            content = textPane;
+        } else {
+            markdown = new MarkdownPane(AppSettings.get().getContentFontSize());
+            markdown.setMarkdown(message.text());
+            content = markdown;
+        }
 
         Ui.RoundPanel card = Ui.card(user ? Ui.USER_CARD_BG : Ui.CARD_BG);
         card.setLayout(new BorderLayout(0, 6));
@@ -262,8 +303,12 @@ public class Window extends JFrame {
         timeLabel.setFont(new Font("微软雅黑", Font.PLAIN, 12));
         timeLabel.setForeground(Ui.TEXT_SECONDARY);
         timeRow.add(timeLabel);
+        JButton regenerate = null;
         if (!user) {
-            timeRow.add(createCopyButton(content));
+            MarkdownPane pane = markdown;
+            timeRow.add(createCopyButton(pane::getText));
+            regenerate = createRegenerateButton();
+            timeRow.add(regenerate);
         }
         card.add(content, BorderLayout.CENTER);
         card.add(timeRow, BorderLayout.SOUTH);
@@ -273,12 +318,14 @@ public class Window extends JFrame {
 
         waterfallPanel.add(card, rowConstraints(user));
         waterfallRowCount++;
-        messageCards.add(new MessageCard(card, content, user));
+        MessageCard messageCard = new MessageCard(card, content, user, markdown, regenerate);
+        messageCards.add(messageCard);
         emptyHint.setVisible(false);
 
         fitCardHeight(messageCards.size() - 1);
+        refreshRegenerateButtons();
         waterfallPanel.revalidate();
-        return content;
+        return messageCard;
     }
 
     /** 瀑布流一行的 GridBag 约束：用户卡片靠右上且不定宽，AI 卡片水平撑满 */
@@ -298,21 +345,57 @@ public class Window extends JFrame {
         return gbc;
     }
 
-    /** AI 卡片右下角的复制按钮，点击后把正文拷进剪贴板并短暂提示"已复制" */
-    private JButton createCopyButton(JTextPane content) {
+    /** AI 卡片右下角的复制按钮，拷贝 Supplier 给的文本（Markdown 原文），点击后短暂提示"已复制" */
+    private JButton createCopyButton(Supplier<String> source) {
         JButton copyButton = Ui.button("复制");
         copyButton.setFont(new Font("微软雅黑", Font.PLAIN, 11));
         copyButton.setPreferredSize(new Dimension(56, 22));
         copyButton.setToolTipText("复制这条回复");
         copyButton.addActionListener(e -> {
             Toolkit.getDefaultToolkit().getSystemClipboard()
-                    .setContents(new StringSelection(content.getText()), null);
+                    .setContents(new StringSelection(source.get()), null);
             copyButton.setText("已复制");
             Timer reset = new Timer(1200, ev -> copyButton.setText("复制"));
             reset.setRepeats(false);
             reset.start();
         });
         return copyButton;
+    }
+
+    /** 重新生成按钮：只在最后一张 AI 卡片上可见（refreshRegenerateButtons 控制显隐） */
+    private JButton createRegenerateButton() {
+        JButton button = Ui.button("重新生成");
+        button.setFont(new Font("微软雅黑", Font.PLAIN, 11));
+        button.setPreferredSize(new Dimension(76, 22));
+        button.setToolTipText("删除这条回复并让 AI 重新回答");
+        button.addActionListener(e -> requestRegenerate());
+        return button;
+    }
+
+    /** 只有最后一张 AI 卡片显示重新生成（且生成中隐藏），其余 AI 卡片的按钮一律藏掉 */
+    private void refreshRegenerateButtons() {
+        int last = messageCards.size() - 1;
+        for (int i = 0; i < messageCards.size(); i++) {
+            JButton button = messageCards.get(i).regenerate();
+            if (button != null) {
+                button.setVisible(!generating && i == last);
+            }
+        }
+    }
+
+    /** 重新生成：先把最后一张 AI 卡片从界面移除（仓库删除由后端在回调里做），再通知后端重新请求 */
+    private void requestRegenerate() {
+        if (generating || messageCards.isEmpty() || messageCards.get(messageCards.size() - 1).user()) {
+            return;
+        }
+        MessageCard last = messageCards.remove(messageCards.size() - 1);
+        waterfallPanel.remove(last.card());
+        waterfallRowCount = Math.max(0, waterfallRowCount - 1);
+        refreshRegenerateButtons();
+        waterfallPanel.revalidate();
+        if (regenerateHandler != null) {
+            regenerateHandler.accept(store.getActive());
+        }
     }
 
     private static String displayTitle(Conversation conversation) {
@@ -356,7 +439,9 @@ public class Window extends JFrame {
         int userWidth = Math.max(USER_CARD_MIN_WIDTH,
                 Math.min(USER_CARD_MAX_WIDTH, panelWidth * 2 / 3));
         int textWidth = messageCard.user() ? userWidth - CARD_SIDE_INSETS : panelWidth - CARD_SIDE_INSETS;
-        int textHeight = measureTextHeight(messageCard.content(), textWidth);
+        int textHeight = messageCard.user()
+                ? measureTextHeight((JTextPane) messageCard.content(), textWidth)
+                : messageCard.markdown().preferredHeightAt(textWidth);
         int minHeight = messageCard.user() ? CARD_MIN_HEIGHT_USER : CARD_MIN_HEIGHT_AI;
         int frameHeight = messageCard.user() ? CARD_FRAME_HEIGHT_USER : CARD_FRAME_HEIGHT_AI;
         int height = Math.max(minHeight, textHeight + frameHeight);
@@ -402,6 +487,84 @@ public class Window extends JFrame {
             // 再刷一次，等 revalidate 引发的二次布局完成
             EventQueue.invokeLater(() -> bar.setValue(bar.getMaximum()));
         });
+    }
+
+    /** 用户当前是否在瀑布流底部附近：流式追加只有本来就在底部才自动跟随，不劫持阅读位置 */
+    private boolean isNearBottom() {
+        JScrollBar bar = waterfallScroll.getVerticalScrollBar();
+        return bar.getMaximum() - bar.getVisibleAmount() - bar.getValue() < 60;
+    }
+
+    /** 流式句柄实现：增量先攒在缓冲里，Swing Timer 按 120ms 节流重渲染；finish 时落库 */
+    private final class AiStreamImpl implements AiStream {
+        private final String conversationId;
+        private final Message message;
+        private final MessageCard card;
+        private final StringBuilder full = new StringBuilder();
+        private final StringBuilder pending = new StringBuilder();
+        private final Timer flushTimer = new Timer(120, e -> flush());
+        private boolean finished;
+
+        private AiStreamImpl(String conversationId, Message message, MessageCard card) {
+            this.conversationId = conversationId;
+            this.message = message;
+            this.card = card;
+            this.full.append(message.text() == null ? "" : message.text());
+            flushTimer.setRepeats(false);
+        }
+
+        @Override
+        public void appendChunk(String delta) {
+            if (finished || delta == null || delta.isEmpty()) {
+                return;
+            }
+            full.append(delta);
+            pending.append(delta);
+            if (!flushTimer.isRunning()) {
+                flushTimer.start(); // EDT 上的 Swing Timer，到期统一渲染这一批
+            }
+        }
+
+        @Override
+        public void setText(String value) {
+            if (finished) {
+                return;
+            }
+            full.setLength(0);
+            full.append(value == null ? "" : value);
+            pending.setLength(0);
+            pending.append(full);
+            flush();
+        }
+
+        @Override
+        public void finish() {
+            if (finished) {
+                return;
+            }
+            finished = true;
+            flushTimer.stop();
+            flush();
+            store.updateMessageText(conversationId, message, full.toString());
+        }
+
+        /** 把缓冲内容渲染到卡片并按新高度重排；会话已切走或卡片不在显示中时静默丢弃 */
+        private void flush() {
+            if (pending.length() == 0) {
+                return;
+            }
+            pending.setLength(0);
+            int index = messageCards.indexOf(card);
+            if (!conversationId.equals(displayedConvId) || index < 0) {
+                return;
+            }
+            boolean follow = isNearBottom(); // 高度马上要变，先记录用户是否本来就在底部
+            card.markdown().setMarkdown(full.toString());
+            fitCardHeight(index);
+            if (follow) {
+                scrollToBottom();
+            }
+        }
     }
 
     /** 底部：输入区（圆角，聚焦变主题色描边）+ 实时数据胶囊 */

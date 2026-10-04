@@ -118,6 +118,29 @@ public class ConversationStore {
         return message;
     }
 
+    /** 删除指定会话的最后一条消息（重新生成时由后端先删旧回答），返回被删消息；没有则返回 null */
+    public Message removeLastMessage(String id) {
+        Conversation conversation = findById(id);
+        if (conversation == null) {
+            return null;
+        }
+        Message removed = conversation.removeLast();
+        if (removed != null) {
+            save();
+            fireChanged();
+        }
+        return removed;
+    }
+
+    /** 流式输出结束后的落库：把消息文本替换为最终内容（按消息对象同一性查找） */
+    public void updateMessageText(String id, Message target, String text) {
+        Conversation conversation = findById(id);
+        if (conversation != null && conversation.updateMessageText(target, text)) {
+            save();
+            fireChanged();
+        }
+    }
+
     private Conversation findById(String id) {
         if (id == null) {
             return null;

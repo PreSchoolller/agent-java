@@ -61,6 +61,16 @@ final class Ui {
     static final Color ACCENT_PRESSED = new Color(0x2F66DB);
     /** 实时数据小胶囊底色 */
     static final Color PILL_BG = new Color(0xE9EBEF);
+    /** 代码块底色与描边（AI 消息 Markdown 渲染） */
+    static final Color CODE_BG = new Color(0xF6F8FA);
+    static final Color CODE_BORDER = new Color(0xE2E6EB);
+    /** 行内代码前景/底色 */
+    static final Color INLINE_CODE_FG = new Color(0x9C3B57);
+    static final Color INLINE_CODE_BG = new Color(0xF0F1F5);
+    /** 引用块底色、左竖条与文字色 */
+    static final Color QUOTE_BG = new Color(0xF7F8FA);
+    static final Color QUOTE_BAR = new Color(0xD3D9E0);
+    static final Color QUOTE_TEXT = new Color(0x5B6470);
 
     static final Font FONT_PLAIN = new Font("微软雅黑", Font.PLAIN, 12);
     static final Font FONT_BOLD = new Font("微软雅黑", Font.BOLD, 12);

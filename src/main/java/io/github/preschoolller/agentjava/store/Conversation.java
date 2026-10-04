@@ -68,6 +68,28 @@ public class Conversation {
         return message;
     }
 
+    /** 删除最后一条消息（重新生成流程：后端先删旧回答再重新请求），返回被删消息；空会话返回 null */
+    public Message removeLast() {
+        if (messages.isEmpty()) {
+            return null;
+        }
+        Message removed = messages.remove(messages.size() - 1);
+        touch();
+        return removed;
+    }
+
+    /** 流式输出结束后把已存在消息的文本替换为最终值（按消息对象同一性查找），找到并替换返回 true */
+    public boolean updateMessageText(Message target, String text) {
+        for (int i = 0; i < messages.size(); i++) {
+            if (messages.get(i) == target) {
+                messages.set(i, new Message(target.role(), text, target.time()));
+                touch();
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void touch() {
         updatedAt = System.currentTimeMillis();
     }
