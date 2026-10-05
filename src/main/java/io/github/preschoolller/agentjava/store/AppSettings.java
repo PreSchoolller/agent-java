@@ -292,6 +292,7 @@ public final class AppSettings {
         String prefix = "profile." + name + ".";
         Profile profile = new Profile();
         profile.setBackendUrl(properties.getProperty(prefix + "backendUrl", profile.getBackendUrl()));
+        profile.setKey(properties.getProperty(prefix + "key", profile.getKey()));
         profile.setModel(properties.getProperty(prefix + "model", profile.getModel()));
         profile.setTemperature(parseDouble(properties.getProperty(prefix + "temperature"), profile.getTemperature()));
         profile.setMaxTokens(parseInt(properties.getProperty(prefix + "maxTokens"), profile.getMaxTokens()));

@@ -684,6 +684,9 @@ public class Window extends JFrame {
         // 浮层用 BorderLayout 不认识的约束名：布局器不会给它分配区域（无约束的 add 会被当成
         // CENTER 顶掉真正的内容组件），位置完全由 OverlayCardLayout.layoutContainer 负责
         card.add(menuButton, "overlay");
+        // z-order 0 才是顶层：add 追加到末尾反而是最底层，按钮与内容重叠区的点击会被
+        // 透明的内容组件截走（可见但点不到，见踩坑 #21）
+        card.setComponentZOrder(menuButton, 0);
         messageCard.menu = menuButton;
         menuButton.addActionListener(e -> showDeleteMenu(menuButton, messageCard));
         card.doLayout(); // 浮层坐标在布局器里，先摆好再画

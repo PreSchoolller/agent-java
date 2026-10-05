@@ -17,6 +17,7 @@ public class Profile {
     public Profile copy() {
         Profile copy = new Profile();
         copy.backendUrl = backendUrl;
+        copy.key = key;
         copy.model = model;
         copy.temperature = temperature;
         copy.maxTokens = maxTokens;
@@ -30,6 +31,10 @@ public class Profile {
 
     public String getKey() {
         return key;
+    }
+
+    public void setKey(String key) {
+        this.key = key;
     }
 
     public void setBackendUrl(String backendUrl) {

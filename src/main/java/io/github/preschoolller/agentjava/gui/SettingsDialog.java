@@ -58,6 +58,7 @@ public class SettingsDialog extends JDialog {
     private final JButton profileRenameButton = Ui.button("重命名");
     private final JButton profileDeleteButton = Ui.button("删除");
     private final JTextField backendUrlField = new JTextField();
+    private final JTextField keyField = new JTextField();
     private final JTextField modelField = new JTextField();
     private final JSpinner temperatureSpinner;
     private final JSpinner maxTokensSpinner;
@@ -98,6 +99,7 @@ public class SettingsDialog extends JDialog {
         trayCheckBox.setToolTipText("系统不支持托盘时，关闭按钮仍会直接退出");
 
         Ui.styleInput(backendUrlField);
+        Ui.styleInput(keyField);
         Ui.styleInput(modelField);
         Ui.styleSpinner(temperatureSpinner);
         Ui.styleSpinner(maxTokensSpinner);
@@ -126,6 +128,7 @@ public class SettingsDialog extends JDialog {
         int row = 0;
         row = addRow(backendCard, row, "配置方案", profileRow());
         row = addRow(backendCard, row, "后端地址", backendUrlField);
+        row = addRow(backendCard, row, "Key", keyField);
         row = addRow(backendCard, row, "模型", modelField);
         row = addRow(backendCard, row, "温度", temperatureSpinner);
         addRow(backendCard, row, "最大 Tokens", maxTokensSpinner);
@@ -178,7 +181,7 @@ public class SettingsDialog extends JDialog {
         root.add(buttons, BorderLayout.SOUTH);
         setContentPane(root);
 
-        setSize(560, 660);
+        setSize(560, 700);
         setLocationRelativeTo(owner);
     }
 
@@ -231,6 +234,7 @@ public class SettingsDialog extends JDialog {
             return;
         }
         backendUrlField.setText(profile.getBackendUrl());
+        keyField.setText(profile.getKey());
         modelField.setText(profile.getModel());
         temperatureSpinner.setValue(profile.getTemperature());
         maxTokensSpinner.setValue(profile.getMaxTokens());
@@ -315,6 +319,7 @@ public class SettingsDialog extends JDialog {
     private void save() {
         Profile profile = working.get(selectedName);
         profile.setBackendUrl(backendUrlField.getText().strip());
+        profile.setKey(keyField.getText().strip());
         profile.setModel(modelField.getText().strip());
         profile.setTemperature(((Number) temperatureSpinner.getValue()).doubleValue());
         profile.setMaxTokens(((Number) maxTokensSpinner.getValue()).intValue());
