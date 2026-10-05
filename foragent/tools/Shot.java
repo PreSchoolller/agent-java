@@ -148,6 +148,14 @@ public class Shot {
         expect(testSettings.getProfileNames().equals(List.of("默认")), "首启默认方案");
         testSettings.getActiveProfile().setModel("test-model");
         expect("test-model".equals(testSettings.getModel()), "委托 getter 读当前方案");
+        // 可选模型列表：设置→落盘→重读→默认项不在列表里时落到第一个
+        testSettings.getActiveProfile().setModels(List.of("model-a", "model-b"));
+        testSettings.getActiveProfile().setModel("model-b");
+        expect(testSettings.getActiveProfile().getModel().equals("model-b"), "默认项在列表里保持");
+        testSettings.getActiveProfile().setModels(List.of("model-c"));
+        expect(testSettings.getActiveProfile().getModel().equals("model-c"), "默认项不在列表里落到第一个");
+        testSettings.getActiveProfile().setModels(List.of("model-a", "model-b"));
+        testSettings.getActiveProfile().setModel("model-b");
         testSettings.addProfile("写作", testSettings.getActiveProfile());
         testSettings.setActiveProfileName("写作");
         testSettings.getActiveProfile().setTemperature(0.3);
@@ -157,7 +165,9 @@ public class Shot {
         expect(reloaded.getProfileNames().equals(List.of("默认", "写作")), "方案列表往返");
         expect("写作".equals(reloaded.getActiveProfileName()), "活动方案往返");
         expect(reloaded.getActiveProfile().getTemperature() == 0.3, "方案参数往返");
-        expect("test-model".equals(reloaded.getProfile("默认").getModel()), "首个方案参数往返");
+        expect("model-b".equals(reloaded.getProfile("默认").getModel()), "首个方案参数往返");
+        expect(reloaded.getProfile("写作").getModels().equals(List.of("model-a", "model-b")), "模型列表往返");
+        expect(reloaded.getProfile("写作").getModel().equals("model-b"), "默认模型往返");
         reloaded.removeProfile("默认");
         expect(reloaded.getActiveProfileName().equals("写作"), "删活动方案后兜底");
         reloaded.renameProfile("写作", "写作2");
@@ -178,6 +188,8 @@ public class Shot {
         expect("http://old:8080/chat".equals(migrated.getActiveProfile().getBackendUrl()), "迁移地址");
         expect(migrated.getActiveProfile().getTemperature() == 0.5, "迁移温度");
         expect(migrated.getContentFontSize() == 18, "全局字号保留");
+        // models 键缺失（旧文件）时用 model 单值兜底成单元素列表
+        expect(migrated.getActiveProfile().getModels().equals(List.of("legacy-model")), "旧格式模型列表兜底");
         // 主题偏好：默认浅色、非法值忽略、落盘往返
         expect("light".equals(testSettings.getUiTheme()), "主题默认浅色");
         testSettings.setUiTheme("深色");
@@ -248,6 +260,11 @@ public class Shot {
             WINDOW = window;
         });
         Thread.sleep(1500);
+        // 输入区右下角控件：模型/思考强度默认选中项非空
+        edt(() -> {
+            expect(WINDOW.getSelectedModel() != null, "输入区默认模型非空");
+            expect(WINDOW.getSelectedEffort() != null, "输入区默认思考强度非空");
+        });
         capture(args[0] + "-1-expanded.png");
 
         // —— 截图 1b：分隔条拖到 360px（模拟手动拖宽侧栏） ——

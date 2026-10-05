@@ -6,6 +6,7 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -166,6 +167,10 @@ public final class AppSettings {
         return getActiveProfile().getKey();
     }
 
+    public List<String> getModels() {
+        return getActiveProfile().getModels();
+    }
+
     public String getModel() {
         return getActiveProfile().getModel();
     }
@@ -234,6 +239,7 @@ public final class AppSettings {
             properties.setProperty(prefix + "backendUrl", profile.getBackendUrl());
             properties.setProperty(prefix + "key", profile.getKey());
             properties.setProperty(prefix + "model", profile.getModel());
+            properties.setProperty(prefix + "models", String.join(",", profile.getModels()));
             properties.setProperty(prefix + "temperature", String.valueOf(profile.getTemperature()));
             properties.setProperty(prefix + "maxTokens", String.valueOf(profile.getMaxTokens()));
             properties.setProperty(prefix + "systemPrompt", profile.getSystemPrompt());
@@ -294,6 +300,11 @@ public final class AppSettings {
         profile.setBackendUrl(properties.getProperty(prefix + "backendUrl", profile.getBackendUrl()));
         profile.setKey(properties.getProperty(prefix + "key", profile.getKey()));
         profile.setModel(properties.getProperty(prefix + "model", profile.getModel()));
+        // models 缺省（老文件）时用 model 单值兜底成单元素列表；setModels 内部保证 model ∈ models
+        String models = properties.getProperty(prefix + "models");
+        profile.setModels(models != null && !models.isBlank()
+                ? Arrays.stream(models.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList()
+                : List.of(profile.getModel()));
         profile.setTemperature(parseDouble(properties.getProperty(prefix + "temperature"), profile.getTemperature()));
         profile.setMaxTokens(parseInt(properties.getProperty(prefix + "maxTokens"), profile.getMaxTokens()));
         profile.setSystemPrompt(properties.getProperty(prefix + "systemPrompt", profile.getSystemPrompt()));
@@ -305,6 +316,7 @@ public final class AppSettings {
         Profile profile = new Profile();
         profile.setBackendUrl(properties.getProperty("backendUrl", profile.getBackendUrl()));
         profile.setModel(properties.getProperty("model", profile.getModel()));
+        profile.setModels(List.of(profile.getModel()));
         profile.setTemperature(parseDouble(properties.getProperty("temperature"), profile.getTemperature()));
         profile.setMaxTokens(parseInt(properties.getProperty("maxTokens"), profile.getMaxTokens()));
         profile.setSystemPrompt(properties.getProperty("systemPrompt", profile.getSystemPrompt()));

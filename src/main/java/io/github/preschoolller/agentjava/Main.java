@@ -3,7 +3,6 @@ package io.github.preschoolller.agentjava;
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderResponse;
-import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.gui.Window;
 
@@ -72,7 +71,9 @@ public class Main {
         Window.AiStream stream = window.addAiMessage(""); // 这一步已在 EDT 上（输入/按钮回调都在 EDT）
         CompletableFuture.runAsync(() -> {
             try {
-                PromptParams promptParams = new PromptParams("minicpm5-2b", question, ReasoningEffortEnum.ON);
+                // 模型与思考强度取输入区右下角的选择（对话级设置）
+                PromptParams promptParams = new PromptParams(
+                        window.getSelectedModel(), question, window.getSelectedEffort());
                 ProviderResponse providerResponse = provider.sendPrompt(promptParams);
                 String markdown = "<think>" + providerResponse.reasoningContent() + "</think>" + providerResponse.message();
                 for (String chunk : markdown.split("(?<=\n)")) {

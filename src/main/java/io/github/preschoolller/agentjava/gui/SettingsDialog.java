@@ -13,7 +13,6 @@ import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
@@ -21,6 +20,7 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
 import java.awt.BorderLayout;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -28,8 +28,11 @@ import java.awt.Frame;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * 设置面板（模态对话框）：编辑 AppSettings 并持久化。
@@ -59,7 +62,10 @@ public class SettingsDialog extends JDialog {
     private final JButton profileDeleteButton = Ui.button("删除");
     private final JTextField backendUrlField = new JTextField();
     private final JTextField keyField = new JTextField();
-    private final JTextField modelField = new JTextField();
+    /** 模型编辑：只读下拉（选中项=输入区默认模型）+ 添加/删除按钮 */
+    private final JComboBox<String> modelCombo = new JComboBox<>();
+    private final JButton modelAddButton = Ui.button("添加");
+    private final JButton modelDeleteButton = Ui.button("删除");
     private final JSpinner temperatureSpinner;
     private final JSpinner maxTokensSpinner;
     private final JSpinner fontSizeSpinner;
@@ -100,7 +106,6 @@ public class SettingsDialog extends JDialog {
 
         Ui.styleInput(backendUrlField);
         Ui.styleInput(keyField);
-        Ui.styleInput(modelField);
         Ui.styleSpinner(temperatureSpinner);
         Ui.styleSpinner(maxTokensSpinner);
         Ui.styleSpinner(fontSizeSpinner);
@@ -129,7 +134,7 @@ public class SettingsDialog extends JDialog {
         row = addRow(backendCard, row, "配置方案", profileRow());
         row = addRow(backendCard, row, "后端地址", backendUrlField);
         row = addRow(backendCard, row, "Key", keyField);
-        row = addRow(backendCard, row, "模型", modelField);
+        row = addRow(backendCard, row, "模型", modelRow());
         row = addRow(backendCard, row, "温度", temperatureSpinner);
         addRow(backendCard, row, "最大 Tokens", maxTokensSpinner);
         groups.add(backendCard);
@@ -189,9 +194,177 @@ public class SettingsDialog extends JDialog {
         return saved;
     }
 
+    /**
+     * 模型行：只读下拉 + 添加/删除。下拉选中项保存时写回 Profile.model（输入区默认模型）；
+     * 添加走主题弹窗，确定后新名字入列并自动展开下拉（看得见的"加上了"，选中项不变）。
+     */
+    private JPanel modelRow() {
+        Ui.styleComboBox(modelCombo);
+        modelCombo.setPreferredSize(new Dimension(160, 30));
+        modelCombo.setToolTipText("输入区默认模型");
+        modelAddButton.setPreferredSize(new Dimension(52, 30));
+        modelAddButton.setToolTipText("添加模型");
+        modelDeleteButton.setPreferredSize(new Dimension(52, 30));
+        modelDeleteButton.setToolTipText("删除选中的模型");
+        modelDeleteButton.setEnabled(false);
+
+        modelAddButton.addActionListener(e -> addModel());
+        modelDeleteButton.addActionListener(e -> deleteModel());
+
+        JPanel rowPanel = new JPanel(new BorderLayout(6, 0));
+        rowPanel.setOpaque(false);
+        rowPanel.add(modelCombo, BorderLayout.CENTER);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        buttons.setOpaque(false);
+        buttons.add(modelAddButton);
+        buttons.add(modelDeleteButton);
+        rowPanel.add(buttons, BorderLayout.EAST);
+        return rowPanel;
+    }
+
+    private void addModel() {
+        String name = promptText("添加模型", "模型名（服务端标识）", "",
+                value -> {
+                    if (value.isEmpty()) {
+                        return "模型名不能为空";
+                    }
+                    return indexOfModel(value) >= 0 ? "该模型已存在" : null;
+                });
+        if (name == null) {
+            return;
+        }
+        modelCombo.addItem(name);
+        modelCombo.repaint();
+        // 自动展开下拉：新名字就在列表里，选中项仍保持默认模型不变
+        modelCombo.showPopup();
+        syncModelButtons();
+    }
+
+    private void deleteModel() {
+        Object item = modelCombo.getSelectedItem();
+        if (item == null || modelCombo.getItemCount() <= 1) {
+            return; // 按钮置灰是常态，这里是双保险
+        }
+        modelCombo.removeItem(item);
+        if (modelCombo.getSelectedItem() == null && modelCombo.getItemCount() > 0) {
+            modelCombo.setSelectedIndex(0); // 删的是默认项时，显示落到第一个
+        }
+        syncModelButtons();
+    }
+
+    private int indexOfModel(String text) {
+        for (int i = 0; i < modelCombo.getItemCount(); i++) {
+            if (text.equals(modelCombo.getItemAt(i))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** 删除按钮只在列表多于一项时可用（"至少保留一个模型"用置灰表达，比弹窗直观） */
+    private void syncModelButtons() {
+        modelDeleteButton.setEnabled(modelCombo.getItemCount() > 1);
+    }
+
+    /**
+     * 主题化输入对话框（替代 JOptionPane 的 Metal 系统样式）：校验函数返回错误文案内联
+     * 红字显示、不关窗，通过才收值；回车=确定，取消/关闭返回 null。
+     */
+    private String promptText(String title, String message, String initial, Function<String, String> validator) {
+        String[] result = {null};
+        JTextField field = new JTextField(initial);
+        Ui.styleInput(field);
+        field.setPreferredSize(new Dimension(280, 30));
+        JLabel messageLabel = new JLabel(message);
+        messageLabel.setFont(Ui.FONT_PLAIN);
+        messageLabel.setForeground(Ui.TEXT);
+        JLabel hint = new JLabel(" ");
+        hint.setFont(Ui.FONT_PLAIN);
+        hint.setForeground(Ui.DANGER);
+        JButton okButton = Ui.primaryButton("确定");
+        JButton cancelButton = Ui.button("取消");
+        okButton.setPreferredSize(new Dimension(70, 28));
+        cancelButton.setPreferredSize(new Dimension(70, 28));
+
+        JDialog dialog = new JDialog(this, title, true);
+        okButton.addActionListener(e -> {
+            String value = field.getText().strip();
+            String error = validator.apply(value);
+            if (error == null) {
+                result[0] = value;
+                dialog.dispose();
+            } else {
+                hint.setText(error);
+                dialog.pack();
+                field.requestFocusInWindow();
+            }
+        });
+        cancelButton.addActionListener(e -> dialog.dispose());
+        field.addActionListener(e -> okButton.doClick()); // 回车=确定
+
+        JPanel fields = new JPanel(new BorderLayout(0, 6));
+        fields.setOpaque(false);
+        fields.add(messageLabel, BorderLayout.NORTH);
+        fields.add(field, BorderLayout.CENTER);
+        fields.add(hint, BorderLayout.SOUTH);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        buttons.add(cancelButton);
+        buttons.add(okButton);
+        JPanel content = new JPanel(new BorderLayout(0, 12));
+        content.setBackground(Ui.BG);
+        content.setBorder(BorderFactory.createEmptyBorder(16, 16, 12, 16));
+        content.add(fields, BorderLayout.CENTER);
+        content.add(buttons, BorderLayout.SOUTH);
+
+        dialog.setContentPane(content);
+        dialog.getRootPane().setDefaultButton(okButton);
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(360, dialog.getPreferredSize().height));
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+        return result[0];
+    }
+
+    /** 主题化确认对话框：确定返回 true */
+    private boolean confirmBox(String title, String message) {
+        boolean[] result = {false};
+        JLabel messageLabel = new JLabel(message);
+        messageLabel.setFont(Ui.FONT_PLAIN);
+        messageLabel.setForeground(Ui.TEXT);
+        JButton okButton = Ui.primaryButton("确定");
+        JButton cancelButton = Ui.button("取消");
+        okButton.setPreferredSize(new Dimension(70, 28));
+        cancelButton.setPreferredSize(new Dimension(70, 28));
+
+        JDialog dialog = new JDialog(this, title, true);
+        okButton.addActionListener(e -> {
+            result[0] = true;
+            dialog.dispose();
+        });
+        cancelButton.addActionListener(e -> dialog.dispose());
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        buttons.add(cancelButton);
+        buttons.add(okButton);
+        JPanel content = new JPanel(new BorderLayout(0, 12));
+        content.setBackground(Ui.BG);
+        content.setBorder(BorderFactory.createEmptyBorder(16, 16, 12, 16));
+        content.add(messageLabel, BorderLayout.CENTER);
+        content.add(buttons, BorderLayout.SOUTH);
+
+        dialog.setContentPane(content);
+        dialog.getRootPane().setDefaultButton(okButton);
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(320, dialog.getPreferredSize().height));
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+        return result[0];
+    }
+
     /** 方案行：下拉 + 新建/重命名/删除 */
-    private JPanel profileRow() {
-        JPanel rowPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+    private JPanel profileRow() {        JPanel rowPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         rowPanel.setOpaque(false);
         rowPanel.add(profileCombo);
         rowPanel.add(profileAddButton);
@@ -235,7 +408,15 @@ public class SettingsDialog extends JDialog {
         }
         backendUrlField.setText(profile.getBackendUrl());
         keyField.setText(profile.getKey());
-        modelField.setText(profile.getModel());
+        modelCombo.removeAllItems();
+        for (String model : profile.getModels()) {
+            modelCombo.addItem(model);
+        }
+        modelCombo.setSelectedItem(profile.getModel());
+        if (modelCombo.getSelectedItem() == null && modelCombo.getItemCount() > 0) {
+            modelCombo.setSelectedIndex(0);
+        }
+        syncModelButtons();
         temperatureSpinner.setValue(profile.getTemperature());
         maxTokensSpinner.setValue(profile.getMaxTokens());
         systemPromptArea.setText(profile.getSystemPrompt());
@@ -243,12 +424,18 @@ public class SettingsDialog extends JDialog {
 
     /** 新建方案：复制当前方案参数作为起点 */
     private void addProfile() {
-        String name = askProfileName("新建方案（复制当前方案参数）", suggestProfileName());
+        String name = promptText("新建方案", "方案名称（复制当前方案参数）", suggestProfileName(),
+                value -> {
+                    String trimmed = value.strip();
+                    if (trimmed.isEmpty()) {
+                        return "名称不能为空";
+                    }
+                    if (trimmed.contains(",")) {
+                        return "名称不能包含英文逗号";
+                    }
+                    return working.containsKey(trimmed) ? "方案「" + trimmed + "」已存在" : null;
+                });
         if (name == null) {
-            return;
-        }
-        if (working.containsKey(name)) {
-            JOptionPane.showMessageDialog(this, "方案「" + name + "」已存在", "新建方案", JOptionPane.WARNING_MESSAGE);
             return;
         }
         working.put(name, working.get(selectedName).copy());
@@ -258,12 +445,18 @@ public class SettingsDialog extends JDialog {
     }
 
     private void renameProfile() {
-        String name = askProfileName("重命名方案", selectedName);
+        String name = promptText("重命名方案", "新的方案名称", selectedName,
+                value -> {
+                    String trimmed = value.strip();
+                    if (trimmed.isEmpty()) {
+                        return "名称不能为空";
+                    }
+                    if (trimmed.contains(",")) {
+                        return "名称不能包含英文逗号";
+                    }
+                    return working.containsKey(trimmed) ? "方案「" + trimmed + "」已存在" : null;
+                });
         if (name == null) {
-            return;
-        }
-        if (working.containsKey(name)) {
-            JOptionPane.showMessageDialog(this, "方案「" + name + "」已存在", "重命名方案", JOptionPane.WARNING_MESSAGE);
             return;
         }
         LinkedHashMap<String, Profile> reordered = new LinkedHashMap<>();
@@ -277,34 +470,13 @@ public class SettingsDialog extends JDialog {
     }
 
     private void deleteProfile() {
-        int choice = JOptionPane.showConfirmDialog(this,
-                "删除方案「" + selectedName + "」？", "删除方案",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (choice != JOptionPane.OK_OPTION) {
+        if (!confirmBox("删除方案", "删除方案「" + selectedName + "」？")) {
             return;
         }
         working.remove(selectedName);
         selectedName = working.keySet().iterator().next();
         rebuildProfileCombo();
         loadSelectedProfile();
-    }
-
-    /** 弹输入框要一个方案名；取消或空白返回 null（逗号是落盘时方案名的分隔符，不许用） */
-    private String askProfileName(String message, String initial) {
-        String name = JOptionPane.showInputDialog(this, message, initial);
-        if (name == null) {
-            return null;
-        }
-        String trimmed = name.strip();
-        if (trimmed.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "名称不能为空", "方案名称", JOptionPane.WARNING_MESSAGE);
-            return null;
-        }
-        if (trimmed.contains(",")) {
-            JOptionPane.showMessageDialog(this, "名称不能包含英文逗号", "方案名称", JOptionPane.WARNING_MESSAGE);
-            return null;
-        }
-        return trimmed;
     }
 
     private String suggestProfileName() {
@@ -320,7 +492,16 @@ public class SettingsDialog extends JDialog {
         Profile profile = working.get(selectedName);
         profile.setBackendUrl(backendUrlField.getText().strip());
         profile.setKey(keyField.getText().strip());
-        profile.setModel(modelField.getText().strip());
+        List<String> models = new ArrayList<>();
+        for (int i = 0; i < modelCombo.getItemCount(); i++) {
+            String item = modelCombo.getItemAt(i);
+            if (item != null && !item.isBlank()) {
+                models.add(item.strip());
+            }
+        }
+        profile.setModels(models);
+        String selected = (String) modelCombo.getSelectedItem();
+        profile.setModel(selected != null && !selected.isBlank() ? selected.strip() : models.get(0));
         profile.setTemperature(((Number) temperatureSpinner.getValue()).doubleValue());
         profile.setMaxTokens(((Number) maxTokensSpinner.getValue()).intValue());
         profile.setSystemPrompt(systemPromptArea.getText());

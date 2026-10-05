@@ -1,5 +1,6 @@
 package io.github.preschoolller.agentjava.gui;
 
+import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.store.AppSettings;
 import io.github.preschoolller.agentjava.store.Conversation;
 import io.github.preschoolller.agentjava.store.ConversationStore;
@@ -7,6 +8,7 @@ import io.github.preschoolller.agentjava.store.Message;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -122,6 +124,14 @@ public class Window extends JFrame {
     private JTextPane inputTextArea;
     private JButton sendButton;
     private JButton stopButton;
+    /** 输入区右下角：本次对话的模型与思考强度（对话级选择，选项来自当前方案的模型列表） */
+    private JComboBox<String> modelCombo;
+    private JComboBox<String> effortCombo;
+    /** 思考强度下拉的选项顺序，与"关闭/低/中/高/超高"标签一一对应 */
+    private static final ReasoningEffortEnum[] EFFORT_OPTIONS = {
+            ReasoningEffortEnum.NO, ReasoningEffortEnum.LOW, ReasoningEffortEnum.MEDIUM,
+            ReasoningEffortEnum.HIGH, ReasoningEffortEnum.ULTRA,
+    };
 
     /** 实时数据小胶囊（底部居中） */
     private Ui.RoundPanel realtimePill;
@@ -557,6 +567,8 @@ public class Window extends JFrame {
             return;
         }
         inputTextArea.setEnabled(!value);
+        modelCombo.setEnabled(!value);
+        effortCombo.setEnabled(!value);
         sendButton.setVisible(!value);
         stopButton.setVisible(value);
         inputBox.revalidate();
@@ -1187,10 +1199,43 @@ public class Window extends JFrame {
         buttonHolder.add(sendButton);
         buttonHolder.add(stopButton);
 
+        // 输入框右下角一排：模型选择 + 思考强度 + 发送/停止
+        modelCombo = new JComboBox<>();
+        for (String model : AppSettings.get().getModels()) {
+            modelCombo.addItem(model);
+        }
+        modelCombo.setSelectedItem(AppSettings.get().getModel());
+        if (modelCombo.getSelectedItem() == null && modelCombo.getItemCount() > 0) {
+            modelCombo.setSelectedIndex(0);
+        }
+        modelCombo.setPreferredSize(new Dimension(180, 26));
+        modelCombo.setToolTipText("本次对话使用的模型（可选列表在设置面板里维护）");
+        effortCombo = new JComboBox<>(new String[]{"关闭", "低", "中", "高", "超高"});
+        effortCombo.setSelectedIndex(3);
+        effortCombo.setPreferredSize(new Dimension(90, 26));
+        effortCombo.setToolTipText("思考强度");
+        Ui.styleComboBox(modelCombo);
+        Ui.styleComboBox(effortCombo);
+        JPanel controlsRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
+        controlsRow.setOpaque(false);
+        controlsRow.add(modelCombo);
+        controlsRow.add(effortCombo);
+        controlsRow.add(buttonHolder);
+
         inputBox.setLayout(new BorderLayout(6, 0));
-        inputBox.setBorder(BorderFactory.createEmptyBorder(10, 14, 10, 14));
+        inputBox.setBorder(BorderFactory.createEmptyBorder(10, 14, 8, 10));
         inputBox.add(inputTextArea, BorderLayout.CENTER);
-        inputBox.add(buttonHolder, BorderLayout.EAST);
+        inputBox.add(controlsRow, BorderLayout.SOUTH);
+    }
+
+    /** 输入区当前选中的模型（对话级设置） */
+    public String getSelectedModel() {
+        return (String) modelCombo.getSelectedItem();
+    }
+
+    /** 输入区当前选中的思考强度 */
+    public ReasoningEffortEnum getSelectedEffort() {
+        return EFFORT_OPTIONS[effortCombo.getSelectedIndex()];
     }
 
     private void initSidebar() {
