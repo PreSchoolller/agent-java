@@ -47,6 +47,9 @@ final class Theme {
     Color quoteBg;
     Color quoteBar;
     Color quoteText;
+    /** 思考块（<think> 推理内容）底色与描边，文字用 textSecondary */
+    Color thinkBg;
+    Color thinkBorder;
     /** 弹出层（菜单/下拉列表）描边与底色 */
     Color popupBorder;
     Color menuBg;
@@ -91,6 +94,8 @@ final class Theme {
         t.quoteBg = new Color(0xF7F8FA);
         t.quoteBar = new Color(0xD3D9E0);
         t.quoteText = new Color(0x5B6470);
+        t.thinkBg = new Color(0xF5F4F9);
+        t.thinkBorder = new Color(0xE5E2EE);
         t.popupBorder = new Color(0xE0E3E8);
         t.menuBg = Color.WHITE;
         t.menuSelected = new Color(0xE9EEF6);
@@ -126,6 +131,8 @@ final class Theme {
         t.quoteBg = new Color(0x22262D);
         t.quoteBar = new Color(0x4E5766);
         t.quoteText = new Color(0xA9B2BF);
+        t.thinkBg = new Color(0x232732);
+        t.thinkBorder = new Color(0x3D4252);
         t.popupBorder = new Color(0x3A414B);
         t.menuBg = new Color(0x252930);
         t.menuSelected = new Color(0x2F3B4E);

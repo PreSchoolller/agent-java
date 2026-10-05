@@ -53,6 +53,10 @@ public class Shot {
 
     /** Markdown 渲染样例：解析断言和 6 号截图共用，覆盖渲染器支持的全部块类型 */
     private static final String SAMPLE_MD = """
+            <think>
+            用户想看 Markdown 渲染效果，我准备一个覆盖全部块类型的样例，
+            从标题开始逐个展示。
+            </think>
             ## 回答要点
 
             这是 **加粗**贴字、*斜体*贴字、`行内代码`、[链接](https://example.com)、~~删除线~~ 的段落，
@@ -195,11 +199,25 @@ public class Shot {
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.CodeBlock).count() == 1, "代码块数");
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Quote).count() == 1, "引用数");
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Rule).count() == 1, "分隔线数");
-        MarkdownRenderer.Paragraph firstPara = (MarkdownRenderer.Paragraph) md.get(1);
+        expect(md.stream().filter(b -> b instanceof MarkdownRenderer.ThinkBlock).count() == 1, "思考块数");
+        MarkdownRenderer.Paragraph firstPara = (MarkdownRenderer.Paragraph) md.stream()
+                .filter(b -> b instanceof MarkdownRenderer.Paragraph).findFirst().orElseThrow();
         expect(firstPara.spans().stream().anyMatch(s -> s.bold()), "加粗解析");
         expect(firstPara.spans().stream().anyMatch(s -> s.mono()), "行内代码解析");
         expect(firstPara.spans().stream().anyMatch(s -> s.link() != null), "链接解析");
         expect(firstPara.spans().stream().anyMatch(s -> s.strike()), "删除线解析");
+        // 思考块的边界情况：闭合后正文照常解析；流式未闭合吞到尾；空思考段不产块；游离闭标剔除
+        List<MarkdownRenderer.Block> closed = MarkdownRenderer.parse("<think>推理一下</think>正文 **加粗**");
+        expect(closed.size() == 2
+                && closed.get(0) instanceof MarkdownRenderer.ThinkBlock
+                && closed.get(1) instanceof MarkdownRenderer.Paragraph, "闭合思考块+正文");
+        expect(MarkdownRenderer.parse("<think>还没想完").size() == 1
+                && MarkdownRenderer.parse("<think>还没想完").get(0) instanceof MarkdownRenderer.ThinkBlock,
+                "流式未闭合思考块");
+        expect(MarkdownRenderer.parse("<think></think>只有正文").size() == 1, "空思考段不产块");
+        MarkdownRenderer.Paragraph stray = (MarkdownRenderer.Paragraph) MarkdownRenderer
+                .parse("有 </think> 游离闭标的正文").get(0);
+        expect(stray.spans().stream().noneMatch(s -> s.text().contains("</think>")), "游离闭标剔除");
         System.out.println("MD_PARSE_OK");
 
         // —— 造两段会话（c1 六条消息让瀑布流溢出，滚动条才可见） ——
@@ -279,9 +297,12 @@ public class Shot {
             dialog.dispose();
         });
 
-        // —— 截图 6：Markdown 渲染（标题/行内样式/代码块/列表/引用/分隔线） ——
+        // —— 截图 6：Markdown 渲染（思考块/标题/行内样式/代码块/列表/引用/分隔线） ——
+        // 切会话会自动滚到底，先滚回顶部让卡片开头的思考块入镜
         edt(() -> WINDOW.getStore().switchTo(c3.getId()));
         Thread.sleep(1500);
+        scrollWaterfallToTop();
+        Thread.sleep(400);
         capture(args[0] + "-6-markdown.png");
 
         // —— 截图 7：流式输出（appendChunk 节流渲染 + 高度自适应 + 自动滚底） ——
@@ -414,7 +435,7 @@ public class Shot {
         capture(args[0] + "-13-long-conversation.png");
         System.out.println("WINDOWING_OK");
 
-        // —— 截图 14：深色主题（retheme 原地重建整窗，Markdown 会话校验卡片/代码块/引用配色） ——
+        // —— 截图 14：深色主题（retheme 原地重建整窗，Markdown 会话校验卡片/思考块/代码块/引用配色） ——
         // 12 号的合成点击会把列表第一项选中切走会话，先切回 Markdown 样例会话
         edt(() -> WINDOW.getStore().switchTo(c3.getId()));
         Thread.sleep(1200);
@@ -423,6 +444,7 @@ public class Shot {
             WINDOW.retheme();
         });
         Thread.sleep(1500);
+        scrollWaterfallToTop(); // retheme 重建整窗会滚到底部，滚回顶部让思考块入镜
         capture(args[0] + "-14-dark.png");
 
         // —— 截图 15：深色下的设置面板（主题下拉应显示"深色"，输入控件跟随弹层配色） ——
@@ -497,6 +519,17 @@ public class Shot {
                 throw new RuntimeException(e);
             }
         });
+    }
+
+    /** 把消息区滚回顶部（走滚动条 setValue，与真实用户拖拽同路径） */
+    private static void scrollWaterfallToTop() throws Exception {
+        edt(() -> {
+            java.awt.Container viewportParent = WINDOW.getWaterfallPanel().getParent().getParent();
+            if (viewportParent instanceof javax.swing.JScrollPane scrollPane) {
+                scrollPane.getVerticalScrollBar().setValue(0);
+            }
+        });
+        Thread.sleep(400);
     }
 
     private static void expect(boolean condition, String what) {

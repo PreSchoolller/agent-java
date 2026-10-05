@@ -93,6 +93,9 @@ final class Ui {
     static Color QUOTE_BG;
     static Color QUOTE_BAR;
     static Color QUOTE_TEXT;
+    /** 思考块（<think> 推理内容）底色与描边 */
+    static Color THINK_BG;
+    static Color THINK_BORDER;
     /** 弹出层（菜单/下拉列表）描边与底色 */
     static Color POPUP_BORDER;
     static Color MENU_BG;
@@ -145,6 +148,8 @@ final class Ui {
         QUOTE_BG = theme.quoteBg;
         QUOTE_BAR = theme.quoteBar;
         QUOTE_TEXT = theme.quoteText;
+        THINK_BG = theme.thinkBg;
+        THINK_BORDER = theme.thinkBorder;
         POPUP_BORDER = theme.popupBorder;
         MENU_BG = theme.menuBg;
         MENU_SELECTED = theme.menuSelected;

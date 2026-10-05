@@ -31,7 +31,8 @@ import java.util.regex.Pattern;
 /**
  * 零依赖的轻量 Markdown 渲染器（组件计划 P0-1 选了"自写解析"路线：项目不引第三方包）。
  * 支持标题、段落、行内样式（加粗/斜体/行内代码/删除线/链接/裸 URL）、围栏代码块（带语言标注
- * 与复制按钮）、有序/无序列表（含嵌套与任务勾选）、引用块、水平分隔线；表格暂不渲染（按普通
+ * 与复制按钮）、有序/无序列表（含嵌套与任务勾选）、引用块、思考块（&lt;think&gt;…&lt;/think&gt;，
+ * 流式未闭合时吞到文本尾）、水平分隔线；表格暂不渲染（按普通
  * 段落原样显示），链接只做样式不做点击跳转，这两项留待后续按需补。
  *
  * 结构分三层：
@@ -52,7 +53,7 @@ public final class MarkdownRenderer {
     public record Span(String text, boolean bold, boolean italic, boolean mono, boolean strike, String link) {
     }
 
-    public sealed interface Block permits Paragraph, Heading, ListItem, CodeBlock, Quote, Rule {
+    public sealed interface Block permits Paragraph, Heading, ListItem, CodeBlock, Quote, Rule, ThinkBlock {
     }
 
     /** 段落：span 里的 "\n" 表示同段内的软换行 */
@@ -75,6 +76,10 @@ public final class MarkdownRenderer {
     }
 
     public record Rule() implements Block {
+    }
+
+    /** 思考块：<think>…</think> 包住的推理内容，每条是一行 span 列表；流式未闭合时吞到文本尾 */
+    public record ThinkBlock(List<List<Span>> lines) implements Block {
     }
 
     // ===== 渲染行 =====
@@ -183,7 +188,6 @@ public final class MarkdownRenderer {
     private static final int QUOTE_PAD_RIGHT = 12;
     private static final int QUOTE_PAD_BOTTOM = 8;
     private static final int QUOTE_BAR_WIDTH = 3;
-
     /** 引用块行：浅灰圆角底 + 左侧竖条 + 次要色文字 */
     private record QuoteRow(Quote quote) implements Row {
         @Override
@@ -222,8 +226,61 @@ public final class MarkdownRenderer {
         }
     }
 
-    private static final int RULE_HEIGHT = 13;
+    private static final int THINK_HEADER_HEIGHT = 24;
+    private static final int THINK_PAD_TOP = 6;
+    private static final int THINK_PAD_LEFT = 12;
+    private static final int THINK_PAD_RIGHT = 12;
+    private static final int THINK_PAD_BOTTOM = 8;
+    private static final int THINK_TEXT_HEIGHT_CAP = 260;
 
+    /** 思考块行：淡紫圆角底 + "思考过程"标注 + 次要色斜体文字；超长内部滚动，卡片不至于无限高 */
+    private record ThinkRow(ThinkBlock think) implements Row {
+        @Override
+        public Component component(Font base) {
+            JPanel panel = new Ui.RoundPanel(10, Ui.THINK_BG, Ui.THINK_BORDER);
+            panel.setLayout(new BorderLayout());
+
+            JPanel header = new JPanel(new BorderLayout(8, 0));
+            header.setOpaque(false);
+            header.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createMatteBorder(0, 0, 1, 0, Ui.THINK_BORDER),
+                    BorderFactory.createEmptyBorder(3, 12, 3, 6)));
+            JLabel label = new JLabel("思考过程");
+            label.setFont(new Font("微软雅黑", Font.PLAIN, 11));
+            label.setForeground(Ui.TEXT_SECONDARY);
+            header.add(label, BorderLayout.WEST);
+            panel.add(header, BorderLayout.NORTH);
+
+            JTextPane pane = Ui.displayTextPane();
+            pane.setFont(base);
+            fillThink(pane.getStyledDocument(), think, base);
+            JScrollPane scroll = new JScrollPane(pane,
+                    JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                    JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+            scroll.setBorder(BorderFactory.createEmptyBorder());
+            scroll.setOpaque(false); // 滚动容器背景两处一起设，深色下边框内衬不露白（踩坑 #19）
+            scroll.getViewport().setOpaque(false);
+            scroll.setViewportBorder(BorderFactory.createEmptyBorder());
+            scroll.getVerticalScrollBar().setUnitIncrement(16);
+            Ui.styleScrollPane(scroll);
+            panel.add(scroll, BorderLayout.CENTER);
+            return panel;
+        }
+
+        @Override
+        public int measureAt(Font base, int width) {
+            JTextPane measurer = new JTextPane(); // 克隆测量（踩坑记录 #2）
+            measurer.setFont(base);
+            fillThink(measurer.getStyledDocument(), think, base);
+            View view = measurer.getUI().getRootView(measurer);
+            view.setSize(Math.max(40, width - THINK_PAD_LEFT - THINK_PAD_RIGHT), Integer.MAX_VALUE);
+            int textHeight = (int) Math.ceil(view.getPreferredSpan(View.VERTICAL))
+                    + THINK_PAD_TOP + THINK_PAD_BOTTOM;
+            return THINK_HEADER_HEIGHT + Math.min(textHeight, THINK_TEXT_HEIGHT_CAP) + 2;
+        }
+    }
+
+    private static final int RULE_HEIGHT = 13;
     /** 水平分隔线行 */
     private record RuleRow() implements Row {
         @Override
@@ -262,6 +319,8 @@ public final class MarkdownRenderer {
                 rows.add(new CodeRow(code));
             } else if (block instanceof Quote quote) {
                 rows.add(new QuoteRow(quote));
+            } else if (block instanceof ThinkBlock think) {
+                rows.add(new ThinkRow(think));
             } else if (block instanceof Rule) {
                 rows.add(new RuleRow());
             }
@@ -315,7 +374,7 @@ public final class MarkdownRenderer {
                 }
                 List<Span> spans = unit instanceof Paragraph p ? p.spans()
                         : unit instanceof Heading h ? h.spans() : ((ListItem) unit).spans();
-                insertSpans(doc, spans, font, Ui.TEXT, unit instanceof Heading);
+                insertSpans(doc, spans, font, Ui.TEXT, unit instanceof Heading, false);
             } catch (BadLocationException e) {
                 throw new IllegalStateException(e);
             }
@@ -335,7 +394,7 @@ public final class MarkdownRenderer {
             }
             int start = doc.getLength();
             try {
-                insertSpans(doc, quote.lines().get(i), base, Ui.QUOTE_TEXT, false);
+                insertSpans(doc, quote.lines().get(i), base, Ui.QUOTE_TEXT, false, false);
             } catch (BadLocationException e) {
                 throw new IllegalStateException(e);
             }
@@ -349,8 +408,35 @@ public final class MarkdownRenderer {
      * 写入一行 span。字体族/字号必须显式写进属性：缺失时 StyledDocument 走默认值
      * （Dialog 12）而不是组件字体，标题放大和行内等宽都会失效。
      */
+    private static void fillThink(StyledDocument doc, ThinkBlock think, Font base) {
+        Font italic = base.deriveFont(Font.ITALIC);
+        for (int i = 0; i < think.lines().size(); i++) {
+            if (i > 0) {
+                try {
+                    doc.insertString(doc.getLength(), "\n", null);
+                } catch (BadLocationException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+            int start = doc.getLength();
+            try {
+                insertSpans(doc, think.lines().get(i), italic, Ui.TEXT_SECONDARY, false, true);
+            } catch (BadLocationException e) {
+                throw new IllegalStateException(e);
+            }
+            SimpleAttributeSet para = new SimpleAttributeSet();
+            StyleConstants.setSpaceAbove(para, i == 0 ? 0 : 3);
+            doc.setParagraphAttributes(start, doc.getLength() - start, para, false);
+        }
+    }
+
+    /**
+     * 写入一行 span。字体族/字号必须显式写进属性：缺失时 StyledDocument 走默认值
+     * （Dialog 12）而不是组件字体，标题放大和行内等宽都会失效。italicBase 用于整行
+     * 基线斜体（思考块）——同族字号要显式、斜体也一样不能依赖组件字体。
+     */
     private static void insertSpans(StyledDocument doc, List<Span> spans, Font font, Color defaultFg,
-                                    boolean boldBase) throws BadLocationException {
+                                    boolean boldBase, boolean italicBase) throws BadLocationException {
         for (Span span : spans) {
             SimpleAttributeSet attrs = new SimpleAttributeSet();
             Font use = span.mono()
@@ -361,7 +447,7 @@ public final class MarkdownRenderer {
             if (boldBase || span.bold()) {
                 StyleConstants.setBold(attrs, true);
             }
-            if (span.italic()) {
+            if (italicBase || span.italic()) {
                 StyleConstants.setItalic(attrs, true);
             }
             if (span.strike()) {
@@ -384,10 +470,53 @@ public final class MarkdownRenderer {
     private static final Pattern LIST_ITEM = Pattern.compile("^(\\s*)([-*+]|\\d{1,9}[.)])[ \\t]+(\\S.*)$");
 
     /**
-     * 解析入口。逐行扫描：围栏代码 > 标题 > 分隔线 > 引用 > 列表 > 段落；
-     * 段落后面紧跟的 ---/=== 按 setext 规则提升为标题。
+     * 解析入口。先把 &lt;think&gt;…&lt;/think&gt; 思考段切出来（流式时闭标可能还没到，
+     * 吞到文本尾；游离的闭标剔除），两段之间的常规文本再走逐行解析。
      */
     public static List<Block> parse(String markdown) {
+        List<Block> blocks = new ArrayList<>();
+        if (markdown == null || markdown.isEmpty()) {
+            return blocks;
+        }
+        String text = markdown.replace("\r\n", "\n").replace('\r', '\n').replace("\t", "    ");
+        int idx = 0;
+        while (true) {
+            int open = text.indexOf("<think>", idx);
+            if (open < 0) {
+                blocks.addAll(parseBlocks(stripThinkClose(text.substring(idx))));
+                return blocks;
+            }
+            blocks.addAll(parseBlocks(stripThinkClose(text.substring(idx, open))));
+            int close = text.indexOf("</think>", open + 7);
+            if (close < 0) {
+                addThink(blocks, text.substring(open + 7));
+                return blocks;
+            }
+            addThink(blocks, text.substring(open + 7, close));
+            idx = close + 8;
+        }
+    }
+
+    private static String stripThinkClose(String text) {
+        return text.replace("</think>", "");
+    }
+
+    /** 思考段内容按行拆成 span，空段不产出块 */
+    private static void addThink(List<Block> blocks, String content) {
+        String trimmed = content.strip();
+        if (trimmed.isEmpty()) {
+            return;
+        }
+        List<List<Span>> lines = new ArrayList<>();
+        for (String line : trimmed.split("\n", -1)) {
+            lines.add(inline(line.strip()));
+        }
+        blocks.add(new ThinkBlock(lines));
+    }
+
+    /** 常规文本的逐行解析：围栏代码 > 标题 > 分隔线 > 引用 > 列表 > 段落；
+     * 段落后面紧跟的 ---/=== 按 setext 规则提升为标题。 */
+    private static List<Block> parseBlocks(String markdown) {
         List<Block> blocks = new ArrayList<>();
         if (markdown == null || markdown.isEmpty()) {
             return blocks;
