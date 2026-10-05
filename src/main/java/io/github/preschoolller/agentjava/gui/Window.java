@@ -1,5 +1,6 @@
 package io.github.preschoolller.agentjava.gui;
 
+import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.store.AppSettings;
 import io.github.preschoolller.agentjava.store.Conversation;
@@ -127,10 +128,16 @@ public class Window extends JFrame {
     /** 输入区右下角：本次对话的模型与思考强度（对话级选择，选项来自当前方案的模型列表） */
     private JComboBox<String> modelCombo;
     private JComboBox<String> effortCombo;
+    /** 输入区左下角：权限模式（计划=只读规划 / 编辑=允许改文件 / 完全访问=不受限），后端执行循环消费 */
+    private JComboBox<String> modeCombo;
     /** 思考强度下拉的选项顺序，与"关闭/低/中/高/超高"标签一一对应 */
     private static final ReasoningEffortEnum[] EFFORT_OPTIONS = {
             ReasoningEffortEnum.NO, ReasoningEffortEnum.LOW, ReasoningEffortEnum.MEDIUM,
             ReasoningEffortEnum.HIGH, ReasoningEffortEnum.ULTRA,
+    };
+    /** 权限模式下拉的选项顺序，与"计划模式/编辑模式/完全访问"标签一一对应 */
+    private static final AgentMode[] MODE_OPTIONS = {
+            AgentMode.PLAN, AgentMode.EDIT, AgentMode.FULL_ACCESS,
     };
 
     /** 实时数据小胶囊（底部居中） */
@@ -567,6 +574,7 @@ public class Window extends JFrame {
             return;
         }
         inputTextArea.setEnabled(!value);
+        modeCombo.setEnabled(!value);
         modelCombo.setEnabled(!value);
         effortCombo.setEnabled(!value);
         sendButton.setVisible(!value);
@@ -1216,11 +1224,24 @@ public class Window extends JFrame {
         effortCombo.setToolTipText("思考强度");
         Ui.styleComboBox(modelCombo);
         Ui.styleComboBox(effortCombo);
-        JPanel controlsRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
+
+        // 输入框左下角：权限模式（计划=只读 / 编辑=允许改文件 / 完全访问=不受限）
+        modeCombo = new JComboBox<>(new String[]{"计划模式", "编辑模式", "完全访问"});
+        modeCombo.setSelectedIndex(1);
+        modeCombo.setPreferredSize(new Dimension(132, 26));
+        modeCombo.setToolTipText("权限模式：计划=只读规划；编辑=允许改文件；完全访问=不受限");
+        Ui.styleComboBox(modeCombo);
+
+        // 一排两端：左下角权限模式，右下角模型 + 思考强度 + 发送/停止
+        JPanel controlsRow = new JPanel(new BorderLayout(6, 0));
         controlsRow.setOpaque(false);
-        controlsRow.add(modelCombo);
-        controlsRow.add(effortCombo);
-        controlsRow.add(buttonHolder);
+        controlsRow.add(modeCombo, BorderLayout.WEST);
+        JPanel rightControls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
+        rightControls.setOpaque(false);
+        rightControls.add(modelCombo);
+        rightControls.add(effortCombo);
+        rightControls.add(buttonHolder);
+        controlsRow.add(rightControls, BorderLayout.EAST);
 
         inputBox.setLayout(new BorderLayout(6, 0));
         inputBox.setBorder(BorderFactory.createEmptyBorder(10, 14, 8, 10));
@@ -1236,6 +1257,11 @@ public class Window extends JFrame {
     /** 输入区当前选中的思考强度 */
     public ReasoningEffortEnum getSelectedEffort() {
         return EFFORT_OPTIONS[effortCombo.getSelectedIndex()];
+    }
+
+    /** 输入区当前选中的权限模式（左下角） */
+    public AgentMode getSelectedMode() {
+        return MODE_OPTIONS[modeCombo.getSelectedIndex()];
     }
 
     private void initSidebar() {

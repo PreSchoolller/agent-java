@@ -264,6 +264,7 @@ public class Shot {
         edt(() -> {
             expect(WINDOW.getSelectedModel() != null, "输入区默认模型非空");
             expect(WINDOW.getSelectedEffort() != null, "输入区默认思考强度非空");
+            expect(WINDOW.getSelectedMode() != null, "输入区默认权限模式非空");
         });
         capture(args[0] + "-1-expanded.png");
 
