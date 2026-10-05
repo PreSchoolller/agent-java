@@ -4,6 +4,7 @@ package io.github.preschoolller.agentjava.store;
 public class Profile {
 
     private String backendUrl = "http://127.0.0.1:8080/chat";
+    private String key = "123456789";
     private String model = "default";
     private double temperature = 0.7;
     private int maxTokens = 2048;
@@ -25,6 +26,10 @@ public class Profile {
 
     public String getBackendUrl() {
         return backendUrl;
+    }
+
+    public String getKey() {
+        return key;
     }
 
     public void setBackendUrl(String backendUrl) {

@@ -1,5 +1,10 @@
 package io.github.preschoolller.agentjava;
 
+import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
+import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
+import io.github.preschoolller.agentjava.backend.provider.common.ProviderResponse;
+import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
+import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.gui.Window;
 
 import javax.swing.SwingUtilities;
@@ -8,6 +13,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Main {
     public static void main(String[] args) {
+        // Just wire it up and test
+        Provider openAiProvider = ProviderFactory.createOpenAiProvider();
         SwingUtilities.invokeLater(() -> {
             Window window = new Window("Agent");
             // 关闭行为由 Window 自己接管（EXIT_ON_CLOSE 或最小化到托盘，设置里配置）
@@ -19,7 +26,7 @@ public class Main {
             AtomicBoolean cancelled = new AtomicBoolean(false);
 
             window.onInputSubmitted((conversation, text) ->
-                    simulateReply(window, cancelled, sampleReply(text)));
+                    realReply(window, cancelled, text, openAiProvider));
 
             // 重新生成：回调触发时旧回复已从界面移除，先删仓库里的旧回答，再重新请求
             window.onRegenerate(conversation -> {
@@ -54,6 +61,38 @@ public class Main {
                     window.setGenerating(false);
                 });
             } catch (InterruptedException ignored) {
+            }
+        });
+    }
+
+    /** 模拟一次流式回复：起空卡片 → 逐段 appendChunk（Window 内部按 120ms 节流渲染）→ finish 落库 */
+    private static void realReply(Window window, AtomicBoolean cancelled, String question, Provider provider) {
+        window.setGenerating(true);
+        cancelled.set(false);
+        Window.AiStream stream = window.addAiMessage(""); // 这一步已在 EDT 上（输入/按钮回调都在 EDT）
+        CompletableFuture.runAsync(() -> {
+            try {
+                PromptParams promptParams = new PromptParams("minicpm5-2b", question, ReasoningEffortEnum.ON);
+                ProviderResponse providerResponse = provider.sendPrompt(promptParams);
+                String markdown = "<think>" + providerResponse.reasoningContent() + "</think>" + providerResponse.message();
+                for (String chunk : markdown.split("(?<=\n)")) {
+                    if (cancelled.get()) {
+                        break; // 用户点了停止：停止追加，已生成部分由下面的 finish 落库
+                    }
+                    Thread.sleep(60);
+                    SwingUtilities.invokeLater(() -> stream.appendChunk(chunk));
+                }
+                SwingUtilities.invokeLater(() -> {
+                    stream.finish();
+                    window.setGenerating(false);
+                });
+            } catch (InterruptedException ignored) {
+            } catch (RuntimeException runtimeException) {
+                SwingUtilities.invokeLater(() -> {
+                    stream.finish();
+                    window.addNotifyMessage("Error: " + runtimeException.getMessage());
+                    window.setGenerating(false);
+                });
             }
         });
     }

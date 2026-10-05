@@ -39,3 +39,5 @@ build/
 .DS_Store
 
 dependency-reduced-pom.xml
+### ZCode 本地工具配置（不入库） ###
+.zcodeignore

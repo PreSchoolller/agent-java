@@ -162,6 +162,10 @@ public final class AppSettings {
         return getActiveProfile().getBackendUrl();
     }
 
+    public String getKey() {
+        return getActiveProfile().getKey();
+    }
+
     public String getModel() {
         return getActiveProfile().getModel();
     }
@@ -228,6 +232,7 @@ public final class AppSettings {
             String prefix = "profile." + entry.getKey() + ".";
             Profile profile = entry.getValue();
             properties.setProperty(prefix + "backendUrl", profile.getBackendUrl());
+            properties.setProperty(prefix + "key", profile.getKey());
             properties.setProperty(prefix + "model", profile.getModel());
             properties.setProperty(prefix + "temperature", String.valueOf(profile.getTemperature()));
             properties.setProperty(prefix + "maxTokens", String.valueOf(profile.getMaxTokens()));

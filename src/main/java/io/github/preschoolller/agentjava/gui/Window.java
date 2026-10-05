@@ -517,6 +517,18 @@ public class Window extends JFrame {
         return new AiStreamImpl(store.getActive().getId(), message, card);
     }
 
+    /**
+     * 往当前对话追加一张 AI 输出卡片（Markdown 渲染），返回流式句柄。
+     * 一次性后端直接 addAiMessage(完整回复)；流式后端先 addAiMessage("")，再逐段
+     * appendChunk，结束时 finish()（会把最终文本写回会话仓库）。须在 EDT 上调用。
+     */
+    public void addNotifyMessage(String text) {
+        Message message = store.appendMessage(store.getActive().getId(), Conversation.ROLE_AI, text);
+        MessageCard card = insertMessageCard(message);
+        updateMaterialization(); // 流式卡片是最后一张，窗口化时保证它已物化
+        scrollToBottom();
+    }
+
     /** 设置输入框回车提交后的回调：输入会先自动加为用户卡片并清空输入框，然后 (会话, 文本) 交给回调 */
     public void onInputSubmitted(BiConsumer<Conversation, String> handler) {
         this.inputHandler = handler;
