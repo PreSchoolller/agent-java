@@ -4,7 +4,7 @@ import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderResponse;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
-import io.github.preschoolller.agentjava.gui.Window;
+import io.github.preschoolller.agentjava.frontend.gui.Window;
 
 import javax.swing.SwingUtilities;
 import java.util.concurrent.CompletableFuture;

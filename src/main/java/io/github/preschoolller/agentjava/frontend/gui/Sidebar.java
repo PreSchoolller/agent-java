@@ -1,8 +1,8 @@
-package io.github.preschoolller.agentjava.gui;
+package io.github.preschoolller.agentjava.frontend.gui;
 
-import io.github.preschoolller.agentjava.store.Conversation;
-import io.github.preschoolller.agentjava.store.ConversationStore;
-import io.github.preschoolller.agentjava.store.Message;
+import io.github.preschoolller.agentjava.frontend.store.Conversation;
+import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
+import io.github.preschoolller.agentjava.frontend.store.Message;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;

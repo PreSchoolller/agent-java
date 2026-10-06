@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.store;
+package io.github.preschoolller.agentjava.frontend.store;
 
 import java.io.IOException;
 import java.io.InputStream;

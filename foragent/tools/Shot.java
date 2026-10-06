@@ -1,14 +1,14 @@
 package foragent.tools;
 
-import io.github.preschoolller.agentjava.gui.SettingsDialog;
-import io.github.preschoolller.agentjava.gui.Sidebar;
-import io.github.preschoolller.agentjava.gui.Window;
-import io.github.preschoolller.agentjava.gui.MarkdownRenderer;
-import io.github.preschoolller.agentjava.store.AppSettings;
-import io.github.preschoolller.agentjava.store.Conversation;
-import io.github.preschoolller.agentjava.store.ConversationStore;
-import io.github.preschoolller.agentjava.store.JsonKit;
-import io.github.preschoolller.agentjava.store.Message;
+import io.github.preschoolller.agentjava.frontend.gui.SettingsDialog;
+import io.github.preschoolller.agentjava.frontend.gui.Sidebar;
+import io.github.preschoolller.agentjava.frontend.gui.Window;
+import io.github.preschoolller.agentjava.frontend.gui.MarkdownRenderer;
+import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.frontend.store.Conversation;
+import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
+import io.github.preschoolller.agentjava.frontend.store.JsonKit;
+import io.github.preschoolller.agentjava.frontend.store.Message;
 
 import javax.imageio.ImageIO;
 import javax.swing.JCheckBox;

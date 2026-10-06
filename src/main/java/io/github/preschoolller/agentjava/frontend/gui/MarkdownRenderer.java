@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.gui;
+package io.github.preschoolller.agentjava.frontend.gui;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;

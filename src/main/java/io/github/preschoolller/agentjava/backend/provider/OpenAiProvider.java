@@ -19,7 +19,7 @@ import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
-import io.github.preschoolller.agentjava.store.AppSettings;
+import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 
 import java.util.ArrayList;
 import java.util.HashMap;

@@ -1,7 +1,7 @@
-package io.github.preschoolller.agentjava.gui;
+package io.github.preschoolller.agentjava.frontend.gui;
 
-import io.github.preschoolller.agentjava.store.AppSettings;
-import io.github.preschoolller.agentjava.store.Profile;
+import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.frontend.store.Profile;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;

@@ -1,11 +1,11 @@
-package io.github.preschoolller.agentjava.gui;
+package io.github.preschoolller.agentjava.frontend.gui;
 
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
-import io.github.preschoolller.agentjava.store.AppSettings;
-import io.github.preschoolller.agentjava.store.Conversation;
-import io.github.preschoolller.agentjava.store.ConversationStore;
-import io.github.preschoolller.agentjava.store.Message;
+import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.frontend.store.Conversation;
+import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
+import io.github.preschoolller.agentjava.frontend.store.Message;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
