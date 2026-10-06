@@ -26,6 +26,7 @@ import javax.swing.Timer;
 import javax.swing.WindowConstants;
 import javax.swing.text.View;
 import java.awt.BorderLayout;
+import java.awt.AWTEvent;
 import java.awt.AWTException;
 import java.awt.Color;
 import java.awt.Component;
@@ -160,10 +161,8 @@ public class Window extends JFrame {
     private boolean pendingScrollToBottom;
     /** 生成中保存了设置：换主题/字号的重建挂起，setGenerating(false) 时补做（流式卡片引用不能断） */
     private boolean pendingRebuild;
-    /** 托盘图标（关闭最小化到托盘开启时注册，P2-3）；null=未注册 */
+    /** 托盘图标（系统支持即常驻注册，关闭行为实时读 AppSettings 的偏好）；null=未注册 */
     private TrayIcon trayIcon;
-    /** 关闭按钮行为：true=隐藏到托盘，false=退出 */
-    private boolean minimizeToTray;
     private BiConsumer<Conversation, String> inputHandler;
     private Runnable stopHandler;
     private Consumer<Conversation> regenerateHandler;
@@ -363,7 +362,7 @@ public class Window extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                if (minimizeToTray && trayIcon != null) {
+                if (AppSettings.get().isMinimizeToTray() && trayIcon != null) {
                     setVisible(false);
                 } else {
                     exitApp();
@@ -378,11 +377,10 @@ public class Window extends JFrame {
         System.exit(0);
     }
 
-    /** 开/关"关闭时最小化到托盘"：注册或注销托盘图标；系统不支持时静默退化为直接退出 */
+    /** 注册托盘图标（系统支持即注册，常驻；"关闭=隐藏还是退出"由 windowClosing 实时读设置决定） */
     public void setMinimizeToTray(boolean value) {
-        minimizeToTray = value;
         boolean supported = !GraphicsEnvironment.isHeadless() && SystemTray.isSupported();
-        if (value && supported && trayIcon == null) {
+        if (supported && trayIcon == null) {
             TrayIcon icon = createTrayIcon();
             try {
                 SystemTray.getSystemTray().add(icon);
@@ -390,7 +388,7 @@ public class Window extends JFrame {
             } catch (AWTException e) {
                 System.err.println("注册托盘图标失败: " + e.getMessage());
             }
-        } else if ((!value || !supported) && trayIcon != null) {
+        } else if ((!supported) && trayIcon != null) {
             SystemTray.getSystemTray().remove(trayIcon);
             trayIcon = null;
         }
@@ -414,11 +412,45 @@ public class Window extends JFrame {
         JPopupMenu popup = new JPopupMenu();
         popup.setLightWeightPopupEnabled(false); // 托盘区在其他窗口之上，必须用重量级弹层
         JMenuItem showItem = Ui.menuItem("显示主窗口");
-        showItem.addActionListener(e -> showFromTray());
+        showItem.addActionListener(e -> {
+            popup.setVisible(false);
+            showFromTray();
+        });
         JMenuItem exitItem = Ui.menuItem("退出");
         exitItem.addActionListener(e -> exitApp());
         popup.add(showItem);
         popup.add(exitItem);
+        // 鼠标离开弹层自动收起（原生托盘菜单的体感）。进出子组件（菜单项）也会触发父容器的
+        // exited（踩坑 #16 同源），不能直接藏——按指针屏幕坐标判断真离开了才收
+        popup.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseExited(MouseEvent e) {
+                PointerInfo info = MouseInfo.getPointerInfo();
+                if (info == null) {
+                    popup.setVisible(false);
+                    return;
+                }
+                Point loc = popup.getLocationOnScreen();
+                if (!new Rectangle(loc, popup.getSize()).contains(info.getLocation())) {
+                    popup.setVisible(false);
+                }
+            }
+        });
+        // 弹层用 setVisible(true) 显示、没有所属窗口，Swing 不会在点击别处时替我们收起——
+        // 全局 AWT 监听兜底：任何按下发生在弹层外（托盘图标除外，它由 maybeShow 负责开关）就收起
+        Toolkit.getDefaultToolkit().addAWTEventListener(event -> {
+            if (!(event instanceof MouseEvent me) || me.getID() != MouseEvent.MOUSE_PRESSED
+                    || !popup.isVisible()) {
+                return;
+            }
+            if (me.getSource() instanceof TrayIcon) {
+                return;
+            }
+            Point loc = popup.getLocationOnScreen();
+            if (!new Rectangle(loc, popup.getSize()).contains(me.getLocationOnScreen())) {
+                popup.setVisible(false);
+            }
+        }, AWTEvent.MOUSE_EVENT_MASK);
 
         TrayIcon icon = new TrayIcon(image, "Agent");
         icon.setImageAutoSize(true);
@@ -435,7 +467,12 @@ public class Window extends JFrame {
             }
 
             private void maybeShow(MouseEvent e) {
-                if (e.isPopupTrigger()) {
+                if (!e.isPopupTrigger()) {
+                    return;
+                }
+                if (popup.isVisible()) {
+                    popup.setVisible(false); // 右键再按一次 = 关闭
+                } else {
                     popup.setLocation(e.getX(), e.getY()); // TrayIcon 的鼠标事件坐标就是屏幕坐标
                     popup.setVisible(true);
                 }

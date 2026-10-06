@@ -497,9 +497,12 @@ public class Shot {
         // —— 托盘最小化（P2-3）：关按钮=隐藏到托盘而非退出；放最后，这一步会把窗口藏起来 ——
         if (!GraphicsEnvironment.isHeadless() && SystemTray.isSupported()) {
             SystemTray tray = SystemTray.getSystemTray();
+            boolean oldTrayPref = AppSettings.get().isMinimizeToTray();
             edt(() -> {
                 // 前面建窗时设过 DISPOSE_ON_CLOSE，这里换回窗口自管的 DO_NOTHING 再验关闭路径
                 WINDOW.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+                // 关闭行为现在实时读 AppSettings 的偏好（托盘图标常驻注册），先把偏好打开
+                AppSettings.get().setMinimizeToTray(true);
                 WINDOW.setMinimizeToTray(true);
             });
             expect(tray.getTrayIcons().length == 1, "托盘图标已注册");
@@ -509,10 +512,10 @@ public class Shot {
             expect(!WINDOW.isVisible(), "关闭按钮最小化到托盘（窗口隐藏）");
             expect(WINDOW.isDisplayable(), "窗口未销毁（托盘可恢复）");
             edt(() -> {
-                WINDOW.setMinimizeToTray(false);
+                AppSettings.get().setMinimizeToTray(oldTrayPref); // 恢复真实偏好
                 WINDOW.setVisible(true);
             });
-            expect(tray.getTrayIcons().length == 0, "托盘图标已注销");
+            expect(tray.getTrayIcons().length == 1, "托盘图标常驻（不随偏好注销）");
         }
         System.out.println("TRAY_OK");
 
