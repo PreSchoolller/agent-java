@@ -319,6 +319,8 @@ public class Window extends JFrame {
     public Window(String title, ConversationStore store) throws HeadlessException {
         super(title);
         this.store = store;
+        // 应用图标：与托盘同一份程序化绘制，多尺寸让系统挑最合适的缩放
+        setIconImages(java.util.List.of(Ui.createAppIcon(16), Ui.createAppIcon(32), Ui.createAppIcon(48)));
 
         // 先把保存的主题应用到 Ui 镜像再构建；首次构建与换主题重建走同一条 buildUi 路
         Ui.applyTheme(AppSettings.get().getUiTheme());
@@ -397,18 +399,7 @@ public class Window extends JFrame {
     /** 托盘图标：主题色圆角 + "A"，左键/双击恢复主窗口，右键弹跟随主题的 Swing 菜单。
      * 不用 AWT PopupMenu：原生菜单在部分环境中文渲染成方块，且无法跟随应用主题。 */
     private TrayIcon createTrayIcon() {
-        BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2 = image.createGraphics();
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g2.setColor(Ui.ACCENT);
-        g2.fillRoundRect(1, 1, 14, 14, 6, 6);
-        g2.setColor(Color.WHITE);
-        g2.setFont(new Font("微软雅黑", Font.BOLD, 10));
-        FontMetrics metrics = g2.getFontMetrics();
-        g2.drawString("A", (16 - metrics.stringWidth("A")) / 2 + 1,
-                (16 - metrics.getHeight()) / 2 + metrics.getAscent() - 1);
-        g2.dispose();
-
+        BufferedImage image = Ui.createAppIcon(16); // 与窗口图标同一份绘制
         JPopupMenu popup = new JPopupMenu();
         popup.setLightWeightPopupEnabled(false); // 托盘区在其他窗口之上，必须用重量级弹层
         JMenuItem showItem = Ui.menuItem("显示主窗口");

@@ -35,6 +35,7 @@ import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Insets;
@@ -164,6 +165,31 @@ final class Ui {
         // 提示气泡跟随主题；轻量弹层每次 show 时重建，下一次生效
         UIManager.put("ToolTip.background", MENU_BG);
         UIManager.put("ToolTip.foreground", TEXT);
+        // 禁用下拉的值区走 DefaultLookup 的 disabledBackground/Foreground（默认白底，
+        // 与组件背景无关——踩坑 #18 同源）。disabledBackground 给和值区一致的输入底色，
+        // 给别的色会透出一块更深的"垫子"（渲染器 label 是不透明的，按自身背景整块填）
+        UIManager.put("ComboBox.disabledBackground", INPUT_BG);
+        UIManager.put("ComboBox.disabledForeground", TEXT_SECONDARY);
+    }
+
+    /**
+     * 程序化应用图标：主题色圆角底 + 白色 "A"（与托盘图标同一份绘制，窗口图标/托盘共用）。
+     * 不引资源文件，几何参数按尺寸等比缩放。
+     */
+    static java.awt.image.BufferedImage createAppIcon(int size) {
+        java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(
+                size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = image.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.setColor(ACCENT);
+        g2.fillRoundRect(1, 1, size - 2, size - 2, size * 2 / 5, size * 2 / 5);
+        g2.setColor(Color.WHITE);
+        g2.setFont(new Font("微软雅黑", Font.BOLD, Math.max(8, size * 2 / 3)));
+        FontMetrics metrics = g2.getFontMetrics();
+        g2.drawString("A", (size - metrics.stringWidth("A")) / 2,
+                (size - metrics.getHeight()) / 2 + metrics.getAscent());
+        g2.dispose();
+        return image;
     }
 
     /** 颜色转 HTML 十六进制（侧栏高亮等 Swing HTML 场景用，见踩坑 #17） */
