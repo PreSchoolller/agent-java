@@ -1,9 +1,6 @@
 # Agent-Java
 
-用 Java 做一个桌面 AI Agent 应用。这是个练手项目：**前端交给 AI 生成，后端自己写**——
-把精力花在接入真实模型、agent 执行循环这些后端逻辑上，而不是 Swing 的坑里。
-
-> frontend: AI 生成（vibe coding），backend: 本人手写（AI 负责 review）。
+Java 桌面 AI Agent 应用。学习用途。未完成。前端 99% 由 AI 生成，不入坑 Swing，后端手写并借助 AI 审核。
 
 ## 运行
 
@@ -14,14 +11,21 @@ mvn compile
 mvn exec:java -Dexec.mainClass=io.github.preschoolller.agentjava.Main
 ```
 
-（或者 IDE 里直接跑 `Main`。）
+（或者 IDE 里直接跑 `Main`。）  
 
-数据都在 `~/.agentjava/`：`history.json` 会话历史、`settings.properties` 应用设置。
+本地数据地址
+```
+~/.agentjava/
+├── history.json         # 会话索引（只存元数据：标题/时间/置顶）
+├── settings.properties  # 应用设置
+└── sessions/            # 单会话消息文件，文件名即会话 id
+    └── ...
+```
 默认后端地址指向本地服务（如 LM Studio），在设置面板里改成你的即可。
 
 ## 功能
 
-- 多会话管理：侧栏搜索/重命名/置顶/删除，从任一 AI 回复分叉成新会话，本地 JSON 持久化，长会话视口窗口化（几百条不卡）
+- 多会话管理：侧栏搜索/重命名/置顶/删除，从任一 AI 回复分叉成新会话，本地 JSON 持久化，长会话视口窗口化
 - AI 回复 Markdown 渲染：标题/列表/引用/代码块（高亮底 + 复制）/任务勾选，`<think>` 推理块
   单独成块展示，流式逐段渲染（120ms 节流），可中断
 - 设置面板：多套「配置方案」（地址 / Key / 可选模型列表 / 温度 / 最大 Tokens / 系统提示词），
