@@ -10,7 +10,6 @@ import javax.swing.BoxLayout;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
-import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JMenuItem;
@@ -19,14 +18,16 @@ import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
+import javax.swing.SwingUtilities;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.FileDialog;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.Frame;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
 import java.awt.event.MouseAdapter;
@@ -339,15 +340,18 @@ public class Sidebar extends JPanel {
         popup.show(convList, e.getX(), e.getY());
     }
 
-    /** 把整段对话导出为 Markdown 文件 */
+    /** 把整段对话导出为 Markdown 文件（用 AWT FileDialog 弹原生系统保存框，替代 Swing 仿制的 JFileChooser） */
     private void exportMarkdown(Conversation conversation) {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setSelectedFile(new File(safeFileName(conversation.getTitle()) + ".md"));
-        chooser.setDialogTitle("导出对话为 Markdown");
-        if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
-            return;
+        Frame owner = (Frame) SwingUtilities.windowForComponent(this);
+        FileDialog dialog = new FileDialog(owner, "导出对话为 Markdown", FileDialog.SAVE);
+        dialog.setFile(safeFileName(conversation.getTitle()) + ".md");
+        dialog.setFilenameFilter((dir, name) -> name.toLowerCase().endsWith(".md"));
+        dialog.setVisible(true);
+        String fileName = dialog.getFile();
+        if (fileName == null) {
+            return; // 用户取消
         }
-        File file = chooser.getSelectedFile();
+        File file = new File(dialog.getDirectory(), fileName);
         StringBuilder md = new StringBuilder("# ").append(conversation.getTitle()).append("\n\n");
         for (Message message : conversation.getMessages()) {
             String speaker = Conversation.ROLE_USER.equals(message.role()) ? "我" : "AI";
