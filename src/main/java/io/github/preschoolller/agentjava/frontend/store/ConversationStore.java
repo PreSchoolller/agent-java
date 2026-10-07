@@ -8,6 +8,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
+
 /**
  * 会话仓库：内存里的会话列表 + 本地 JSON 持久化（默认 ~/.agentjava/history.json，构造时可换文件）。
  * 列表保持"最近使用在前"，侧栏渲染时置顶会话优先（置顶只改标记不动仓库顺序）。
@@ -19,6 +21,8 @@ public class ConversationStore {
     private static final int HISTORY_VERSION = 1;
 
     private final Path file;
+    // 单会话文件目录（文件名即会话 id）：save() 同步活跃会话，非活跃会话的变更由 saveAndSyncSession 补刷
+    private final Path newHistoryParent;
     private final List<Conversation> conversations = new ArrayList<>();
     private String activeId;
     private final List<Runnable> changeListeners = new ArrayList<>();
@@ -29,6 +33,7 @@ public class ConversationStore {
 
     public ConversationStore(Path file) {
         this.file = file;
+        this.newHistoryParent = file.getParent().toAbsolutePath().resolve("sessions");
         load();
     }
 
@@ -99,7 +104,7 @@ public class ConversationStore {
             return;
         }
         conversation.setTitle(title.strip());
-        save();
+        saveAndSyncSession(conversation);
         fireChanged();
     }
 
@@ -110,12 +115,13 @@ public class ConversationStore {
             return;
         }
         conversation.setPinned(pinned);
-        save();
+        saveAndSyncSession(conversation);
         fireChanged();
     }
 
     public void remove(String id) {
         conversations.removeIf(conversation -> conversation.getId().equals(id));
+        deleteSessionFile(id);
         if (id.equals(activeId)) {
             activeId = conversations.isEmpty() ? null : conversations.get(0).getId();
         }
@@ -143,7 +149,7 @@ public class ConversationStore {
         if (conversation == null || !conversation.removeMessage(target)) {
             return false;
         }
-        save();
+        saveAndSyncSession(conversation);
         fireChanged();
         return true;
     }
@@ -156,7 +162,7 @@ public class ConversationStore {
         }
         Message removed = conversation.removeLast();
         if (removed != null) {
-            save();
+            saveAndSyncSession(conversation);
             fireChanged();
         }
         return removed;
@@ -170,7 +176,7 @@ public class ConversationStore {
         }
         Message updated = conversation.updateMessageText(target, text);
         if (updated != null) {
-            save();
+            saveAndSyncSession(conversation); // 流式 finish 可能落在已切走的会话上，副本也要刷
             fireChanged();
         }
         return updated;
@@ -188,38 +194,89 @@ public class ConversationStore {
         return null;
     }
 
-    /** 空会话不落盘，避免历史里堆满"新对话" */
+    /** 空会话不落盘，避免历史里堆满"新对话"；活跃会话顺带同步到单会话文件 */
     public synchronized void save() {
+        String currentActiveId = activeId;
         List<Object> array = new ArrayList<>();
+        Map<String, Object> activeMap = null;
         for (Conversation conversation : conversations) {
             if (conversation.isEmpty()) {
                 continue;
             }
-            Map<String, Object> map = new LinkedHashMap<>();
-            map.put("id", conversation.getId());
-            map.put("title", conversation.getTitle());
-            map.put("createdAt", conversation.getCreatedAt());
-            map.put("updatedAt", conversation.getUpdatedAt());
-            map.put("pinned", conversation.isPinned());
-            List<Object> messages = new ArrayList<>();
-            for (Message message : conversation.getMessages()) {
-                Map<String, Object> item = new LinkedHashMap<>();
-                item.put("role", message.role());
-                item.put("text", message.text());
-                item.put("time", message.time());
-                messages.add(item);
+            Map<String, Object> map = serializeConversation(conversation);
+            if (currentActiveId.equals(conversation.getId())) {
+                activeMap = map;
             }
-            map.put("messages", messages);
             array.add(map);
         }
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("version", HISTORY_VERSION);
         root.put("conversations", array);
         try {
+            // 临时文件写完再原子改名：写一半崩溃时旧文件完好无损
+            Path tempPath = file.resolveSibling("temp-" + file.getFileName());
             Files.createDirectories(file.getParent());
-            Files.writeString(file, JsonKit.write(root));
+            Files.writeString(tempPath, JsonKit.write(root));
+            Files.move(tempPath, file, ATOMIC_MOVE);
         } catch (IOException e) {
             System.err.println("保存会话历史失败: " + e.getMessage());
+        }
+
+        if (activeMap != null) {
+            syncNewHistory(activeMap, currentActiveId); // 主文件先落、单会话副本后落
+        }
+    }
+
+    /** 全量落盘 + 单会话文件同步：活跃会话的副本 save() 内已写，这里补刷非活跃会话的变更 */
+    private void saveAndSyncSession(Conversation changed) {
+        save();
+        if (changed.getId().equals(activeId)) {
+            return;
+        }
+        if (changed.isEmpty()) {
+            deleteSessionFile(changed.getId()); // 消息删空的会话不落盘，单会话文件一并清掉
+            return;
+        }
+        syncNewHistory(serializeConversation(changed), changed.getId());
+    }
+
+    private Map<String, Object> serializeConversation(Conversation conversation) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", conversation.getId());
+        map.put("title", conversation.getTitle());
+        map.put("createdAt", conversation.getCreatedAt());
+        map.put("updatedAt", conversation.getUpdatedAt());
+        map.put("pinned", conversation.isPinned());
+        List<Object> messages = new ArrayList<>();
+        for (Message message : conversation.getMessages()) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("role", message.role());
+            item.put("text", message.text());
+            item.put("time", message.time());
+            messages.add(item);
+        }
+        map.put("messages", messages);
+        return map;
+    }
+
+    private void syncNewHistory(Map<String, Object> newMap, String conversationId) {
+        // 同步保存单个会话到 sessions/<会话id>，同样走临时文件 + 原子改名
+        try {
+            Path tempPath = newHistoryParent.resolve("temp-" + conversationId);
+            Path realPath = newHistoryParent.resolve(conversationId);
+            Files.createDirectories(newHistoryParent);
+            Files.writeString(tempPath, JsonKit.write(newMap));
+            Files.move(tempPath, realPath, ATOMIC_MOVE);
+        } catch (IOException e) {
+            System.err.println("保存单会话历史失败: " + conversationId + " " + e.getMessage());
+        }
+    }
+
+    private void deleteSessionFile(String id) {
+        try {
+            Files.deleteIfExists(newHistoryParent.resolve(id));
+        } catch (IOException e) {
+            System.err.println("删除单会话历史失败，id：" + id + " " + e.getMessage());
         }
     }
 
