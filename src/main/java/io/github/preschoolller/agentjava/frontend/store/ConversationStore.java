@@ -205,7 +205,7 @@ public class ConversationStore {
             }
             Map<String, Object> map = serializeConversation(conversation);
             if (currentActiveId.equals(conversation.getId())) {
-                messages = (List<Object>) map.get("messages");
+                messages = serializeMessages(conversation);
             }
             array.add(map);
         }
@@ -247,8 +247,6 @@ public class ConversationStore {
         map.put("createdAt", conversation.getCreatedAt());
         map.put("updatedAt", conversation.getUpdatedAt());
         map.put("pinned", conversation.isPinned());
-        List<Object> messages = serializeMessages(conversation);
-        map.put("messages", messages);
         return map;
     }
 
@@ -308,18 +306,16 @@ public class ConversationStore {
                         str(map.get("id")), str(map.get("title")),
                         num(map.get("createdAt")), num(map.get("updatedAt")));
                 conversation.setPinned(Boolean.TRUE.equals(map.get("pinned")));
-                // 最小改动，验证load功能
-                Object messages;
                 try {
-                    messages = JsonKit.parse(Files.readString(newHistoryParent.resolve(conversation.getId())));
+                    Object messages = JsonKit.parse(Files.readString(newHistoryParent.resolve(conversation.getId())));
+                    for (Object raw : (List<?>) messages) {
+                        Map<?, ?> messageMap = (Map<?, ?>) raw;
+                        conversation.getMessages().add(new Message(
+                                str(messageMap.get("role")), str(messageMap.get("text")), num(messageMap.get("time"))));
+                    }
                 } catch (IOException | RuntimeException exception) {
-                    System.out.println("读取单文件历史出错，退回主文件历史");
-                    messages = map.get("messages");
-                }
-                for (Object raw : (List<?>) messages) {
-                    Map<?, ?> messageMap = (Map<?, ?>) raw;
-                    conversation.getMessages().add(new Message(
-                            str(messageMap.get("role")), str(messageMap.get("text")), num(messageMap.get("time"))));
+                    System.err.println("读取单会话历史出错，该会话按无消息加载: " + conversation.getId()
+                            + " " + exception.getMessage());
                 }
                 conversations.add(conversation);
             }

@@ -42,7 +42,7 @@ import java.util.Properties;
  *   javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
  *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
- * 输出：持久化往返 + 删尾/单条删除/置顶落盘/旧格式迁移测试（PERSIST_OK）、
+ * 输出：持久化往返 + 删尾/单条删除/置顶落盘/主文件元数据化 + 旧格式元数据读取测试（PERSIST_OK）、
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
  * 流式落库断言（STREAM_OK）、长会话窗口化断言（WINDOWING_OK）+ 十五张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
@@ -123,6 +123,15 @@ public class Shot {
         expect(!second.removeMessage(second.getActive().getId(), middle), "旧引用重复删除应失败");
         ConversationStore third = new ConversationStore(dir.resolve("history.json"));
         expect(third.getActive().getMessages().size() == 1, "删除后落盘消息数");
+        // 主文件只存元数据：messages 字段已移除，消息全部由 sessions/<会话id> 单文件承载
+        Object mainRoot = JsonKit.parse(Files.readString(dir.resolve("history.json")));
+        for (Object item : (List<?>) ((Map<?, ?>) mainRoot).get("conversations")) {
+            expect(!((Map<?, ?>) item).containsKey("messages"), "主文件不含messages字段");
+        }
+        Object sessionRoot = JsonKit.parse(Files.readString(dir.resolve("sessions").resolve(conv.getId())));
+        expect(sessionRoot instanceof List<?> sessionList && sessionList.size() == 1
+                && "带\"引号\"、\n换行、\t制表和中文✓的消息".equals(
+                        ((Map<?, ?>) sessionList.get(0)).get("text")), "单会话文件承载消息");
         // 置顶落盘（v1 文件格式）：置顶→重读→取消置顶→重读
         first.setPinned(conv.getId(), true);
         ConversationStore fourth = new ConversationStore(dir.resolve("history.json"));
@@ -130,7 +139,8 @@ public class Shot {
         fourth.setPinned(conv.getId(), false);
         expect(!new ConversationStore(dir.resolve("history.json")).getConversations()
                 .get(0).isPinned(), "取消置顶落盘");
-        // v0 旧格式（顶层数组）迁移读取：字段照常还原，pinned 缺省 false
+        // v0 旧格式（顶层数组）读取：元数据照常还原，pinned 缺省 false；缺失单文件的会话
+        // 按无消息加载（局部 try 隔离），旧格式内嵌的 messages 不再迁移——单会话文件是消息唯一存储
         Path legacyFile = dir.resolve("legacy.json");
         Files.writeString(legacyFile, JsonKit.write(List.of(Map.of(
                 "id", "legacy-1", "title", "旧格式会话", "createdAt", 1L, "updatedAt", 2L,
@@ -138,7 +148,7 @@ public class Shot {
         ConversationStore legacyStore = new ConversationStore(legacyFile);
         expect(legacyStore.getConversations().size() == 1, "旧格式会话数");
         expect("旧格式会话".equals(legacyStore.getConversations().get(0).getTitle()), "旧格式标题");
-        expect("旧消息".equals(legacyStore.getConversations().get(0).getMessages().get(0).text()), "旧格式消息");
+        expect(legacyStore.getConversations().get(0).getMessages().isEmpty(), "旧格式消息不再迁移");
         expect(!legacyStore.getConversations().get(0).isPinned(), "旧格式默认不置顶");
         System.out.println("PERSIST_OK");
 
