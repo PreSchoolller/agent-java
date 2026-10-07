@@ -198,14 +198,14 @@ public class ConversationStore {
     public synchronized void save() {
         String currentActiveId = activeId;
         List<Object> array = new ArrayList<>();
-        Map<String, Object> activeMap = null;
+        List<Object> messages = null;
         for (Conversation conversation : conversations) {
             if (conversation.isEmpty()) {
                 continue;
             }
             Map<String, Object> map = serializeConversation(conversation);
             if (currentActiveId.equals(conversation.getId())) {
-                activeMap = map;
+                messages = (List<Object>) map.get("messages");
             }
             array.add(map);
         }
@@ -222,8 +222,8 @@ public class ConversationStore {
             System.err.println("保存会话历史失败: " + e.getMessage());
         }
 
-        if (activeMap != null) {
-            syncNewHistory(activeMap, currentActiveId); // 主文件先落、单会话副本后落
+        if (messages != null) {
+            syncNewHistory(messages, currentActiveId); // 主文件先落、单会话副本后落
         }
     }
 
@@ -237,7 +237,7 @@ public class ConversationStore {
             deleteSessionFile(changed.getId()); // 消息删空的会话不落盘，单会话文件一并清掉
             return;
         }
-        syncNewHistory(serializeConversation(changed), changed.getId());
+        syncNewHistory(serializeMessages(changed), changed.getId());
     }
 
     private Map<String, Object> serializeConversation(Conversation conversation) {
@@ -247,6 +247,12 @@ public class ConversationStore {
         map.put("createdAt", conversation.getCreatedAt());
         map.put("updatedAt", conversation.getUpdatedAt());
         map.put("pinned", conversation.isPinned());
+        List<Object> messages = serializeMessages(conversation);
+        map.put("messages", messages);
+        return map;
+    }
+
+    private static List<Object> serializeMessages(Conversation conversation) {
         List<Object> messages = new ArrayList<>();
         for (Message message : conversation.getMessages()) {
             Map<String, Object> item = new LinkedHashMap<>();
@@ -255,17 +261,16 @@ public class ConversationStore {
             item.put("time", message.time());
             messages.add(item);
         }
-        map.put("messages", messages);
-        return map;
+        return messages;
     }
 
-    private void syncNewHistory(Map<String, Object> newMap, String conversationId) {
+    private void syncNewHistory(List<Object> messages, String conversationId) {
         // 同步保存单个会话到 sessions/<会话id>，同样走临时文件 + 原子改名
         try {
             Path tempPath = newHistoryParent.resolve("temp-" + conversationId);
             Path realPath = newHistoryParent.resolve(conversationId);
             Files.createDirectories(newHistoryParent);
-            Files.writeString(tempPath, JsonKit.write(newMap));
+            Files.writeString(tempPath, JsonKit.write(messages));
             Files.move(tempPath, realPath, ATOMIC_MOVE);
         } catch (IOException e) {
             System.err.println("保存单会话历史失败: " + conversationId + " " + e.getMessage());
