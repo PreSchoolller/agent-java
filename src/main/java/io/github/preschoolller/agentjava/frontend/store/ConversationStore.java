@@ -308,7 +308,15 @@ public class ConversationStore {
                         str(map.get("id")), str(map.get("title")),
                         num(map.get("createdAt")), num(map.get("updatedAt")));
                 conversation.setPinned(Boolean.TRUE.equals(map.get("pinned")));
-                for (Object raw : (List<?>) map.get("messages")) {
+                // 最小改动，验证load功能
+                Object messages;
+                try {
+                    messages = JsonKit.parse(Files.readString(newHistoryParent.resolve(conversation.getId())));
+                } catch (IOException | RuntimeException exception) {
+                    System.out.println("读取单文件历史出错，退回主文件历史");
+                    messages = map.get("messages");
+                }
+                for (Object raw : (List<?>) messages) {
                     Map<?, ?> messageMap = (Map<?, ?>) raw;
                     conversation.getMessages().add(new Message(
                             str(messageMap.get("role")), str(messageMap.get("text")), num(messageMap.get("time"))));
