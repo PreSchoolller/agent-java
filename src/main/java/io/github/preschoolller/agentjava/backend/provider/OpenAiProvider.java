@@ -8,6 +8,7 @@ import com.openai.core.http.Headers;
 import com.openai.core.http.StreamResponse;
 import com.openai.models.Reasoning;
 import com.openai.models.ReasoningEffort;
+import com.openai.models.responses.EasyInputMessage;
 import com.openai.models.responses.Response;
 import com.openai.models.responses.ResponseCompletedEvent;
 import com.openai.models.responses.ResponseContentPartAddedEvent;
@@ -26,6 +27,7 @@ import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.ResponseStreamEventVisitorAdaptor;
+import io.github.preschoolller.agentjava.backend.provider.common.RoleEnum;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.jetbrains.annotations.NotNull;
@@ -37,7 +39,6 @@ import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static io.github.preschoolller.agentjava.backend.provider.common.Constants.POISON;
 
@@ -118,24 +119,35 @@ public class OpenAiProvider implements Provider {
     }
 
     private ResponseCreateParams buildParams(PromptParams promptParams) {
+
+        List<ResponseInputItem> allMessages = promptParams.getRoleMessages().stream().map(roleMessage -> {
+            if (RoleEnum.USER.equals(roleMessage.role())) {
+                ResponseInputText inputText = ResponseInputText
+                        .builder()
+                        .text(roleMessage.content())
+                        .build();
+                ResponseInputItem.Message message = ResponseInputItem.Message
+                        .builder()
+                        .role(ResponseInputItem.Message.Role.USER)
+                        .addContent(inputText)
+                        .build();
+                return ResponseInputItem.ofMessage(message);
+            } else {
+                EasyInputMessage easyInputMessage = EasyInputMessage
+                        .builder()
+                        .role(EasyInputMessage.Role.ASSISTANT)
+                        .content(roleMessage.content())
+                        .build();
+                return ResponseInputItem.ofEasyInputMessage(easyInputMessage);
+            }
+        }).toList();
         ArrayList<ResponseInputItem> inputList = new ArrayList<>();
         inputList.add(ResponseInputItem.ofMessage(systemPromptMessage));
-
-        ResponseInputText inputText = ResponseInputText
-                .builder()
-                .text(promptParams.message())
-                .build();
-        ResponseInputItem.Message message = ResponseInputItem.Message
-                .builder()
-                .role(ResponseInputItem.Message.Role.USER)
-                .addContent(inputText)
-                .build();
-        ResponseInputItem responseInputItem = ResponseInputItem.ofMessage(message);
-        inputList.add(responseInputItem);
+        inputList.addAll(allMessages);
         ResponseCreateParams responseCreateParams = ResponseCreateParams
                 .builder()
-                .model(promptParams.model())
-                .reasoning(Reasoning.builder().effort(RE_MAP.get(promptParams.re())).build())
+                .model(promptParams.getModel())
+                .reasoning(Reasoning.builder().effort(RE_MAP.get(promptParams.getRe())).build())
                 .inputOfResponse(inputList)
                 .build();
         return responseCreateParams;
@@ -207,7 +219,6 @@ public class OpenAiProvider implements Provider {
                 try {
                     blockingQueue.put(delta);
                 } catch (InterruptedException e) {
-                    System.out.println("put error");
                     throw new RuntimeException(e);
                 }
             }
@@ -244,18 +255,5 @@ public class OpenAiProvider implements Provider {
                 return null;
             }
         };
-    }
-
-    private static Stream<String> getDeltaTextStream(StreamResponse<ResponseStreamEvent> response) {
-        Stream<String> deltaTextStream = response.stream()
-                .filter(responseStreamEvent -> responseStreamEvent.isReasoningTextDelta() || responseStreamEvent.isOutputTextDelta())
-                .map(responseStreamEvent -> {
-                    if (responseStreamEvent.isReasoningTextDelta()) {
-                        return responseStreamEvent.asReasoningTextDelta().delta();
-                    } else {
-                        return responseStreamEvent.asOutputTextDelta().delta();
-                    }
-                });
-        return deltaTextStream;
     }
 }
