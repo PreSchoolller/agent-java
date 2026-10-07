@@ -11,7 +11,6 @@ import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
-import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -20,7 +19,6 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
 import java.awt.BorderLayout;
-import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -270,97 +268,14 @@ public class SettingsDialog extends JDialog {
      * 主题化输入对话框（替代 JOptionPane 的 Metal 系统样式）：校验函数返回错误文案内联
      * 红字显示、不关窗，通过才收值；回车=确定，取消/关闭返回 null。
      */
+    /** 主题化输入对话框（实现在 Ui.promptDialog，与侧栏重命名共用同一份） */
     private String promptText(String title, String message, String initial, Function<String, String> validator) {
-        String[] result = {null};
-        JTextField field = new JTextField(initial);
-        Ui.styleInput(field);
-        field.setPreferredSize(new Dimension(280, 30));
-        JLabel messageLabel = new JLabel(message);
-        messageLabel.setFont(Ui.FONT_PLAIN);
-        messageLabel.setForeground(Ui.TEXT);
-        JLabel hint = new JLabel(" ");
-        hint.setFont(Ui.FONT_PLAIN);
-        hint.setForeground(Ui.DANGER);
-        JButton okButton = Ui.primaryButton("确定");
-        JButton cancelButton = Ui.button("取消");
-        okButton.setPreferredSize(new Dimension(70, 28));
-        cancelButton.setPreferredSize(new Dimension(70, 28));
-
-        JDialog dialog = new JDialog(this, title, true);
-        okButton.addActionListener(e -> {
-            String value = field.getText().strip();
-            String error = validator.apply(value);
-            if (error == null) {
-                result[0] = value;
-                dialog.dispose();
-            } else {
-                hint.setText(error);
-                dialog.pack();
-                field.requestFocusInWindow();
-            }
-        });
-        cancelButton.addActionListener(e -> dialog.dispose());
-        field.addActionListener(e -> okButton.doClick()); // 回车=确定
-
-        JPanel fields = new JPanel(new BorderLayout(0, 6));
-        fields.setOpaque(false);
-        fields.add(messageLabel, BorderLayout.NORTH);
-        fields.add(field, BorderLayout.CENTER);
-        fields.add(hint, BorderLayout.SOUTH);
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        buttons.setOpaque(false);
-        buttons.add(cancelButton);
-        buttons.add(okButton);
-        JPanel content = new JPanel(new BorderLayout(0, 12));
-        content.setBackground(Ui.BG);
-        content.setBorder(BorderFactory.createEmptyBorder(16, 16, 12, 16));
-        content.add(fields, BorderLayout.CENTER);
-        content.add(buttons, BorderLayout.SOUTH);
-
-        dialog.setContentPane(content);
-        dialog.getRootPane().setDefaultButton(okButton);
-        dialog.pack();
-        dialog.setMinimumSize(new Dimension(360, dialog.getPreferredSize().height));
-        dialog.setLocationRelativeTo(this);
-        dialog.setVisible(true);
-        return result[0];
+        return Ui.promptDialog(this, title, message, initial, validator);
     }
 
-    /** 主题化确认对话框：确定返回 true */
+    /** 主题化确认对话框：确定返回 true（实现在 Ui.confirmDialog，侧栏删除确认共用同一份） */
     private boolean confirmBox(String title, String message) {
-        boolean[] result = {false};
-        JLabel messageLabel = new JLabel(message);
-        messageLabel.setFont(Ui.FONT_PLAIN);
-        messageLabel.setForeground(Ui.TEXT);
-        JButton okButton = Ui.primaryButton("确定");
-        JButton cancelButton = Ui.button("取消");
-        okButton.setPreferredSize(new Dimension(70, 28));
-        cancelButton.setPreferredSize(new Dimension(70, 28));
-
-        JDialog dialog = new JDialog(this, title, true);
-        okButton.addActionListener(e -> {
-            result[0] = true;
-            dialog.dispose();
-        });
-        cancelButton.addActionListener(e -> dialog.dispose());
-
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        buttons.setOpaque(false);
-        buttons.add(cancelButton);
-        buttons.add(okButton);
-        JPanel content = new JPanel(new BorderLayout(0, 12));
-        content.setBackground(Ui.BG);
-        content.setBorder(BorderFactory.createEmptyBorder(16, 16, 12, 16));
-        content.add(messageLabel, BorderLayout.CENTER);
-        content.add(buttons, BorderLayout.SOUTH);
-
-        dialog.setContentPane(content);
-        dialog.getRootPane().setDefaultButton(okButton);
-        dialog.pack();
-        dialog.setMinimumSize(new Dimension(320, dialog.getPreferredSize().height));
-        dialog.setLocationRelativeTo(this);
-        dialog.setVisible(true);
-        return result[0];
+        return Ui.confirmDialog(this, title, message, "确定", false);
     }
 
     /** 方案行：下拉 + 新建/重命名/删除 */

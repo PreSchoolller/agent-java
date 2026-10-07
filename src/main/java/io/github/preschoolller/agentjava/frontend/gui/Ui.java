@@ -7,6 +7,7 @@ import javax.swing.Icon;
 import javax.swing.JCheckBox;
 import javax.swing.JComponent;
 import javax.swing.JComboBox;
+import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JMenuItem;
@@ -19,6 +20,7 @@ import javax.swing.JSplitPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.JTextPane;
+import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import javax.swing.plaf.basic.BasicComboBoxUI;
 import javax.swing.plaf.basic.BasicMenuItemUI;
@@ -30,10 +32,13 @@ import javax.swing.plaf.basic.ComboPopup;
 import javax.swing.border.Border;
 import javax.swing.text.JTextComponent;
 import java.awt.BasicStroke;
+import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
+import java.awt.Dialog;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
@@ -41,10 +46,12 @@ import java.awt.Graphics2D;
 import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.Window;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.function.Function;
 
 /**
  * 统一配色与小组件：圆角面板 + 扁平按钮。
@@ -113,6 +120,8 @@ final class Ui {
     static Color MARK_BG;
     /** 危险操作文字（删除类菜单项） */
     static Color DANGER;
+    /** 危险按钮悬停/按下底色 */
+    static Color DANGER_PRESSED;
     /** 滚动条拇指配色：常态浅灰，悬停/拖动加深 */
     static Color SCROLL_THUMB;
     static Color SCROLL_THUMB_ACTIVE;
@@ -160,6 +169,7 @@ final class Ui {
         DIVIDER_LINE = theme.dividerLine;
         MARK_BG = theme.markBg;
         DANGER = theme.danger;
+        DANGER_PRESSED = theme.dangerPressed;
         SCROLL_THUMB = theme.scrollThumb;
         SCROLL_THUMB_ACTIVE = theme.scrollThumbActive;
         // 提示气泡跟随主题；轻量弹层每次 show 时重建，下一次生效
@@ -674,6 +684,179 @@ final class Ui {
         button.setFont(FONT_BOLD);
         button.setForeground(Color.WHITE);
         return button;
+    }
+
+    /** 危险按钮：警示红圆角底 + 白字（删除等不可逆操作的确认键） */
+    static JButton dangerButton(String text) {
+        JButton button = new JButton(text) {
+            private boolean hover;
+            {
+                setContentAreaFilled(false);
+                setFocusPainted(false);
+                setBorder(BorderFactory.createEmptyBorder());
+                setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                addMouseListener(new MouseAdapter() {
+                    @Override
+                    public void mouseEntered(MouseEvent e) {
+                        hover = true;
+                        repaint();
+                    }
+
+                    @Override
+                    public void mouseExited(MouseEvent e) {
+                        hover = false;
+                        repaint();
+                    }
+                });
+            }
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(hover ? DANGER_PRESSED : DANGER);
+                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        button.setFont(FONT_BOLD);
+        button.setForeground(Color.WHITE);
+        return button;
+    }
+
+    /**
+     * 主题化确认对话框（替代 JOptionPane.showConfirmDialog 的 Metal 系统样式）：
+     * 确定返回 true；danger=true 时确定键用警示红（删除等不可逆操作）。
+     * 必须在 EDT 上调用。
+     */
+    static boolean confirmDialog(Component parent, String title, String message, String okText, boolean danger) {
+        boolean[] result = {false};
+        JLabel messageLabel = new JLabel(message);
+        messageLabel.setFont(FONT_PLAIN);
+        messageLabel.setForeground(TEXT);
+        JButton okButton = danger ? dangerButton(okText) : primaryButton(okText);
+        JButton cancelButton = button("取消");
+        okButton.setPreferredSize(new Dimension(70, 28));
+        cancelButton.setPreferredSize(new Dimension(70, 28));
+
+        Window owner = parent instanceof Window window ? window : SwingUtilities.getWindowAncestor(parent);
+        JDialog dialog = new JDialog(owner, title, Dialog.ModalityType.APPLICATION_MODAL);
+        okButton.addActionListener(e -> {
+            result[0] = true;
+            dialog.dispose();
+        });
+        cancelButton.addActionListener(e -> dialog.dispose());
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        buttons.add(cancelButton);
+        buttons.add(okButton);
+        JPanel content = new JPanel(new BorderLayout(0, 12));
+        content.setBackground(BG);
+        content.setBorder(BorderFactory.createEmptyBorder(16, 16, 12, 16));
+        content.add(messageLabel, BorderLayout.CENTER);
+        content.add(buttons, BorderLayout.SOUTH);
+
+        dialog.setContentPane(content);
+        dialog.getRootPane().setDefaultButton(okButton);
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(320, dialog.getPreferredSize().height));
+        dialog.setLocationRelativeTo(owner);
+        dialog.setVisible(true);
+        return result[0];
+    }
+
+    /**
+     * 主题化输入对话框（替代 JOptionPane.showInputDialog 的 Metal 系统样式）：
+     * 校验函数返回错误文案内联显示，回车=确定；取消返回 null。validator 可为 null。
+     * 必须在 EDT 上调用。
+     */
+    static String promptDialog(Component parent, String title, String message, String initial,
+            Function<String, String> validator) {
+        String[] result = {null};
+        JTextField field = new JTextField(initial);
+        styleInput(field);
+        field.setPreferredSize(new Dimension(280, 30));
+        JLabel messageLabel = new JLabel(message);
+        messageLabel.setFont(FONT_PLAIN);
+        messageLabel.setForeground(TEXT);
+        JLabel hint = new JLabel(" ");
+        hint.setFont(FONT_PLAIN);
+        hint.setForeground(DANGER);
+        JButton okButton = primaryButton("确定");
+        JButton cancelButton = button("取消");
+        okButton.setPreferredSize(new Dimension(70, 28));
+        cancelButton.setPreferredSize(new Dimension(70, 28));
+
+        Window owner = parent instanceof Window window ? window : SwingUtilities.getWindowAncestor(parent);
+        JDialog dialog = new JDialog(owner, title, Dialog.ModalityType.APPLICATION_MODAL);
+        okButton.addActionListener(e -> {
+            String value = field.getText().strip();
+            String error = validator == null ? null : validator.apply(value);
+            if (error == null) {
+                result[0] = value;
+                dialog.dispose();
+            } else {
+                hint.setText(error);
+                dialog.pack();
+                field.requestFocusInWindow();
+            }
+        });
+        cancelButton.addActionListener(e -> dialog.dispose());
+        field.addActionListener(e -> okButton.doClick()); // 回车=确定
+
+        JPanel fields = new JPanel(new BorderLayout(0, 6));
+        fields.setOpaque(false);
+        fields.add(messageLabel, BorderLayout.NORTH);
+        fields.add(field, BorderLayout.CENTER);
+        fields.add(hint, BorderLayout.SOUTH);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        buttons.add(cancelButton);
+        buttons.add(okButton);
+        JPanel content = new JPanel(new BorderLayout(0, 12));
+        content.setBackground(BG);
+        content.setBorder(BorderFactory.createEmptyBorder(16, 16, 12, 16));
+        content.add(fields, BorderLayout.CENTER);
+        content.add(buttons, BorderLayout.SOUTH);
+
+        dialog.setContentPane(content);
+        dialog.getRootPane().setDefaultButton(okButton);
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(360, dialog.getPreferredSize().height));
+        dialog.setLocationRelativeTo(owner);
+        dialog.setVisible(true);
+        return result[0];
+    }
+
+    /** 主题化消息对话框（替代 JOptionPane.showMessageDialog）：单个确定键 */
+    static void messageDialog(Component parent, String title, String message) {
+        JLabel messageLabel = new JLabel(message);
+        messageLabel.setFont(FONT_PLAIN);
+        messageLabel.setForeground(TEXT);
+        JButton okButton = primaryButton("确定");
+        okButton.setPreferredSize(new Dimension(70, 28));
+
+        Window owner = parent instanceof Window window ? window : SwingUtilities.getWindowAncestor(parent);
+        JDialog dialog = new JDialog(owner, title, Dialog.ModalityType.APPLICATION_MODAL);
+        okButton.addActionListener(e -> dialog.dispose());
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        buttons.add(okButton);
+        JPanel content = new JPanel(new BorderLayout(0, 12));
+        content.setBackground(BG);
+        content.setBorder(BorderFactory.createEmptyBorder(16, 16, 12, 16));
+        content.add(messageLabel, BorderLayout.CENTER);
+        content.add(buttons, BorderLayout.SOUTH);
+
+        dialog.setContentPane(content);
+        dialog.getRootPane().setDefaultButton(okButton);
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(320, dialog.getPreferredSize().height));
+        dialog.setLocationRelativeTo(owner);
+        dialog.setVisible(true);
     }
 
     /** 圆角面板实现：字段开放，方便外部（如输入框聚焦）改描边色后 repaint */

@@ -66,6 +66,8 @@ final class Theme {
     Color markBg;
     /** 危险操作文字（删除类菜单项） */
     Color danger;
+    /** 危险按钮悬停/按下底色 */
+    Color dangerPressed;
     /** 滚动条拇指常态/悬停 */
     Color scrollThumb;
     Color scrollThumbActive;
@@ -105,6 +107,7 @@ final class Theme {
         t.dividerLine = new Color(0xE0E3E8);
         t.markBg = new Color(0xFFE28A);
         t.danger = new Color(0xD9453B);
+        t.dangerPressed = new Color(0xC23B32);
         t.scrollThumb = new Color(0xC7CCD5);
         t.scrollThumbActive = new Color(0xA6AEBB);
         return t;
@@ -142,6 +145,7 @@ final class Theme {
         t.dividerLine = new Color(0x31363E);
         t.markBg = new Color(0x8A6A1F);
         t.danger = new Color(0xF0564A);
+        t.dangerPressed = new Color(0xD94A40);
         t.scrollThumb = new Color(0x4A515C);
         t.scrollThumbActive = new Color(0x5D6673);
         return t;

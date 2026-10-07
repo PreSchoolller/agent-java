@@ -14,7 +14,6 @@ import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JMenuItem;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
@@ -317,7 +316,7 @@ public class Sidebar extends JPanel {
         pinItem.addActionListener(ev -> store.setPinned(conversation.getId(), !conversation.isPinned()));
         JMenuItem renameItem = Ui.menuItem("重命名");
         renameItem.addActionListener(ev -> {
-            String title = JOptionPane.showInputDialog(this, "新的对话标题", conversation.getTitle());
+            String title = Ui.promptDialog(this, "重命名", "新的对话标题", conversation.getTitle(), null);
             if (title != null && !title.isBlank()) {
                 store.rename(conversation.getId(), title);
             }
@@ -326,10 +325,8 @@ public class Sidebar extends JPanel {
         exportItem.addActionListener(ev -> exportMarkdown(conversation));
         JMenuItem deleteItem = Ui.menuItem("删除", true);
         deleteItem.addActionListener(ev -> {
-            int choice = JOptionPane.showConfirmDialog(this,
-                    "删除对话「" + conversation.getTitle() + "」？",
-                    "删除", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
-            if (choice == JOptionPane.OK_OPTION) {
+            if (Ui.confirmDialog(this, "删除",
+                    "删除对话「" + conversation.getTitle() + "」？", "删除", true)) {
                 store.remove(conversation.getId());
             }
         });
@@ -360,8 +357,7 @@ public class Sidebar extends JPanel {
         try {
             Files.writeString(file.toPath(), md.toString());
         } catch (IOException ex) {
-            JOptionPane.showMessageDialog(this, "导出失败: " + ex.getMessage(),
-                    "导出", JOptionPane.ERROR_MESSAGE);
+            Ui.messageDialog(this, "导出", "导出失败: " + ex.getMessage());
         }
     }
 
