@@ -97,6 +97,11 @@ final class Ui {
     /** 行内代码前景/底色 */
     static Color INLINE_CODE_FG;
     static Color INLINE_CODE_BG;
+    /** diff 块增/删行前景与行底色 */
+    static Color DIFF_ADD_FG;
+    static Color DIFF_ADD_BG;
+    static Color DIFF_DEL_FG;
+    static Color DIFF_DEL_BG;
     /** 引用块底色、左竖条与文字色 */
     static Color QUOTE_BG;
     static Color QUOTE_BAR;
@@ -155,6 +160,10 @@ final class Ui {
         CODE_BORDER = theme.codeBorder;
         INLINE_CODE_FG = theme.inlineCodeFg;
         INLINE_CODE_BG = theme.inlineCodeBg;
+        DIFF_ADD_FG = theme.diffAddFg;
+        DIFF_ADD_BG = theme.diffAddBg;
+        DIFF_DEL_FG = theme.diffDelFg;
+        DIFF_DEL_BG = theme.diffDelBg;
         QUOTE_BG = theme.quoteBg;
         QUOTE_BAR = theme.quoteBar;
         QUOTE_TEXT = theme.quoteText;

@@ -82,6 +82,19 @@ public class Shot {
 
             ---
 
+            文件修改 diff：
+
+            ```diff
+            --- a/src/Demo.java
+            +++ b/src/Demo.java
+            @@ -12,7 +12,9 @@
+             public class Demo {
+            -    private static final int SIZE = 10;
+            +    private static final int SIZE = 20;
+                 private Buffer buffer;
+             }
+            ```
+
             结尾段落。
             """;
 
@@ -228,9 +241,16 @@ public class Shot {
         // —— Markdown 解析断言（块类型与数量） ——
         List<MarkdownRenderer.Block> md = MarkdownRenderer.parse(SAMPLE_MD);
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Heading).count() == 1, "标题数");
-        expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Paragraph).count() == 2, "段落数");
+        expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Paragraph).count() == 3, "段落数");
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.ListItem).count() == 6, "列表项数");
-        expect(md.stream().filter(b -> b instanceof MarkdownRenderer.CodeBlock).count() == 1, "代码块数");
+        expect(md.stream().filter(b -> b instanceof MarkdownRenderer.CodeBlock).count() == 2, "代码块数");
+        // diff 块：内容原样进 CodeBlock（渲染层按行着色），增行删行都在
+        MarkdownRenderer.CodeBlock diffBlock = md.stream()
+                .filter(b -> b instanceof MarkdownRenderer.CodeBlock c && "diff".equals(c.language()))
+                .map(b -> (MarkdownRenderer.CodeBlock) b).findFirst().orElseThrow();
+        expect(diffBlock.code().lines().count() == 8, "diff 行数");
+        expect(diffBlock.code().contains("-    private static final int SIZE = 10;")
+                && diffBlock.code().contains("+    private static final int SIZE = 20;"), "diff 增删行原样");
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Quote).count() == 1, "引用数");
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Rule).count() == 1, "分隔线数");
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.ThinkBlock).count() == 1, "思考块数");

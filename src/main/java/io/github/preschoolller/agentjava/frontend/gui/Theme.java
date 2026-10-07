@@ -43,6 +43,11 @@ final class Theme {
     /** 行内代码前景/底色 */
     Color inlineCodeFg;
     Color inlineCodeBg;
+    /** diff 块（```diff 围栏）增/删行的前景与行底色 */
+    Color diffAddFg;
+    Color diffAddBg;
+    Color diffDelFg;
+    Color diffDelBg;
     /** 引用块底色、左竖条与文字色 */
     Color quoteBg;
     Color quoteBar;
@@ -93,6 +98,10 @@ final class Theme {
         t.codeBorder = new Color(0xE2E6EB);
         t.inlineCodeFg = new Color(0x9C3B57);
         t.inlineCodeBg = new Color(0xF0F1F5);
+        t.diffAddFg = new Color(0x1A7F37);
+        t.diffAddBg = new Color(0xE6FFEC);
+        t.diffDelFg = new Color(0xCF222E);
+        t.diffDelBg = new Color(0xFFECEC);
         t.quoteBg = new Color(0xF7F8FA);
         t.quoteBar = new Color(0xD3D9E0);
         t.quoteText = new Color(0x5B6470);
@@ -131,6 +140,10 @@ final class Theme {
         t.codeBorder = new Color(0x343A42);
         t.inlineCodeFg = new Color(0xFF8B9E);
         t.inlineCodeBg = new Color(0x343A42);
+        t.diffAddFg = new Color(0x3FB950);
+        t.diffAddBg = new Color(0x1F3A2A);
+        t.diffDelFg = new Color(0xF85149);
+        t.diffDelBg = new Color(0x3D2226);
         t.quoteBg = new Color(0x22262D);
         t.quoteBar = new Color(0x4E5766);
         t.quoteText = new Color(0xA9B2BF);

@@ -31,8 +31,8 @@ import java.util.regex.Pattern;
 /**
  * 零依赖的轻量 Markdown 渲染器（组件计划 P0-1 选了"自写解析"路线：项目不引第三方包）。
  * 支持标题、段落、行内样式（加粗/斜体/行内代码/删除线/链接/裸 URL）、围栏代码块（带语言标注
- * 与复制按钮）、有序/无序列表（含嵌套与任务勾选）、引用块、思考块（&lt;think&gt;…&lt;/think&gt;，
- * 流式未闭合时吞到文本尾）、水平分隔线；表格暂不渲染（按普通
+ * 与复制按钮）、```diff 块（增/删行按行着色）、有序/无序列表（含嵌套与任务勾选）、引用块、
+ * 思考块（&lt;think&gt;…&lt;/think&gt;，流式未闭合时吞到文本尾）、水平分隔线；表格暂不渲染（按普通
  * 段落原样显示），链接只做样式不做点击跳转，这两项留待后续按需补。
  *
  * 结构分三层：
@@ -121,32 +121,7 @@ public final class MarkdownRenderer {
         public Component component(Font base) {
             JPanel panel = new Ui.RoundPanel(10, Ui.CODE_BG, Ui.CODE_BORDER);
             panel.setLayout(new BorderLayout());
-
-            JPanel header = new JPanel(new BorderLayout(8, 0));
-            header.setOpaque(false);
-            header.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createMatteBorder(0, 0, 1, 0, Ui.CODE_BORDER),
-                    BorderFactory.createEmptyBorder(3, 10, 3, 6)));
-            if (!code.language().isEmpty()) {
-                JLabel lang = new JLabel(code.language());
-                lang.setFont(new Font("Monospaced", Font.PLAIN, 11));
-                lang.setForeground(Ui.TEXT_SECONDARY);
-                header.add(lang, BorderLayout.WEST);
-            }
-            JButton copy = Ui.button("复制");
-            copy.setFont(new Font("微软雅黑", Font.PLAIN, 11));
-            copy.setPreferredSize(new Dimension(48, 20));
-            copy.setToolTipText("复制代码");
-            copy.addActionListener(e -> {
-                Toolkit.getDefaultToolkit().getSystemClipboard()
-                        .setContents(new StringSelection(code.code()), null);
-                copy.setText("已复制");
-                Timer reset = new Timer(1200, ev -> copy.setText("复制"));
-                reset.setRepeats(false);
-                reset.start();
-            });
-            header.add(copy, BorderLayout.EAST);
-            panel.add(header, BorderLayout.NORTH);
+            panel.add(codeHeader(code.language(), code.code()), BorderLayout.NORTH);
 
             JTextArea area = codeArea(base);
             JScrollPane scroll = new JScrollPane(area,
@@ -180,6 +155,117 @@ public final class MarkdownRenderer {
             area.setForeground(Ui.TEXT);
             area.setBorder(BorderFactory.createEmptyBorder(6, 12, 10, 12));
             return area;
+        }
+    }
+
+    /** 代码块/diff 块共用头部：左侧语言标注 + 右侧复制按钮（复制原始文本，点击后短暂提示"已复制"） */
+    private static JPanel codeHeader(String language, String raw) {
+        JPanel header = new JPanel(new BorderLayout(8, 0));
+        header.setOpaque(false);
+        header.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, Ui.CODE_BORDER),
+                BorderFactory.createEmptyBorder(3, 10, 3, 6)));
+        if (!language.isEmpty()) {
+            JLabel lang = new JLabel(language);
+            lang.setFont(new Font("Monospaced", Font.PLAIN, 11));
+            lang.setForeground(Ui.TEXT_SECONDARY);
+            header.add(lang, BorderLayout.WEST);
+        }
+        JButton copy = Ui.button("复制");
+        copy.setFont(new Font("微软雅黑", Font.PLAIN, 11));
+        copy.setPreferredSize(new Dimension(48, 20));
+        copy.setToolTipText("复制代码");
+        copy.addActionListener(e -> {
+            Toolkit.getDefaultToolkit().getSystemClipboard()
+                    .setContents(new StringSelection(raw), null);
+            copy.setText("已复制");
+            Timer reset = new Timer(1200, ev -> copy.setText("复制"));
+            reset.setRepeats(false);
+            reset.start();
+        });
+        header.add(copy, BorderLayout.EAST);
+        return header;
+    }
+
+    /** diff 块行（```diff 围栏）：增/删行按行着色，@@ 行头与 ---/+++ 文件行走次要色；
+     *  结构复用代码块的圆角底、头部与超长内部滚动 */
+    private record DiffRow(CodeBlock code) implements Row {
+        @Override
+        public Component component(Font base) {
+            JPanel panel = new Ui.RoundPanel(10, Ui.CODE_BG, Ui.CODE_BORDER);
+            panel.setLayout(new BorderLayout());
+            panel.add(codeHeader(code.language(), code.code()), BorderLayout.NORTH);
+
+            JTextPane pane = Ui.displayTextPane();
+            pane.setFont(base);
+            fillDiff(pane.getStyledDocument(), code.code(), base);
+            pane.setBorder(BorderFactory.createEmptyBorder(6, 12, 10, 12));
+            JScrollPane scroll = new JScrollPane(pane,
+                    JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                    JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+            scroll.setBorder(BorderFactory.createEmptyBorder());
+            scroll.setOpaque(false); // 滚动容器背景两处一起设，深色下边框内衬不露白（踩坑 #19）
+            scroll.getViewport().setOpaque(false);
+            scroll.setViewportBorder(BorderFactory.createEmptyBorder());
+            scroll.getVerticalScrollBar().setUnitIncrement(16);
+            Ui.styleScrollPane(scroll);
+            panel.add(scroll, BorderLayout.CENTER);
+            return panel;
+        }
+
+        @Override
+        public int measureAt(Font base, int width) {
+            JTextPane measurer = new JTextPane(); // 克隆测量（踩坑记录 #2）
+            measurer.setFont(base);
+            fillDiff(measurer.getStyledDocument(), code.code(), base);
+            View view = measurer.getUI().getRootView(measurer);
+            view.setSize(Math.max(40, width - 24), Integer.MAX_VALUE);
+            int textHeight = (int) Math.ceil(view.getPreferredSpan(View.VERTICAL)) + 16; // 补上 area 的上下内边距
+            return CODE_HEADER_HEIGHT + Math.min(textHeight, CODE_TEXT_HEIGHT_CAP) + 2;
+        }
+    }
+
+    /**
+     * diff 内容逐行写入（显示与测量共用，保证高度一致）：+/− 行着增删色并衬行底，
+     * @@ 行头走主题色、---/+++ 文件行走次要色，其余上下文行用正文色。
+     */
+    private static void fillDiff(StyledDocument doc, String code, Font base) throws IllegalStateException {
+        Font mono = new Font("Monospaced", Font.PLAIN, Math.max(11, base.getSize() - 1));
+        String[] lines = code.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            if (i > 0) {
+                try {
+                    doc.insertString(doc.getLength(), "\n", null);
+                } catch (BadLocationException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+            String line = lines[i];
+            Color fg = Ui.TEXT;
+            Color bg = null;
+            if (line.startsWith("+++") || line.startsWith("---")) {
+                fg = Ui.TEXT_SECONDARY;
+            } else if (line.startsWith("@@")) {
+                fg = Ui.ACCENT;
+            } else if (line.startsWith("+")) {
+                fg = Ui.DIFF_ADD_FG;
+                bg = Ui.DIFF_ADD_BG;
+            } else if (line.startsWith("-")) {
+                fg = Ui.DIFF_DEL_FG;
+                bg = Ui.DIFF_DEL_BG;
+            }
+            SimpleAttributeSet attrs = new SimpleAttributeSet();
+            StyleConstants.setFontFamily(attrs, mono.getFamily());
+            StyleConstants.setFontSize(attrs, mono.getSize());
+            StyleConstants.setForeground(attrs, fg);
+            if (bg != null) {
+                StyleConstants.setBackground(attrs, bg);
+            }
+            try {
+                doc.insertString(doc.getLength(), line, attrs);
+            } catch (BadLocationException e) {
+                throw new IllegalStateException(e);
+            }
         }
     }
 
@@ -316,7 +402,8 @@ public final class MarkdownRenderer {
                 flow = new ArrayList<>();
             }
             if (block instanceof CodeBlock code) {
-                rows.add(new CodeRow(code));
+                // ```diff 围栏走按行着色的 DiffRow，其余语言仍是普通代码块
+                rows.add("diff".equals(code.language()) ? new DiffRow(code) : new CodeRow(code));
             } else if (block instanceof Quote quote) {
                 rows.add(new QuoteRow(quote));
             } else if (block instanceof ThinkBlock think) {
