@@ -9,6 +9,7 @@ public class Conversation {
 
     public static final String ROLE_USER = "user";
     public static final String ROLE_AI = "ai";
+    public static final String ROLE_TOOL = "tool";
 
     private final String id;
     private String title;
@@ -78,6 +79,14 @@ public class Conversation {
         return message;
     }
 
+    /** 追加一条工具调用消息（"运行中"占位，结果由 updateToolResult 回填），返回消息记录 */
+    public Message addToolCall(String toolName, String toolArgs) {
+        Message message = new Message(ROLE_TOOL, "", System.currentTimeMillis(), toolName, toolArgs, "running");
+        messages.add(message);
+        touch();
+        return message;
+    }
+
     /** 删除最后一条消息（重新生成流程：后端先删旧回答再重新请求），返回被删消息；空会话返回 null */
     public Message removeLast() {
         if (messages.isEmpty()) {
@@ -93,7 +102,7 @@ public class Conversation {
     public static Conversation fork(List<Message> prefix, String sourceTitle) {
         Conversation forked = create();
         for (Message message : prefix) {
-            forked.messages.add(new Message(message.role(), message.text(), message.time()));
+            forked.messages.add(message.copy());
         }
         forked.title = abbreviate(sourceTitle, 20) + "（分叉）";
         return forked;
@@ -103,7 +112,21 @@ public class Conversation {
     public Message updateMessageText(Message target, String text) {
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) == target) {
-                Message updated = new Message(target.role(), text, target.time());
+                Message updated = target.withText(text);
+                messages.set(i, updated);
+                touch();
+                return updated;
+            }
+        }
+        return null;
+    }
+
+    /** 工具调用完成：回填结果文本并写终态（按消息对象同一性查找），返回替换后的新记录；没找到返回 null */
+    public Message updateToolResult(Message target, String result, boolean success) {
+        for (int i = 0; i < messages.size(); i++) {
+            if (messages.get(i) == target) {
+                Message updated = new Message(target.role(), result, target.time(),
+                        target.toolName(), target.toolArgs(), success ? "ok" : "error");
                 messages.set(i, updated);
                 touch();
                 return updated;

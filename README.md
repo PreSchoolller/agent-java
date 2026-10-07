@@ -26,6 +26,7 @@ mvn exec:java -Dexec.mainClass=io.github.preschoolller.agentjava.Main
 ## 功能
 
 - 多会话管理：侧栏搜索/重命名/置顶/删除，从任一 AI 回复分叉成新会话，本地 JSON 持久化，长会话视口窗口化
+- agent 工具调用卡片：运行中/完成/失败三态，结果等宽展示、超长内部滚动（后端 agent 循环接入用）
 - AI 回复 Markdown 渲染：标题/列表/引用/代码块（高亮底 + 复制）/diff 增删行着色/任务勾选，`<think>` 推理块
   单独成块展示，流式逐段渲染（120ms 节流），可中断
 - 设置面板：多套「配置方案」（地址 / Key / 可选模型列表 / 温度 / 最大 Tokens / 系统提示词），

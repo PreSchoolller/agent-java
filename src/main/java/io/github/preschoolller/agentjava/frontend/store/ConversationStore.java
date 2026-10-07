@@ -198,6 +198,34 @@ public class ConversationStore {
         return updated;
     }
 
+    /** 追加一条工具调用消息（"运行中"占位，agent 循环每次调工具时先调这个），返回消息记录 */
+    public Message appendToolCall(String id, String toolName, String argsSummary) {
+        Conversation conversation = findById(id);
+        if (conversation == null) {
+            throw new IllegalArgumentException("会话不存在: " + id);
+        }
+        Message message = conversation.addToolCall(toolName, argsSummary);
+        conversations.remove(conversation);
+        conversations.add(0, conversation);
+        save();
+        fireChanged();
+        return message;
+    }
+
+    /** 工具执行完成后的落库：回填结果并写终态（按消息对象同一性查找），返回替换后的新记录 */
+    public Message completeToolCall(String id, Message target, String result, boolean success) {
+        Conversation conversation = findById(id);
+        if (conversation == null) {
+            return null;
+        }
+        Message updated = conversation.updateToolResult(target, result, success);
+        if (updated != null) {
+            saveAndSyncSession(conversation);
+            fireChanged();
+        }
+        return updated;
+    }
+
     private Conversation findById(String id) {
         if (id == null) {
             return null;
@@ -271,6 +299,11 @@ public class ConversationStore {
             item.put("role", message.role());
             item.put("text", message.text());
             item.put("time", message.time());
+            if (message.isToolCall()) {
+                item.put("name", message.toolName());
+                item.put("args", message.toolArgs());
+                item.put("status", message.toolStatus());
+            }
             messages.add(item);
         }
         return messages;
@@ -324,8 +357,13 @@ public class ConversationStore {
                     Object messages = JsonKit.parse(Files.readString(newHistoryParent.resolve(conversation.getId())));
                     for (Object raw : (List<?>) messages) {
                         Map<?, ?> messageMap = (Map<?, ?>) raw;
-                        conversation.getMessages().add(new Message(
-                                str(messageMap.get("role")), str(messageMap.get("text")), num(messageMap.get("time"))));
+                        Message message = messageMap.containsKey("name")
+                                ? new Message(str(messageMap.get("role")), str(messageMap.get("text")),
+                                        num(messageMap.get("time")), str(messageMap.get("name")),
+                                        str(messageMap.get("args")), str(messageMap.get("status")))
+                                : new Message(str(messageMap.get("role")), str(messageMap.get("text")),
+                                        num(messageMap.get("time")));
+                        conversation.getMessages().add(message);
                     }
                 } catch (IOException | RuntimeException exception) {
                     System.err.println("读取单会话历史出错，该会话按无消息加载: " + conversation.getId()

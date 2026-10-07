@@ -19,6 +19,7 @@ import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JScrollBar;
 import javax.swing.JSplitPane;
+import javax.swing.JTextArea;
 import javax.swing.JTextPane;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingConstants;
@@ -107,6 +108,9 @@ public class Window extends JFrame {
     private static final int USER_CARD_MAX_WIDTH = 560;
     /** 卡片左右内边距加描边，用于把瀑布流宽度换算成文本区宽度 */
     private static final int CARD_SIDE_INSETS = 34;
+    /** 工具调用卡的头部高度（角色标+工具名+参数+状态一行）与结果区高度帽（超出内部滚动） */
+    private static final int TOOL_HEADER_HEIGHT = 26;
+    private static final int TOOL_RESULT_CAP = 320;
     private static final DateTimeFormatter TIME_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
@@ -183,11 +187,13 @@ public class Window extends JFrame {
     /**
      * 一张消息卡片。message 持仓库消息的同一性引用（流式落库会替换成新记录，finish 时同步），
      * 分叉按它定位。卡片骨架（圆角底）常驻瀑布流，内容组件（正文/尾行/悬停菜单）只有卡片位于
-     * 视口附近才物化（P2-2 窗口化）；AI 卡片的 markdown 面板恒非空，承载解析与测量数据。
+     * 视口附近才物化（P2-2 窗口化）；AI 卡片的 markdown 面板恒非空，承载解析与测量数据；
+     * 工具调用卡（role=tool）的 markdown 为 null，内容按工具卡建。
      */
     private static final class MessageCard {
         final JPanel card;
         final boolean user;
+        final boolean tool;
         final MarkdownPane markdown;
         Message message;
         /** 物化后才存在的组件；drainCard 时置 null */
@@ -196,9 +202,10 @@ public class Window extends JFrame {
         JButton menu;
         boolean materialized;
 
-        MessageCard(JPanel card, boolean user, Message message, MarkdownPane markdown) {
+        MessageCard(JPanel card, boolean user, boolean tool, Message message, MarkdownPane markdown) {
             this.card = card;
             this.user = user;
+            this.tool = tool;
             this.message = message;
             this.markdown = markdown;
         }
@@ -563,6 +570,63 @@ public class Window extends JFrame {
     }
 
     /**
+     * agent 工具调用的展示句柄：addToolCall 返回。所有方法须在 EDT 上调用。
+     */
+    public interface ToolCallHandle {
+        /** 回填执行结果并结束：卡片翻转到完成/失败态，结果落库 */
+        void finish(String result, boolean success);
+    }
+
+    /**
+     * 往当前对话追加一张工具调用卡片（"运行中"状态）。agent 循环里每次调工具：
+     * 先 addToolCall(工具名, 参数摘要) 出卡，执行完 handle.finish(结果文本, 是否成功) 回填。
+     * 与 AiStream 对称：后端在 EDT 上调用。须在 EDT 上调用。
+     */
+    public ToolCallHandle addToolCall(String toolName, String argsSummary) {
+        Message message = store.appendToolCall(store.getActive().getId(), toolName, argsSummary);
+        MessageCard card = insertMessageCard(message);
+        updateMaterialization(); // 新卡片在末尾，窗口化时补物化
+        scrollToBottom();
+        return new ToolCallImpl(store.getActive().getId(), message, card);
+    }
+
+    /** 工具调用卡的落库与刷新：结果写回仓库（换了新记录对象），卡片在显示中就原地重建成终态 */
+    private final class ToolCallImpl implements ToolCallHandle {
+        private final String conversationId;
+        private final Message message;
+        private final MessageCard card;
+        private boolean finished;
+
+        private ToolCallImpl(String conversationId, Message message, MessageCard card) {
+            this.conversationId = conversationId;
+            this.message = message;
+            this.card = card;
+        }
+
+        @Override
+        public void finish(String result, boolean success) {
+            if (finished) {
+                return;
+            }
+            finished = true;
+            Message updated = store.completeToolCall(conversationId, message, result, success);
+            if (updated == null) {
+                return;
+            }
+            card.message = updated;
+            if (conversationId.equals(displayedConvId) && messageCards.contains(card)) {
+                boolean follow = isNearBottom();
+                drainCard(card);
+                fillCard(card);
+                fitCardHeight(messageCards.indexOf(card));
+                if (follow) {
+                    scrollToBottom();
+                }
+            }
+        }
+    }
+
+    /**
      * 往当前对话追加一张 AI 输出卡片（Markdown 渲染），返回流式句柄。
      * 一次性后端直接 addAiMessage(完整回复)；流式后端先 addAiMessage("")，再逐段
      * appendChunk，结束时 finish()（会把最终文本写回会话仓库）。须在 EDT 上调用。
@@ -658,8 +722,9 @@ public class Window extends JFrame {
      * 内容组件不在这里建（窗口化），由 updateMaterialization 决定哪些卡片 fillCard */
     private MessageCard insertMessageCard(Message message) {
         boolean user = Conversation.ROLE_USER.equals(message.role());
+        boolean tool = message.isToolCall();
         MarkdownPane markdown = null;
-        if (!user) {
+        if (!user && !tool) {
             markdown = new MarkdownPane(AppSettings.get().getContentFontSize());
             markdown.setContent(message.text()); // 只解析+测量，行组件等物化时才建
         }
@@ -672,7 +737,7 @@ public class Window extends JFrame {
 
         waterfallPanel.add(card, rowConstraints(user));
         waterfallRowCount++;
-        MessageCard messageCard = new MessageCard(card, user, message, markdown);
+        MessageCard messageCard = new MessageCard(card, user, tool, message, markdown);
         attachHoverMenu(messageCard);
         messageCards.add(messageCard);
         emptyHint.setVisible(false);
@@ -691,9 +756,12 @@ public class Window extends JFrame {
         JPanel card = messageCard.card;
         Message message = messageCard.message;
         boolean user = messageCard.user;
+        boolean tool = messageCard.tool;
 
         JComponent content;
-        if (user) {
+        if (tool) {
+            content = buildToolContent(message);
+        } else if (user) {
             JTextPane textPane = Ui.displayTextPane();
             textPane.setFont(new Font("微软雅黑", Font.PLAIN, AppSettings.get().getContentFontSize()));
             // 没设过前景色的文本组件默认黑字，深色主题下必须显式给（见踩坑 #19）
@@ -706,7 +774,7 @@ public class Window extends JFrame {
         }
         messageCard.content = content;
 
-        if (!user) {
+        if (!user && !tool) {
             JLabel roleLabel = new JLabel("AI");
             roleLabel.setFont(new Font("微软雅黑", Font.BOLD, 13));
             roleLabel.setForeground(Ui.ACCENT);
@@ -720,7 +788,7 @@ public class Window extends JFrame {
         timeLabel.setFont(new Font("微软雅黑", Font.PLAIN, 12));
         timeLabel.setForeground(Ui.TEXT_SECONDARY);
         timeRow.add(timeLabel);
-        if (!user) {
+        if (!user && !tool) {
             MarkdownPane pane = messageCard.markdown;
             timeRow.add(createCopyButton(pane::getText));
             messageCard.regenerate = createRegenerateButton();
@@ -728,7 +796,7 @@ public class Window extends JFrame {
         }
         card.add(content, BorderLayout.CENTER);
         card.add(timeRow, BorderLayout.SOUTH);
-        if (!user) {
+        if (!user && !tool) {
             // 分叉挂在 AI 回复上（对齐 Codex/ZCode：以某次对话状态为锚点继续），用户卡片不挂菜单
             JButton menuButton = createMenuButton();
             // 浮层用 BorderLayout 不认识的约束名：布局器不会给它分配区域（无约束的 add 会被当成
@@ -742,6 +810,58 @@ public class Window extends JFrame {
         }
         card.doLayout(); // 浮层坐标在布局器里，先摆好再画
         refreshRegenerateButtons();
+    }
+
+    /** 工具调用卡内容：一行头部（"工具"角色标 + 工具名 + 参数摘要（超长截断）+ 状态徽标）+ 结果文本区（等宽，超长内部滚动） */
+    private JComponent buildToolContent(Message message) {
+        JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        header.setOpaque(false);
+        JLabel roleLabel = new JLabel("工具");
+        roleLabel.setFont(new Font("微软雅黑", Font.BOLD, 13));
+        roleLabel.setForeground(Ui.ACCENT);
+        header.add(roleLabel);
+        JLabel nameLabel = new JLabel(message.toolName());
+        nameLabel.setFont(new Font("Monospaced", Font.BOLD, 13));
+        nameLabel.setForeground(Ui.TEXT);
+        header.add(nameLabel);
+        String args = message.toolArgs() == null ? "" : message.toolArgs();
+        if (!args.isEmpty()) {
+            args = args.length() > 80 ? args.substring(0, 80) + "…" : args;
+            args = args.replace("\n", " ");
+            JLabel argsLabel = new JLabel(args);
+            argsLabel.setFont(new Font("Monospaced", Font.PLAIN, 12));
+            argsLabel.setForeground(Ui.TEXT_SECONDARY);
+            header.add(argsLabel);
+        }
+        boolean running = "running".equals(message.toolStatus());
+        boolean error = "error".equals(message.toolStatus());
+        JLabel statusLabel = new JLabel(running ? "运行中…" : error ? "失败" : "完成");
+        statusLabel.setFont(new Font("微软雅黑", Font.PLAIN, 11));
+        statusLabel.setForeground(running ? Ui.ACCENT : error ? Ui.DANGER : Ui.TEXT_SECONDARY);
+        header.add(statusLabel);
+
+        JTextArea result = Ui.displayTextArea();
+        result.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        // 没设过前景色的文本组件默认黑字，深色主题下必须显式给（见踩坑 #19）
+        result.setForeground(Ui.TEXT);
+        result.setText(message.text());
+        result.setLineWrap(true);
+        result.setWrapStyleWord(false);
+        JScrollPane scroll = new JScrollPane(result,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.setOpaque(false); // 滚动容器背景两处一起设，深色下边框内衬不露白（踩坑 #19）
+        scroll.getViewport().setOpaque(false);
+        scroll.setViewportBorder(BorderFactory.createEmptyBorder());
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        Ui.styleScrollPane(scroll);
+
+        JPanel content = new JPanel(new BorderLayout(0, 6));
+        content.setOpaque(false);
+        content.add(header, BorderLayout.NORTH);
+        content.add(scroll, BorderLayout.CENTER);
+        return content;
     }
 
     /** 摘掉卡片内容（滚出视口）：组件全部丢弃，解析与测量数据留在 MarkdownPane 里 */
@@ -1007,9 +1127,16 @@ public class Window extends JFrame {
         int userWidth = Math.max(USER_CARD_MIN_WIDTH,
                 Math.min(USER_CARD_MAX_WIDTH, panelWidth * 2 / 3));
         int textWidth = messageCard.user ? userWidth - CARD_SIDE_INSETS : panelWidth - CARD_SIDE_INSETS;
-        int textHeight = messageCard.user
-                ? measureTextHeight(messageCard.message.text(), AppSettings.get().getContentFontSize(), textWidth)
-                : messageCard.markdown.preferredHeightAt(textWidth);
+        int textHeight;
+        if (messageCard.tool) {
+            // 工具卡：头部定高 + 结果文本（超长封顶，卡片内滚动）
+            textHeight = Math.min(measureTextHeight(messageCard.message.text(),
+                    AppSettings.get().getContentFontSize(), textWidth) + TOOL_HEADER_HEIGHT, TOOL_RESULT_CAP);
+        } else {
+            textHeight = messageCard.user
+                    ? measureTextHeight(messageCard.message.text(), AppSettings.get().getContentFontSize(), textWidth)
+                    : messageCard.markdown.preferredHeightAt(textWidth);
+        }
         int minHeight = messageCard.user ? CARD_MIN_HEIGHT_USER : CARD_MIN_HEIGHT_AI;
         int frameHeight = messageCard.user ? CARD_FRAME_HEIGHT_USER : CARD_FRAME_HEIGHT_AI;
         int height = Math.max(minHeight, textHeight + frameHeight);

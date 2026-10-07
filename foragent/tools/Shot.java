@@ -44,9 +44,10 @@ import java.util.Properties;
  * </pre>
  * 输出：持久化往返 + 删尾/分叉/置顶落盘/主文件元数据化 + 旧格式元数据读取测试（PERSIST_OK）、
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
- * 流式落库断言（STREAM_OK）、长会话窗口化断言（WINDOWING_OK）+ 十五张截图
+ * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、长会话窗口化断言（WINDOWING_OK）+
+ * 十六张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
- * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置}.png（SHOT_OK）。
+ * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片}.png（SHOT_OK）。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
@@ -380,6 +381,37 @@ public class Shot {
         expect(streamed.equals(store.getActive()
                 .getMessages().get(store.getActive().getMessages().size() - 1).text()), "流式落库");
         System.out.println("STREAM_OK");
+
+        // —— agent 工具调用卡（前端先行，后端契约：addToolCall(名, 参数摘要) → finish(结果, 是否成功)） ——
+        // 截图 16：一张运行中 + 一张完成；跑完断言落库与落盘往返
+        Conversation[] toolConvHolder = new Conversation[1];
+        edt(() -> toolConvHolder[0] = store.newConversation());
+        Conversation cTool = toolConvHolder[0];
+        Thread.sleep(1000); // fireChanged 已把主区切到新会话
+        Window.ToolCallHandle[] toolHolder = new Window.ToolCallHandle[1];
+        edt(() -> toolHolder[0] = WINDOW.addToolCall("read_file", "{\"path\": \"src/Demo.java\"}"));
+        Thread.sleep(500);
+        capture(args[0] + "-16-tool-card.png"); // "运行中…"状态
+        edt(() -> toolHolder[0].finish("public class Demo {\n    private Buffer buffer;\n}", true));
+        edt(() -> {
+            Window.ToolCallHandle handle = WINDOW.addToolCall("read_file", "{\"path\": \"missing.txt\"}");
+            handle.finish("错误: 文件不存在", false);
+        });
+        Thread.sleep(400);
+        expect(store.getActive().getMessages().size() == 2, "工具卡消息数");
+        expect(store.getActive().getMessages().get(0).isToolCall()
+                && "ok".equals(store.getActive().getMessages().get(0).toolStatus())
+                && store.getActive().getMessages().get(0).text().contains("Demo"), "工具结果落库");
+        expect("error".equals(store.getActive().getMessages().get(1).toolStatus()), "失败态落库");
+        ConversationStore toolReload = new ConversationStore(dir.resolve("shot.json"));
+        Message reloadedTool = toolReload.getActive().getMessages().get(0);
+        expect(reloadedTool.isToolCall() && "read_file".equals(reloadedTool.toolName())
+                && "{\"path\": \"src/Demo.java\"}".equals(reloadedTool.toolArgs())
+                && "ok".equals(reloadedTool.toolStatus()), "工具消息落盘往返");
+        System.out.println("TOOLCARD_OK");
+        // 工具卡演示把主区切到了新会话，切回 Markdown 样例会话供后面 8 号悬停菜单截图用
+        edt(() -> WINDOW.getStore().switchTo(c3.getId()));
+        Thread.sleep(800);
 
         // —— 截图 8：悬停"…"菜单（合成 mouseEntered 让浮层显示，不做真实鼠标移动） ——
         edt(() -> {
