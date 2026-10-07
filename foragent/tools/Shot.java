@@ -150,6 +150,15 @@ public class Shot {
         expect("旧格式会话".equals(legacyStore.getConversations().get(0).getTitle()), "旧格式标题");
         expect(legacyStore.getConversations().get(0).getMessages().isEmpty(), "旧格式消息不再迁移");
         expect(!legacyStore.getConversations().get(0).isPinned(), "旧格式默认不置顶");
+        // 删空活跃会话：主文件不再落盘，残留单文件也要被清掉（防孤儿文件）。
+        // 前面 pinned 组用 first 的旧副本刷过单文件，这里循环删净、不预设条数
+        ConversationStore fifth = new ConversationStore(dir.resolve("history.json"));
+        String fifthId = fifth.getActive().getId();
+        fifth.appendMessage(fifthId, Conversation.ROLE_USER, "将删空的消息");
+        while (!fifth.getActive().getMessages().isEmpty()) {
+            fifth.removeMessage(fifthId, fifth.getActive().getMessages().get(0));
+        }
+        expect(Files.notExists(dir.resolve("sessions").resolve(fifthId)), "删空会话清残留单文件");
         System.out.println("PERSIST_OK");
 
         // —— 配置方案（AppSettings.at 独立实例，不碰真实 ~/.agentjava/settings.properties） ——

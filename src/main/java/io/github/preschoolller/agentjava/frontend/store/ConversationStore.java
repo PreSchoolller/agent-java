@@ -92,6 +92,7 @@ public class ConversationStore {
         Conversation current = findById(activeId);
         if (current != null && current.isEmpty()) {
             conversations.remove(current); // 离开没说过话的空会话时顺手清掉
+            deleteSessionFile(current.getId());
         }
         activeId = id;
         save();
@@ -194,13 +195,14 @@ public class ConversationStore {
         return null;
     }
 
-    /** 空会话不落盘，避免历史里堆满"新对话"；活跃会话顺带同步到单会话文件 */
+    /** 空会话不落盘（残留单文件一并清理），避免历史里堆满"新对话"；活跃会话顺带同步到单会话文件 */
     public synchronized void save() {
         String currentActiveId = activeId;
         List<Object> array = new ArrayList<>();
         List<Object> messages = null;
         for (Conversation conversation : conversations) {
             if (conversation.isEmpty()) {
+                deleteSessionFile(conversation.getId());
                 continue;
             }
             Map<String, Object> map = serializeConversation(conversation);
@@ -230,11 +232,8 @@ public class ConversationStore {
     /** 全量落盘 + 单会话文件同步：活跃会话的副本 save() 内已写，这里补刷非活跃会话的变更 */
     private void saveAndSyncSession(Conversation changed) {
         save();
-        if (changed.getId().equals(activeId)) {
-            return;
-        }
-        if (changed.isEmpty()) {
-            deleteSessionFile(changed.getId()); // 消息删空的会话不落盘，单会话文件一并清掉
+        // 活跃会话 save() 内已同步；空会话的单文件由 save() 统一清理，这里再补刷只会写回空数组
+        if (changed.getId().equals(activeId) || changed.isEmpty()) {
             return;
         }
         syncNewHistory(serializeMessages(changed), changed.getId());
