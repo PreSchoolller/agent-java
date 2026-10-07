@@ -144,15 +144,30 @@ public class ConversationStore {
         return message;
     }
 
-    /** 删除指定会话中的一条消息（按消息对象同一性查找），删除成功返回 true */
-    public boolean removeMessage(String id, Message target) {
-        Conversation conversation = findById(id);
-        if (conversation == null || !conversation.removeMessage(target)) {
-            return false;
+    /** 从指定会话的一条 AI 回复处分叉出新会话并设为当前：分叉点之前（含这条回复）的消息
+     *  原样复制进新会话，从该对话状态继续，原会话不动 */
+    public Conversation fork(String id, Message target) {
+        Conversation source = findById(id);
+        if (source == null || !Conversation.ROLE_AI.equals(target.role())) {
+            return null;
         }
-        saveAndSyncSession(conversation);
+        List<Message> messages = source.getMessages();
+        int cut = -1;
+        for (int i = 0; i < messages.size(); i++) {
+            if (messages.get(i) == target) {
+                cut = i;
+                break;
+            }
+        }
+        if (cut < 0) {
+            return null;
+        }
+        Conversation forked = Conversation.fork(messages.subList(0, cut + 1), source.getTitle());
+        conversations.add(0, forked);
+        activeId = forked.getId();
+        save();
         fireChanged();
-        return true;
+        return forked;
     }
 
     /** 删除指定会话的最后一条消息（重新生成时由后端先删旧回答），返回被删消息；没有则返回 null */

@@ -42,7 +42,7 @@ import java.util.Properties;
  *   javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
  *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
- * 输出：持久化往返 + 删尾/单条删除/置顶落盘/主文件元数据化 + 旧格式元数据读取测试（PERSIST_OK）、
+ * 输出：持久化往返 + 删尾/分叉/置顶落盘/主文件元数据化 + 旧格式元数据读取测试（PERSIST_OK）、
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
  * 流式落库断言（STREAM_OK）、长会话窗口化断言（WINDOWING_OK）+ 十五张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
@@ -116,29 +116,34 @@ public class Shot {
         expect(second.getActive().getMessages().get(0).text().contains("\n"), "换行保留");
         expect("回复".equals(second.getActive().getMessages().get(1).text()), "删尾后落盘内容");
         expect("往返测试标题".equals(second.getActive().getTitle()), "标题");
-        // 单条删除：按消息对象同一性定位，删掉后旧引用失效、新文件只剩一条
-        Message middle = second.getActive().getMessages().get(1);
-        expect(second.removeMessage(second.getActive().getId(), middle), "按同一性删除");
-        expect(second.getActive().getMessages().size() == 1, "删除后消息数");
-        expect(!second.removeMessage(second.getActive().getId(), middle), "旧引用重复删除应失败");
+        // 分叉：从 AI 回复分叉出新会话（含这条回复，从该状态继续），原会话不动，当前会话切到分叉
+        Message forkPoint = second.getActive().getMessages().get(1);
+        Conversation forked = second.fork(second.getActive().getId(), forkPoint);
+        expect(forked != null, "分叉返回新会话");
+        expect(second.getActive().getId().equals(forked.getId()), "分叉后切到新会话");
+        expect(forked.getMessages().size() == 2, "分叉会话消息数");
+        expect("带\"引号\"、\n换行、\t制表和中文✓的消息".equals(forked.getMessages().get(0).text()), "分叉复制用户轮");
+        expect("回复".equals(forked.getMessages().get(1).text()), "分叉含分叉点AI回复");
+        expect("往返测试标题（分叉）".equals(forked.getTitle()), "分叉标题带来源");
+        expect(second.fork(forked.getId(), forked.getMessages().get(0)) == null, "用户消息不可分叉");
+        expect(second.getConversations().get(1).getMessages().size() == 2, "原会话不动");
         ConversationStore third = new ConversationStore(dir.resolve("history.json"));
-        expect(third.getActive().getMessages().size() == 1, "删除后落盘消息数");
+        expect(third.getConversations().size() == 2, "分叉落盘会话数");
+        expect(third.getActive().getId().equals(forked.getId()), "分叉后活跃会话落盘");
         // 主文件只存元数据：messages 字段已移除，消息全部由 sessions/<会话id> 单文件承载
         Object mainRoot = JsonKit.parse(Files.readString(dir.resolve("history.json")));
         for (Object item : (List<?>) ((Map<?, ?>) mainRoot).get("conversations")) {
             expect(!((Map<?, ?>) item).containsKey("messages"), "主文件不含messages字段");
         }
         Object sessionRoot = JsonKit.parse(Files.readString(dir.resolve("sessions").resolve(conv.getId())));
-        expect(sessionRoot instanceof List<?> sessionList && sessionList.size() == 1
-                && "带\"引号\"、\n换行、\t制表和中文✓的消息".equals(
-                        ((Map<?, ?>) sessionList.get(0)).get("text")), "单会话文件承载消息");
-        // 置顶落盘（v1 文件格式）：置顶→重读→取消置顶→重读
+        expect(sessionRoot instanceof List<?> sessionList && sessionList.size() == 2
+                && "回复".equals(((Map<?, ?>) sessionList.get(1)).get("text")), "单会话文件承载消息");
+        // 置顶落盘（v1 文件格式）：置顶→重读→取消置顶→重读（分叉后列表首位是新会话，按 id 找原会话）
         first.setPinned(conv.getId(), true);
         ConversationStore fourth = new ConversationStore(dir.resolve("history.json"));
-        expect(fourth.getConversations().get(0).isPinned(), "置顶落盘");
+        expect(pinnedOf(fourth, conv.getId()), "置顶落盘");
         fourth.setPinned(conv.getId(), false);
-        expect(!new ConversationStore(dir.resolve("history.json")).getConversations()
-                .get(0).isPinned(), "取消置顶落盘");
+        expect(!pinnedOf(new ConversationStore(dir.resolve("history.json")), conv.getId()), "取消置顶落盘");
         // v0 旧格式（顶层数组）读取：元数据照常还原，pinned 缺省 false；缺失单文件的会话
         // 按无消息加载（局部 try 隔离），旧格式内嵌的 messages 不再迁移——单会话文件是消息唯一存储
         Path legacyFile = dir.resolve("legacy.json");
@@ -150,13 +155,11 @@ public class Shot {
         expect("旧格式会话".equals(legacyStore.getConversations().get(0).getTitle()), "旧格式标题");
         expect(legacyStore.getConversations().get(0).getMessages().isEmpty(), "旧格式消息不再迁移");
         expect(!legacyStore.getConversations().get(0).isPinned(), "旧格式默认不置顶");
-        // 删空活跃会话：主文件不再落盘，残留单文件也要被清掉（防孤儿文件）。
-        // 前面 pinned 组用 first 的旧副本刷过单文件，这里循环删净、不预设条数
+        // 删空活跃会话（重新生成走 removeLastMessage 删到最后一条）：主文件不再落盘，残留单文件清掉
         ConversationStore fifth = new ConversationStore(dir.resolve("history.json"));
         String fifthId = fifth.getActive().getId();
         fifth.appendMessage(fifthId, Conversation.ROLE_USER, "将删空的消息");
-        while (!fifth.getActive().getMessages().isEmpty()) {
-            fifth.removeMessage(fifthId, fifth.getActive().getMessages().get(0));
+        while (fifth.removeLastMessage(fifthId) != null) {
         }
         expect(Files.notExists(dir.resolve("sessions").resolve(fifthId)), "删空会话清残留单文件");
         System.out.println("PERSIST_OK");
@@ -576,6 +579,16 @@ public class Shot {
         if (!condition) {
             throw new AssertionError("校验失败: " + what);
         }
+    }
+
+    /** 在仓库里按 id 找会话的置顶标记（分叉后列表首位不一定是目标会话） */
+    private static boolean pinnedOf(ConversationStore store, String id) {
+        for (Conversation conversation : store.getConversations()) {
+            if (conversation.getId().equals(id)) {
+                return conversation.isPinned();
+            }
+        }
+        return false;
     }
 
     /** 深度收集组件树，供合成鼠标事件用 */

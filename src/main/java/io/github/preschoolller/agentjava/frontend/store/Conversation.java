@@ -88,16 +88,15 @@ public class Conversation {
         return removed;
     }
 
-    /** 删除一条消息（按消息对象同一性查找），成功返回 true */
-    public boolean removeMessage(Message target) {
-        for (int i = 0; i < messages.size(); i++) {
-            if (messages.get(i) == target) {
-                messages.remove(i);
-                touch();
-                return true;
-            }
+    /** 从某次对话状态分叉出新会话：prefix 为分叉点之前（含分叉点那条 AI 回复）的消息，
+     *  标题沿用原会话标题加"（分叉）"后缀，侧栏里看得出来源 */
+    public static Conversation fork(List<Message> prefix, String sourceTitle) {
+        Conversation forked = create();
+        for (Message message : prefix) {
+            forked.messages.add(new Message(message.role(), message.text(), message.time()));
         }
-        return false;
+        forked.title = abbreviate(sourceTitle, 20) + "（分叉）";
+        return forked;
     }
 
     /** 流式输出结束后把已存在消息的文本替换为最终值（按消息对象同一性查找），返回替换后的新记录；没找到返回 null */

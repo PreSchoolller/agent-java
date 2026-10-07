@@ -182,7 +182,7 @@ public class Window extends JFrame {
 
     /**
      * 一张消息卡片。message 持仓库消息的同一性引用（流式落库会替换成新记录，finish 时同步），
-     * 删除按它定位。卡片骨架（圆角底）常驻瀑布流，内容组件（正文/尾行/悬停菜单）只有卡片位于
+     * 分叉按它定位。卡片骨架（圆角底）常驻瀑布流，内容组件（正文/尾行/悬停菜单）只有卡片位于
      * 视口附近才物化（P2-2 窗口化）；AI 卡片的 markdown 面板恒非空，承载解析与测量数据。
      */
     private static final class MessageCard {
@@ -706,7 +706,6 @@ public class Window extends JFrame {
         }
         messageCard.content = content;
 
-        JButton menuButton = createMenuButton();
         if (!user) {
             JLabel roleLabel = new JLabel("AI");
             roleLabel.setFont(new Font("微软雅黑", Font.BOLD, 13));
@@ -729,14 +728,18 @@ public class Window extends JFrame {
         }
         card.add(content, BorderLayout.CENTER);
         card.add(timeRow, BorderLayout.SOUTH);
-        // 浮层用 BorderLayout 不认识的约束名：布局器不会给它分配区域（无约束的 add 会被当成
-        // CENTER 顶掉真正的内容组件），位置完全由 OverlayCardLayout.layoutContainer 负责
-        card.add(menuButton, "overlay");
-        // z-order 0 才是顶层：add 追加到末尾反而是最底层，按钮与内容重叠区的点击会被
-        // 透明的内容组件截走（可见但点不到，见踩坑 #21）
-        card.setComponentZOrder(menuButton, 0);
-        messageCard.menu = menuButton;
-        menuButton.addActionListener(e -> showDeleteMenu(menuButton, messageCard));
+        if (!user) {
+            // 分叉挂在 AI 回复上（对齐 Codex/ZCode：以某次对话状态为锚点继续），用户卡片不挂菜单
+            JButton menuButton = createMenuButton();
+            // 浮层用 BorderLayout 不认识的约束名：布局器不会给它分配区域（无约束的 add 会被当成
+            // CENTER 顶掉真正的内容组件），位置完全由 OverlayCardLayout.layoutContainer 负责
+            card.add(menuButton, "overlay");
+            // z-order 0 才是顶层：add 追加到末尾反而是最底层，按钮与内容重叠区的点击会被
+            // 透明的内容组件截走（可见但点不到，见踩坑 #21）
+            card.setComponentZOrder(menuButton, 0);
+            messageCard.menu = menuButton;
+            menuButton.addActionListener(e -> showForkMenu(menuButton, messageCard));
+        }
         card.doLayout(); // 浮层坐标在布局器里，先摆好再画
         refreshRegenerateButtons();
     }
@@ -861,25 +864,23 @@ public class Window extends JFrame {
         }
     }
 
-    /** "…"菜单：目前只有删除，之后加编辑/复制等直接往这里堆 */
-    private void showDeleteMenu(JButton anchor, MessageCard owner) {
+    /** "…"菜单：AI 卡片提供分叉（单条删除已移除，用户卡片不挂菜单） */
+    private void showForkMenu(JButton anchor, MessageCard owner) {
         JPopupMenu popup = new JPopupMenu();
         Ui.stylePopupMenu(popup);
-        JMenuItem delete = Ui.menuItem("删除这条消息", true);
-        delete.addActionListener(e -> deleteMessage(owner));
-        popup.add(delete);
+        JMenuItem fork = Ui.menuItem("分叉对话");
+        fork.addActionListener(e -> forkConversation(owner));
+        popup.add(fork);
         popup.show(anchor, 0, anchor.getHeight() + 2);
     }
 
-    /** 删除一条消息：按卡片持有的消息引用删仓库记录，然后按当前会话重建瀑布流 */
-    private void deleteMessage(MessageCard card) {
+    /** 分叉：以这条 AI 回复为分叉点开新会话（含这条回复，从该状态继续），原会话不动；
+     *  store.fork 会把新会话设为当前并通知，主区自动切过去 */
+    private void forkConversation(MessageCard card) {
         if (generating) {
             return;
         }
-        if (!store.removeMessage(displayedConvId, card.message)) {
-            return;
-        }
-        showConversation(store.getActive());
+        store.fork(displayedConvId, card.message);
     }
 
     /** 瀑布流一行的 GridBag 约束：用户卡片靠右上且不定宽，AI 卡片水平撑满 */
@@ -1122,7 +1123,7 @@ public class Window extends JFrame {
             flush();
             Message updated = store.updateMessageText(conversationId, message, full.toString());
             if (updated != null) {
-                card.message = updated; // 仓库记录已换成新对象，卡片同步持有（删除消息按同一性定位）
+                card.message = updated; // 仓库记录已换成新对象，卡片同步持有（分叉按同一性定位）
             }
         }
 
