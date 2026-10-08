@@ -2,8 +2,10 @@ package io.github.preschoolller.agentjava;
 
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
+import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.RoleEnum;
+import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.frontend.gui.Window;
 import io.github.preschoolller.agentjava.frontend.store.Conversation;
@@ -17,6 +19,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static io.github.preschoolller.agentjava.backend.provider.common.Constants.CALL_ID_SEPERATOR;
 import static io.github.preschoolller.agentjava.backend.provider.common.Constants.POISON;
 
 public class Main {
@@ -67,10 +70,13 @@ public class Main {
                 for (PromptParams.RoleMessage roleMessage : history) {
                     paramsBuilder.roleMessages(roleMessage);
                 }
-                chunks = provider.sendPromptStreaming(paramsBuilder.build());
+                ProviderStreamingResponse providerStreamingResponse = provider.sendPromptStreaming(paramsBuilder.build());
+                chunks = providerStreamingResponse.blockingQueue();
                 while (true) {
                     String chunk = chunks.take(); // 阻塞等下一个增量，节奏由模型决定
                     if (POISON.equals(chunk)) {
+                        ToolCall toolCall = providerStreamingResponse.toolCall();
+                        performToolCall(window, toolCall, cancelled, conversation, provider);
                         break;
                     }
                     if (cancelled.get()) {
@@ -99,6 +105,28 @@ public class Main {
         });
     }
 
+    private static void performToolCall(Window window, ToolCall toolCall, AtomicBoolean cancelled, Conversation conversation, Provider provider) {
+        if (toolCall.getStatus() != null) {
+            // 工具调用
+            Window.ToolCallHandle toolCallHandle = window.addToolCall(toolCall.getTool().name(), toolCall.getArguments());
+            CompletableFuture.runAsync(() -> {
+                while (ToolCall.Status.IN_PROGRESS.equals(toolCall.getStatus())) {
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException e) {
+                        System.out.println("工具调用：" + toolCall.getTool().name() + " call_id: " + toolCall.getCallId() + "错误！");
+                    }
+                }
+                SwingUtilities.invokeLater(() -> {
+                            toolCallHandle.finish(toolCall.getCallId() + CALL_ID_SEPERATOR + toolCall.getResult(),
+                                    ToolCall.Status.COMPLETE.equals(toolCall.getStatus()));
+                            realReplyStream(window, cancelled, conversation, provider);
+                        }
+                );
+            });
+        }
+    }
+
     /**
      * 会话消息 → 后端轮次列表：空文本跳过，assistant 轮剥掉思考块
      * （模型每轮重新思考，历史里的 CoT 是噪音，DeepSeek 等服务端甚至直接拒绝回传）。
@@ -117,8 +145,10 @@ public class Main {
                     continue; // 整条都是思考内容被剥光
                 }
                 roleMessages.add(new PromptParams.RoleMessage(RoleEnum.ASSISTANT, text));
-            } else {
+            } else if (Conversation.ROLE_USER.equals(message.role())) {
                 roleMessages.add(new PromptParams.RoleMessage(RoleEnum.USER, text));
+            } else if (Conversation.ROLE_TOOL.equals(message.role())) {
+                roleMessages.add(new PromptParams.RoleMessage(RoleEnum.TOOL_RESULT, text, message.toolArgs(), message.toolName()));
             }
         }
         return roleMessages;

@@ -1,15 +1,14 @@
 package io.github.preschoolller.agentjava.backend.provider.interfaces;
 
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
-import io.github.preschoolller.agentjava.backend.provider.common.ProviderResponse;
-
-import java.util.concurrent.BlockingQueue;
+import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
+import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 
 public interface Provider {
 
     void reload();
 
-    ProviderResponse sendPrompt(PromptParams promptParams);
+    ProviderBlockingTextResponse sendPrompt(PromptParams promptParams);
 
-    BlockingQueue<String> sendPromptStreaming(PromptParams promptParams);
+    ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams);
 }
