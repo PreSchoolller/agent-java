@@ -56,9 +56,9 @@ public class PromptParams {
         }
     }
 
-    public record RoleMessage(RoleEnum role, String content, String toolArguments, String toolName) {
+    public record RoleMessage(RoleEnum role, String content, String toolArguments, String toolName, String callId) {
         public RoleMessage(RoleEnum role, String content) {
-            this(role, content, "", "");
+            this(role, content, "", "", "");
         }
     }
 }

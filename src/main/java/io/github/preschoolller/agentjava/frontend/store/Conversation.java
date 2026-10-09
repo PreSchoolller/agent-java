@@ -80,8 +80,8 @@ public class Conversation {
     }
 
     /** 追加一条工具调用消息（"运行中"占位，结果由 updateToolResult 回填），返回消息记录 */
-    public Message addToolCall(String toolName, String toolArgs) {
-        Message message = new Message(ROLE_TOOL, "", System.currentTimeMillis(), toolName, toolArgs, "running");
+    public Message addToolCall(String toolName, String toolArgs, String callId) {
+        Message message = new Message(ROLE_TOOL, "", System.currentTimeMillis(), toolName, toolArgs, "running", callId);
         messages.add(message);
         touch();
         return message;
@@ -126,7 +126,7 @@ public class Conversation {
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) == target) {
                 Message updated = new Message(target.role(), result, target.time(),
-                        target.toolName(), target.toolArgs(), success ? "ok" : "error");
+                        target.toolName(), target.toolArgs(), success ? "ok" : "error", target.callId());
                 messages.set(i, updated);
                 touch();
                 return updated;

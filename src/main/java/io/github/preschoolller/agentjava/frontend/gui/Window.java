@@ -582,8 +582,8 @@ public class Window extends JFrame {
      * 先 addToolCall(工具名, 参数摘要) 出卡，执行完 handle.finish(结果文本, 是否成功) 回填。
      * 与 AiStream 对称：后端在 EDT 上调用。须在 EDT 上调用。
      */
-    public ToolCallHandle addToolCall(String toolName, String argsSummary) {
-        Message message = store.appendToolCall(store.getActive().getId(), toolName, argsSummary);
+    public ToolCallHandle addToolCall(String toolName, String argsSummary, String callId) {
+        Message message = store.appendToolCall(store.getActive().getId(), toolName, argsSummary, callId);
         MessageCard card = insertMessageCard(message);
         updateMaterialization(); // 新卡片在末尾，窗口化时补物化
         scrollToBottom();
@@ -605,11 +605,13 @@ public class Window extends JFrame {
 
         @Override
         public void finish(String result, boolean success) {
+            System.out.println("工具渲染结尾：" + System.currentTimeMillis());
             if (finished) {
                 return;
             }
             finished = true;
             Message updated = store.completeToolCall(conversationId, message, result, success);
+            System.out.println("工具入库结尾：" + System.currentTimeMillis());
             if (updated == null) {
                 return;
             }
@@ -623,6 +625,7 @@ public class Window extends JFrame {
                     scrollToBottom();
                 }
             }
+            System.out.println("工具渲染真结尾：" + System.currentTimeMillis());
         }
     }
 
@@ -1242,13 +1245,16 @@ public class Window extends JFrame {
 
         @Override
         public void finish() {
+            System.out.println("开始收尾：" + System.currentTimeMillis());
             if (finished) {
                 return;
             }
             finished = true;
             flushTimer.stop();
             flush();
+            System.out.println("渲染收尾：" + System.currentTimeMillis());
             Message updated = store.updateMessageText(conversationId, message, full.toString());
+            System.out.println("入库收尾：" + System.currentTimeMillis());
             if (updated != null) {
                 card.message = updated; // 仓库记录已换成新对象，卡片同步持有（分叉按同一性定位）
             }

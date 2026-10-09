@@ -1,5 +1,6 @@
 package io.github.preschoolller.agentjava.backend.provider.common;
 
+import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 
 public class ToolCall {
@@ -13,6 +14,11 @@ public class ToolCall {
     volatile String callId;
 
     volatile String result;
+
+    public ToolCall() {
+        tool = ToolManager.EMPTY_TOOL;
+        status = Status.EMPTY;
+    }
 
     public String getResult() {
         return result;
@@ -54,6 +60,7 @@ public class ToolCall {
     }
 
     public static enum Status {
+        EMPTY,
         IN_PROGRESS,
         COMPLETE,
         INCOMPLETE

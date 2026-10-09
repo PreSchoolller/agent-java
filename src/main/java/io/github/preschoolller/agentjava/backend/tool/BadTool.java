@@ -1,12 +1,12 @@
 package io.github.preschoolller.agentjava.backend.tool;
 
-import com.openai.models.responses.FunctionTool;
-import com.openai.models.responses.ResponseFunctionToolCall;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+
+import java.util.Map;
 
 public class BadTool implements Tool {
 
-    private static BadTool instance;
+    private static volatile BadTool instance;
 
     private BadTool() {
     }
@@ -33,17 +33,12 @@ public class BadTool implements Tool {
     }
 
     @Override
-    public FunctionTool.Parameters schema() {
+    public Map<String, Object> schema() {
         return null;
     }
 
     @Override
     public String execute(String arguments) {
-        return null;
-    }
-
-    @Override
-    public Boolean test(ResponseFunctionToolCall functionTool) {
-        return false;
+        return "unknown tool";
     }
 }

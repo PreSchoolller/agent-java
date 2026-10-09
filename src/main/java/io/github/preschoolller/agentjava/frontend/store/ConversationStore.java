@@ -199,12 +199,12 @@ public class ConversationStore {
     }
 
     /** 追加一条工具调用消息（"运行中"占位，agent 循环每次调工具时先调这个），返回消息记录 */
-    public Message appendToolCall(String id, String toolName, String argsSummary) {
+    public Message appendToolCall(String id, String toolName, String argsSummary, String callId) {
         Conversation conversation = findById(id);
         if (conversation == null) {
             throw new IllegalArgumentException("会话不存在: " + id);
         }
-        Message message = conversation.addToolCall(toolName, argsSummary);
+        Message message = conversation.addToolCall(toolName, argsSummary, callId);
         conversations.remove(conversation);
         conversations.add(0, conversation);
         save();
@@ -303,6 +303,7 @@ public class ConversationStore {
                 item.put("name", message.toolName());
                 item.put("args", message.toolArgs());
                 item.put("status", message.toolStatus());
+                item.put("callId", message.callId());
             }
             messages.add(item);
         }
@@ -360,7 +361,7 @@ public class ConversationStore {
                         Message message = messageMap.containsKey("name")
                                 ? new Message(str(messageMap.get("role")), str(messageMap.get("text")),
                                         num(messageMap.get("time")), str(messageMap.get("name")),
-                                        str(messageMap.get("args")), str(messageMap.get("status")))
+                                        str(messageMap.get("args")), str(messageMap.get("status")),str(messageMap.get("callId")))
                                 : new Message(str(messageMap.get("role")), str(messageMap.get("text")),
                                         num(messageMap.get("time")));
                         conversation.getMessages().add(message);

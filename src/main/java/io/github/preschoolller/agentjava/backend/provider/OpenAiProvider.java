@@ -46,7 +46,6 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.stream.Collectors;
 
-import static io.github.preschoolller.agentjava.backend.provider.common.Constants.CALL_ID_SEPERATOR;
 import static io.github.preschoolller.agentjava.backend.provider.common.Constants.POISON;
 
 public class OpenAiProvider implements Provider {
@@ -151,19 +150,17 @@ public class OpenAiProvider implements Provider {
                     allMessages.add(ResponseInputItem.ofEasyInputMessage(easyInputMessage));
                 }
                 case TOOL_RESULT -> {
-                    String content = roleMessage.content();
-                    String[] split = content.split(CALL_ID_SEPERATOR);
                     ResponseFunctionToolCall responseFunctionToolCall = ResponseFunctionToolCall
                             .builder()
-                            .callId(split[0])
+                            .callId(roleMessage.callId())
                             .arguments(roleMessage.toolArguments())
                             .name(roleMessage.toolName())
                             .build();
                     allMessages.add(ResponseInputItem.ofFunctionCall(responseFunctionToolCall));
                     ResponseInputItem.FunctionCallOutput functionCallOutput = ResponseInputItem.FunctionCallOutput
                             .builder()
-                            .callId(split[0])
-                            .output(split[split.length - 1])
+                            .callId(roleMessage.callId())
+                            .output(roleMessage.content())
                             .build();
                     allMessages.add(ResponseInputItem.ofFunctionCallOutput(functionCallOutput));
                 }
@@ -199,6 +196,12 @@ public class OpenAiProvider implements Provider {
                         .forEach(responseStreamEvent -> responseStreamEvent.accept(visitor));
             } finally {
                 blockingQueue.offer(POISON);
+                if (ToolCall.Status.EMPTY.equals(toolCall.getStatus())) {
+                    toolCall.setStatus(null);
+                }
+                if (ToolManager.EMPTY_TOOL.equals(toolCall.getTool())) {
+                    toolCall.setTool(null);
+                }
             }
         }).start();
 
@@ -288,11 +291,12 @@ public class OpenAiProvider implements Provider {
             @Override
             public Object visitOutputItemAdded(@NotNull ResponseOutputItemAddedEvent responseOutputItemAddedEvent) {
                 if (responseOutputItemAddedEvent.item().isFunctionCall()) {
-                    System.out.println("工具调用开始传输");
+                    toolCall.setStatus(ToolCall.Status.IN_PROGRESS);
+                    System.out.println("工具调用开始传输" + System.currentTimeMillis());
                     ResponseFunctionToolCall functionCall = responseOutputItemAddedEvent.item().asFunctionCall();
                     toolCall.setTool(ToolManager.findByName(functionCall.name()).orElse(ToolManager.BAD_TOOL));
-                    toolCall.setStatus(ToolCall.Status.IN_PROGRESS);
                     toolCall.setCallId(functionCall.callId());
+                    System.out.println("toolCall写入完成：" + System.currentTimeMillis());
                 }
                 return null;
             }
@@ -300,20 +304,20 @@ public class OpenAiProvider implements Provider {
             @Override
             public Object visitOutputItemDone(@NotNull ResponseOutputItemDoneEvent responseOutputItemDoneEvent) {
                 if (responseOutputItemDoneEvent.item().isFunctionCall()) {
-                    System.out.println("工具调用传输结束");
+                    System.out.println("**********************工具调用传输结束" + System.currentTimeMillis());
                     ResponseFunctionToolCall functionCall = responseOutputItemDoneEvent.item().asFunctionCall();
                     if (functionCall.status().isPresent() && functionCall.status().get().equals(ResponseFunctionToolCall.Status.COMPLETED)) {
-                        System.out.println("工具调用传输完成");
+                        System.out.println("**********************工具调用传输完成" + System.currentTimeMillis());
                     }
-                    System.out.println("**********************执行工具参数**********************");
+                    System.out.println("**********************执行工具参数**********************" + System.currentTimeMillis());
                     System.out.println(functionCall);
-                    System.out.println("**********************执行工具开始**********************");
+                    System.out.println("**********************执行工具开始**********************" + System.currentTimeMillis());
                     String result = ToolManager.execute(functionCall);
-                    System.out.println(result);
+//                    System.out.println(result);
                     toolCall.setStatus(ToolCall.Status.COMPLETE);
                     toolCall.setArguments(functionCall.arguments());
                     toolCall.setResult(result);
-                    System.out.println("**********************执行工具结果**********************");
+                    System.out.println("**********************执行工具结果**********************" + System.currentTimeMillis());
                 }
                 return null;
             }

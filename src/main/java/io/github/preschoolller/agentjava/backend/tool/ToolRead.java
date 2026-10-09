@@ -3,9 +3,6 @@ package io.github.preschoolller.agentjava.backend.tool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.openai.core.JsonValue;
-import com.openai.models.responses.FunctionTool;
-import com.openai.models.responses.ResponseFunctionToolCall;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 
 import java.io.IOException;
@@ -16,7 +13,7 @@ import java.util.Map;
 
 public class ToolRead implements Tool {
 
-    private static ToolRead instance;
+    private static volatile ToolRead instance;
 
     private ToolRead() {
     }
@@ -43,30 +40,30 @@ public class ToolRead implements Tool {
     }
 
     @Override
-    public FunctionTool.Parameters schema() {
-        return FunctionTool.Parameters
-                .builder()
-                .putAdditionalProperty("type", JsonValue.from("object"))
-                .putAdditionalProperty("properties", JsonValue.from(Map.of("path", Map.of("type", "string", "description", "文件相对路径"))))
-                .putAdditionalProperty("required", JsonValue.from(List.of("path")))
-                .build();
+    public Map<String, Object> schema() {
+        return Map.of(
+                "type", "object",
+                "properties", Map.of("path", Map.of("type", "string", "description", "文件相对路径")),
+                "required", List.of("path")
+        );
     }
 
     @Override
     public String execute(String arguments) {
         try {
             JsonNode jsonNode = new ObjectMapper().readTree(arguments);
+            if (jsonNode == null) {
+                return "json parse error: wrong schema";
+            }
             String path = jsonNode.path("path").asText();
+            if (path == null || path.isBlank()) {
+                return "json parse error: wrong path";
+            }
             return Files.readString(Path.of(path));
         } catch (JsonProcessingException e) {
             return "json parse error: " + e.getMessage();
         } catch (IOException e) {
             return "file read error: " + e.getMessage();
         }
-    }
-
-    @Override
-    public Boolean test(ResponseFunctionToolCall functionTool) {
-        return name().equals(functionTool.name());
     }
 }

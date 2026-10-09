@@ -19,7 +19,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static io.github.preschoolller.agentjava.backend.provider.common.Constants.CALL_ID_SEPERATOR;
 import static io.github.preschoolller.agentjava.backend.provider.common.Constants.POISON;
 
 public class Main {
@@ -76,7 +75,7 @@ public class Main {
                     String chunk = chunks.take(); // 阻塞等下一个增量，节奏由模型决定
                     if (POISON.equals(chunk)) {
                         ToolCall toolCall = providerStreamingResponse.toolCall();
-                        performToolCall(window, toolCall, cancelled, conversation, provider);
+                        SwingUtilities.invokeLater(() -> performToolCall(window, toolCall, cancelled, conversation, provider));
                         break;
                     }
                     if (cancelled.get()) {
@@ -93,38 +92,57 @@ public class Main {
                     window.addNotifyMessage("Error: " + e.getMessage());
                     window.setGenerating(false);
                 });
-                return;
-            }
-            SwingUtilities.invokeLater(() -> {
-                stream.finish(); // 停止也走 finish：已生成部分照常保留并落库
-                window.setGenerating(false);
-            });
-            if (stopped) {
-                drainUntilPoison(chunks);
+            } finally {
+                SwingUtilities.invokeLater(() -> {
+                    stream.finish(); // 停止也走 finish：已生成部分照常保留并落库
+                    window.setGenerating(false);
+                });
+                if (stopped) {
+                    drainUntilPoison(chunks);
+                }
             }
         });
     }
 
     private static void performToolCall(Window window, ToolCall toolCall, AtomicBoolean cancelled, Conversation conversation, Provider provider) {
-        if (toolCall.getStatus() != null) {
-            // 工具调用
-            Window.ToolCallHandle toolCallHandle = window.addToolCall(toolCall.getTool().name(), toolCall.getArguments());
-            CompletableFuture.runAsync(() -> {
-                while (ToolCall.Status.IN_PROGRESS.equals(toolCall.getStatus())) {
-                    try {
-                        Thread.sleep(100);
-                    } catch (InterruptedException e) {
-                        System.out.println("工具调用：" + toolCall.getTool().name() + " call_id: " + toolCall.getCallId() + "错误！");
-                    }
-                }
-                SwingUtilities.invokeLater(() -> {
-                            toolCallHandle.finish(toolCall.getCallId() + CALL_ID_SEPERATOR + toolCall.getResult(),
-                                    ToolCall.Status.COMPLETE.equals(toolCall.getStatus()));
-                            realReplyStream(window, cancelled, conversation, provider);
-                        }
-                );
-            });
+        System.out.println("performToolCall：" + System.currentTimeMillis());
+        if (toolCall.getStatus() == null) {
+            return;
         }
+        // TODO 此处可能还没设置，唉，咋办呢？
+        if (ToolCall.Status.EMPTY.equals(toolCall.getStatus())) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                System.out.println("等待工具调用：错误！");
+            }
+        }
+        if (ToolCall.Status.EMPTY.equals(toolCall.getStatus()) || toolCall.getStatus() == null) {
+            return;
+        }
+
+        // 工具调用
+        System.out.println("添加工具卡片：" + System.currentTimeMillis());
+        Window.ToolCallHandle toolCallHandle = window.addToolCall(toolCall.getTool().name(), toolCall.getArguments(), toolCall.getCallId());
+        CompletableFuture.runAsync(() -> {
+            while (ToolCall.Status.IN_PROGRESS.equals(toolCall.getStatus())) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    System.out.println("工具调用：" + toolCall.getTool().name() + " call_id: " + toolCall.getCallId() + "错误！");
+                    break;
+                }
+            }
+            SwingUtilities.invokeLater(() -> {
+                        toolCallHandle.finish(toolCall.getResult(),
+                                ToolCall.Status.COMPLETE.equals(toolCall.getStatus()));
+                        if (cancelled.get()) {
+                            return;
+                        }
+                        realReplyStream(window, cancelled, conversation, provider);
+                    }
+            );
+        });
     }
 
     /**
@@ -148,7 +166,8 @@ public class Main {
             } else if (Conversation.ROLE_USER.equals(message.role())) {
                 roleMessages.add(new PromptParams.RoleMessage(RoleEnum.USER, text));
             } else if (Conversation.ROLE_TOOL.equals(message.role())) {
-                roleMessages.add(new PromptParams.RoleMessage(RoleEnum.TOOL_RESULT, text, message.toolArgs(), message.toolName()));
+                roleMessages.add(new PromptParams.RoleMessage(RoleEnum.TOOL_RESULT, text,
+                        message.toolArgs(), message.toolName(), message.callId()));
             }
         }
         return roleMessages;
