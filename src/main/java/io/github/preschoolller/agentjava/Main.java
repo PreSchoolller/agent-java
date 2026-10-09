@@ -74,8 +74,9 @@ public class Main {
                 while (true) {
                     String chunk = chunks.take(); // 阻塞等下一个增量，节奏由模型决定
                     if (POISON.equals(chunk)) {
-                        ToolCall toolCall = providerStreamingResponse.toolCall();
-                        SwingUtilities.invokeLater(() -> performToolCall(window, toolCall, cancelled, conversation, provider));
+                        BlockingQueue<ToolCall> toolCalls = providerStreamingResponse.toolCalls();
+                        System.out.println("怎么回事呢？？？");
+                        CompletableFuture.runAsync(() -> performToolCalls(window, toolCalls, cancelled, conversation, provider));
                         break;
                     }
                     if (cancelled.get()) {
@@ -104,45 +105,75 @@ public class Main {
         });
     }
 
-    private static void performToolCall(Window window, ToolCall toolCall, AtomicBoolean cancelled, Conversation conversation, Provider provider) {
+    private static void performToolCall(Window window, ToolCall toolCall, AtomicBoolean cancelled, Conversation conversation, Provider provider, CompletableFuture<Object> future) {
         System.out.println("performToolCall：" + System.currentTimeMillis());
-        if (toolCall.getStatus() == null) {
-            return;
+        ToolCall.Status status;
+        try {
+            status = toolCall.awaitStatus();
+            // 工具调用
+        } catch (InterruptedException e) {
+            future.complete(null);
+            throw new RuntimeException(e);
         }
-        // TODO 此处可能还没设置，唉，咋办呢？
-        if (ToolCall.Status.EMPTY.equals(toolCall.getStatus())) {
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                System.out.println("等待工具调用：错误！");
-            }
-        }
-        if (ToolCall.Status.EMPTY.equals(toolCall.getStatus()) || toolCall.getStatus() == null) {
+
+        if (status == null) {
+            future.complete(null);
+            System.out.println("老出错，跳过了！");
             return;
         }
 
-        // 工具调用
-        System.out.println("添加工具卡片：" + System.currentTimeMillis());
-        Window.ToolCallHandle toolCallHandle = window.addToolCall(toolCall.getTool().name(), toolCall.getArguments(), toolCall.getCallId());
-        CompletableFuture.runAsync(() -> {
-            while (ToolCall.Status.IN_PROGRESS.equals(toolCall.getStatus())) {
+        try {
+            System.out.println("添加工具卡片：" + System.currentTimeMillis());
+            Window.ToolCallHandle toolCallHandle = window.addToolCall(toolCall.getTool().name(), toolCall.getArguments(), toolCall.getCallId());
+            CompletableFuture.runAsync(() -> {
                 try {
-                    Thread.sleep(100);
+                    toolCall.awaitStatus();
                 } catch (InterruptedException e) {
                     System.out.println("工具调用：" + toolCall.getTool().name() + " call_id: " + toolCall.getCallId() + "错误！");
+                }
+                SwingUtilities.invokeLater(() -> {
+                            toolCallHandle.finish(toolCall.getResult(),
+                                    ToolCall.Status.COMPLETE.equals(toolCall.getStatus()));;
+                        }
+                );
+                future.complete(null);
+            });
+        } catch (Exception e){
+            future.completeExceptionally(e);
+        }
+    }
+
+    private static void performToolCalls(Window window, BlockingQueue<ToolCall> toolCalls, AtomicBoolean cancelled,
+                                        Conversation conversation, Provider provider) {
+        boolean hasRealToolCall = false;
+        while (true) {
+            try {
+                ToolCall toolCall = toolCalls.take();
+                List<CompletableFuture> futures = new ArrayList<>();
+                if (ToolCall.POISON.equals(toolCall)) {
+                    if (hasRealToolCall) {
+                        SwingUtilities.invokeLater(() -> {
+                            if (cancelled.get()) {
+                                return;
+                            }
+                            System.out.println("啥玩意儿啊？？？");
+                            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                                    .thenRunAsync(
+                                            () -> realReplyStream(window, cancelled, conversation, provider),
+                                            SwingUtilities::invokeLater
+                                    );
+                        });
+                    }
                     break;
                 }
+                hasRealToolCall = true;
+                CompletableFuture<Object> future = new CompletableFuture<>();
+                futures.add(future);
+                SwingUtilities.invokeLater(() -> performToolCall(window, toolCall, cancelled, conversation, provider, future));
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
             }
-            SwingUtilities.invokeLater(() -> {
-                        toolCallHandle.finish(toolCall.getResult(),
-                                ToolCall.Status.COMPLETE.equals(toolCall.getStatus()));
-                        if (cancelled.get()) {
-                            return;
-                        }
-                        realReplyStream(window, cancelled, conversation, provider);
-                    }
-            );
-        });
+        }
     }
 
     /**

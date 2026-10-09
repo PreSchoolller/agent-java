@@ -9,6 +9,11 @@ public class PromptParams {
     private ReasoningEffortEnum re;
     private List<RoleMessage> roleMessages;
 
+    /**
+     * if true, no tool use, purely chat.
+     */
+    private boolean justChat;
+
     private PromptParams() {}
 
     public String getModel() {
@@ -23,8 +28,16 @@ public class PromptParams {
         return roleMessages;
     }
 
+    public Boolean getJustChat() {
+        return justChat;
+    }
+
     public static PromptParams.Builder builder() {
         return new Builder();
+    }
+
+    public PromptParams.Builder toBuilder() {
+        return new Builder(this);
     }
 
     public static class Builder {
@@ -34,7 +47,15 @@ public class PromptParams {
             base.roleMessages = new ArrayList<>();
         }
 
-        private PromptParams base;
+        public Builder(PromptParams promptParams) {
+            this();
+            base.model = promptParams.model;
+            base.re = promptParams.re;
+            base.roleMessages = promptParams.roleMessages;
+            base.justChat = promptParams.justChat;
+        }
+
+        private final PromptParams base;
 
         public PromptParams build() {
             return base;
@@ -52,6 +73,11 @@ public class PromptParams {
 
         public Builder roleMessages(RoleMessage roleMessage) {
             base.roleMessages.add(roleMessage);
+            return this;
+        }
+
+        public Builder justChat(boolean justChat) {
+            base.justChat = justChat;
             return this;
         }
     }

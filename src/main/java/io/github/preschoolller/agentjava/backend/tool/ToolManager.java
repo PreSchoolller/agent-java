@@ -14,7 +14,7 @@ public class ToolManager {
     public static final Tool BAD_TOOL = BadTool.getInstance();
     public static final Tool EMPTY_TOOL = EmptyTool.getInstance();
     private static volatile ToolManager instance;
-    static List<Tool> tools = new ArrayList<>(List.of(
+    public static List<Tool> tools = new ArrayList<>(List.of(
             ToolRead.getInstance()
     ));
 
@@ -42,20 +42,20 @@ public class ToolManager {
 
     public static FunctionTool getFunctionTool(String name) {
         Optional<Tool> optionalTool = findByName(name);
-        if (optionalTool.isPresent()) {
-            Tool tool = optionalTool.get();
-            HashMap<String, JsonValue> parameters = new HashMap<>();
-            tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
-            FunctionTool functionTool = FunctionTool
-                    .builder()
-                    .name(tool.name())
-                    .description(tool.description())
-                    .parameters(FunctionTool.Parameters.builder().additionalProperties(parameters).build())
-                    .strict(true)
-                    .build();
-            return functionTool;
-        }
-        return null;
+        return optionalTool.map(ToolManager::getFunctionTool).orElse(null);
+    }
+
+    public static FunctionTool getFunctionTool(Tool tool) {
+        HashMap<String, JsonValue> parameters = new HashMap<>();
+        tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
+        FunctionTool functionTool = FunctionTool
+                .builder()
+                .name(tool.name())
+                .description(tool.description())
+                .parameters(FunctionTool.Parameters.builder().additionalProperties(parameters).build())
+                .strict(true)
+                .build();
+        return functionTool;
     }
 
     public static String execute(ResponseFunctionToolCall functionTool) {

@@ -34,13 +34,14 @@ import io.github.preschoolller.agentjava.backend.provider.common.ResponseStreamE
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
+import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -118,7 +119,8 @@ public class OpenAiProvider implements Provider {
         synchronized (this) {
             service = responseService;
         }
-        ResponseCreateParams responseCreateParams = buildParams(promptParams);
+        PromptParams justReadParams = promptParams.toBuilder().justChat(true).build();
+        ResponseCreateParams responseCreateParams = buildParams(justReadParams);
         Response response = service.create(responseCreateParams);
 
         return new ProviderBlockingTextResponse(getReasoningContent(response), getMessageContent(response));
@@ -150,6 +152,9 @@ public class OpenAiProvider implements Provider {
                     allMessages.add(ResponseInputItem.ofEasyInputMessage(easyInputMessage));
                 }
                 case TOOL_RESULT -> {
+                    if (promptParams.getJustChat()) {
+                        continue;
+                    }
                     ResponseFunctionToolCall responseFunctionToolCall = ResponseFunctionToolCall
                             .builder()
                             .callId(roleMessage.callId())
@@ -164,48 +169,49 @@ public class OpenAiProvider implements Provider {
                             .build();
                     allMessages.add(ResponseInputItem.ofFunctionCallOutput(functionCallOutput));
                 }
+                default -> throw new RuntimeException("unknown role enum");
             }
         }
         ArrayList<ResponseInputItem> inputList = new ArrayList<>();
         inputList.add(ResponseInputItem.ofMessage(systemPromptMessage));
         inputList.addAll(allMessages);
-        ResponseCreateParams responseCreateParams = ResponseCreateParams
-                .builder()
-                .model(promptParams.getModel())
+        ResponseCreateParams.Builder builder = ResponseCreateParams.builder();
+        builder.model(promptParams.getModel())
                 .reasoning(Reasoning.builder().effort(RE_MAP.get(promptParams.getRe())).build())
-                .inputOfResponse(inputList)
-                .addTool(Objects.requireNonNull(ToolManager.getFunctionTool("read")))
-                .build();
-        return responseCreateParams;
+                .inputOfResponse(inputList);
+        if (promptParams.getJustChat()) {
+            return builder.build();
+        }
+        for (Tool tool : ToolManager.tools) {
+            builder.addTool(ToolManager.getFunctionTool(tool));
+        }
+        return builder.build();
     }
 
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
+        System.out.println("有人调用？？？------------------");
         ResponseService service;
         synchronized (this) {
             service = responseService;
         }
         ResponseCreateParams responseCreateParams = buildParams(promptParams);
         BlockingQueue<String> blockingQueue = new ArrayBlockingQueue<>(256, true);
-        ToolCall toolCall = new ToolCall();
+        BlockingQueue<ToolCall> toolcallsBQ = new ArrayBlockingQueue<>(4, true);
+        Map<String, ToolCall> callIdTooCallMap = new HashMap<>();
         StreamResponse<ResponseStreamEvent> response = service.createStreaming(responseCreateParams);
-        ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue, toolCall);
+        ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue, toolcallsBQ, callIdTooCallMap);
         new Thread(() -> {
             try {
                 response.stream()
                         .forEach(responseStreamEvent -> responseStreamEvent.accept(visitor));
             } finally {
                 blockingQueue.offer(POISON);
-                if (ToolCall.Status.EMPTY.equals(toolCall.getStatus())) {
-                    toolCall.setStatus(null);
-                }
-                if (ToolManager.EMPTY_TOOL.equals(toolCall.getTool())) {
-                    toolCall.setTool(null);
-                }
+                toolcallsBQ.offer(ToolCall.POISON);
             }
         }).start();
 
-        return new ProviderStreamingResponse(blockingQueue, toolCall);
+        return new ProviderStreamingResponse(blockingQueue, toolcallsBQ);
     }
 
     public static String getReasoningContent(Response response) {
@@ -245,12 +251,22 @@ public class OpenAiProvider implements Provider {
         return "";
     }
 
-    private static ResponseStreamEventVisitorAdaptor getVisitor(BlockingQueue<String> blockingQueue, ToolCall toolCall) {
+    private static ResponseStreamEventVisitorAdaptor getVisitor(BlockingQueue<String> blockingQueue,
+                                                                BlockingQueue<ToolCall> toolCallBQ,
+                                                                Map<String, ToolCall> callIdTooCallMap) {
         return new ResponseStreamEventVisitorAdaptor() {
 
             private void putIntoBQ(String delta) {
                 try {
                     blockingQueue.put(delta);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            private void putIntoToolCall(ToolCall toolCall) {
+                try {
+                    toolCallBQ.put(toolCall);
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);
                 }
@@ -285,17 +301,21 @@ public class OpenAiProvider implements Provider {
             @Override
             public Object visitCompleted(ResponseCompletedEvent responseCompletedEvent) {
                 putIntoBQ(POISON);
+                putIntoToolCall(ToolCall.POISON);
                 return null;
             }
 
             @Override
             public Object visitOutputItemAdded(@NotNull ResponseOutputItemAddedEvent responseOutputItemAddedEvent) {
                 if (responseOutputItemAddedEvent.item().isFunctionCall()) {
+                    ToolCall toolCall = new ToolCall();
                     toolCall.setStatus(ToolCall.Status.IN_PROGRESS);
                     System.out.println("工具调用开始传输" + System.currentTimeMillis());
                     ResponseFunctionToolCall functionCall = responseOutputItemAddedEvent.item().asFunctionCall();
                     toolCall.setTool(ToolManager.findByName(functionCall.name()).orElse(ToolManager.BAD_TOOL));
                     toolCall.setCallId(functionCall.callId());
+                    putIntoToolCall(toolCall);
+                    callIdTooCallMap.put(functionCall.callId(), toolCall);
                     System.out.println("toolCall写入完成：" + System.currentTimeMillis());
                 }
                 return null;
@@ -314,6 +334,7 @@ public class OpenAiProvider implements Provider {
                     System.out.println("**********************执行工具开始**********************" + System.currentTimeMillis());
                     String result = ToolManager.execute(functionCall);
 //                    System.out.println(result);
+                    ToolCall toolCall = callIdTooCallMap.getOrDefault(functionCall.callId(), new ToolCall());
                     toolCall.setStatus(ToolCall.Status.COMPLETE);
                     toolCall.setArguments(functionCall.arguments());
                     toolCall.setResult(result);
