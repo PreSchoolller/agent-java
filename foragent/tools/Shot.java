@@ -43,6 +43,7 @@ import java.util.Properties;
  *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
  * 输出：持久化往返 + 删尾/分叉/置顶落盘/主文件元数据化 + 旧格式元数据读取测试（PERSIST_OK）、
+ * 按需加载断言（LAZY_OK：新建 store 不读会话文件、元数据保存不重写会话文件、触达消息才读）、
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、长会话窗口化断言（WINDOWING_OK）+
  * 十六张截图
@@ -177,6 +178,22 @@ public class Shot {
         }
         expect(Files.notExists(dir.resolve("sessions").resolve(fifthId)), "删空会话清残留单文件");
         System.out.println("PERSIST_OK");
+        // 按需加载：启动只读索引，会话文件延迟到首次触达消息才读；未加载的会话被改元数据时
+        // 也不重写会话文件（mtime 不变），触碰消息后仍拿得到磁盘内容
+        Path lazyDir = Files.createTempDirectory("agentjava-lazy");
+        ConversationStore lazyFirst = new ConversationStore(lazyDir.resolve("history.json"));
+        String lazyId = lazyFirst.newConversation().getId();
+        lazyFirst.appendMessage(lazyId, Conversation.ROLE_USER, "按需加载的旧消息");
+        Path lazySession = lazyDir.resolve("sessions").resolve(lazyId);
+        long lazyMtime = Files.getLastModifiedTime(lazySession).toMillis();
+        Thread.sleep(30); // 会话文件先落盘，稍后靠 mtime 判断有没有被多余重写
+        ConversationStore lazySecond = new ConversationStore(lazyDir.resolve("history.json"));
+        lazySecond.rename(lazySecond.getConversations().get(0).getId(), "改名但没读消息");
+        expect(Files.getLastModifiedTime(lazySession).toMillis() == lazyMtime, "元数据保存不重写会话文件");
+        expect(lazySecond.getActive().getMessages().size() == 1
+                && "按需加载的旧消息".equals(lazySecond.getActive().getMessages().get(0).text()),
+                "首次触达时才读消息");
+        System.out.println("LAZY_OK");
 
         // —— 配置方案（AppSettings.at 独立实例，不碰真实 ~/.agentjava/settings.properties） ——
         Path settingsFile = dir.resolve("settings.properties");

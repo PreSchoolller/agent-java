@@ -11,7 +11,9 @@ import java.util.Map;
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 
 /**
- * 会话仓库：内存里的会话列表 + 本地 JSON 持久化（默认 ~/.agentjava/history.json，构造时可换文件）。
+ * 会话仓库：内存里只常驻会话索引（元数据）+ 消息按需加载，本地 JSON 持久化
+ * （默认 ~/.agentjava/history.json，构造时可换文件）。启动只读主文件，
+ * 单会话消息文件在首次触达该会话消息时才读（Conversation.getMessages 触发 loader 读一次）。
  * 列表保持"最近使用在前"，侧栏渲染时置顶会话优先（置顶只改标记不动仓库顺序）。
  * 任何变更都会通知 changeListeners（侧栏刷新、主区切换会话都靠它）。
  */
@@ -74,7 +76,7 @@ public class ConversationStore {
     /** 新建一段对话并设为当前；当前已是空对话时直接复用，避免堆出一串空会话 */
     public Conversation newConversation() {
         Conversation current = findById(activeId);
-        if (current != null && current.isEmpty()) {
+        if (current != null && current.isKnownEmpty()) {
             return current;
         }
         Conversation created = Conversation.create();
@@ -90,8 +92,8 @@ public class ConversationStore {
             return;
         }
         Conversation current = findById(activeId);
-        if (current != null && current.isEmpty()) {
-            conversations.remove(current); // 离开没说过话的空会话时顺手清掉
+        if (current != null && current.isKnownEmpty()) {
+            conversations.remove(current); // 离开没说过话的空会话时顺手清掉（未加载的会话不读盘，也绝不删）
             deleteSessionFile(current.getId());
         }
         activeId = id;
@@ -238,18 +240,19 @@ public class ConversationStore {
         return null;
     }
 
-    /** 空会话不落盘（残留单文件一并清理），避免历史里堆满"新对话"；活跃会话顺带同步到单会话文件 */
+    /** 空会话不落盘（残留单文件一并清理），避免历史里堆满"新对话"；活跃会话顺带同步到单会话文件。
+     *  按需加载下这里只碰元数据：未加载的会话磁盘上就是对的，既不读也不写，绝不被空列表覆盖 */
     public synchronized void save() {
         String currentActiveId = activeId;
         List<Object> array = new ArrayList<>();
         List<Object> messages = null;
         for (Conversation conversation : conversations) {
-            if (conversation.isEmpty()) {
+            if (conversation.isKnownEmpty()) {
                 deleteSessionFile(conversation.getId());
                 continue;
             }
             Map<String, Object> map = serializeConversation(conversation);
-            if (currentActiveId.equals(conversation.getId())) {
+            if (currentActiveId.equals(conversation.getId()) && conversation.isLoaded()) {
                 messages = serializeMessages(conversation);
             }
             array.add(map);
@@ -275,8 +278,9 @@ public class ConversationStore {
     /** 全量落盘 + 单会话文件同步：活跃会话的副本 save() 内已写，这里补刷非活跃会话的变更 */
     private void saveAndSyncSession(Conversation changed) {
         save();
-        // 活跃会话 save() 内已同步；空会话的单文件由 save() 统一清理，这里再补刷只会写回空数组
-        if (changed.getId().equals(activeId) || changed.isEmpty()) {
+        // 活跃会话 save() 内已同步；空会话的单文件由 save() 统一清理，这里再补刷只会写回空数组。
+        // 未加载的会话磁盘上就是对的（rename/setPinned 只改元数据，不碰消息），补刷反而会整文件读进来重写
+        if (!changed.isLoaded() || changed.getId().equals(activeId) || changed.isKnownEmpty()) {
             return;
         }
         syncNewHistory(serializeMessages(changed), changed.getId());
@@ -352,28 +356,41 @@ public class ConversationStore {
                         str(map.get("id")), str(map.get("title")),
                         num(map.get("createdAt")), num(map.get("updatedAt")));
                 conversation.setPinned(Boolean.TRUE.equals(map.get("pinned")));
-                try {
-                    Object messages = JsonKit.parse(Files.readString(sessionsDir.resolve(conversation.getId())));
-                    for (Object raw : (List<?>) messages) {
-                        Map<?, ?> messageMap = (Map<?, ?>) raw;
-                        Message message = messageMap.containsKey("name")
-                                ? new Message(str(messageMap.get("role")), str(messageMap.get("text")),
-                                        num(messageMap.get("time")), str(messageMap.get("name")),
-                                        str(messageMap.get("args")), str(messageMap.get("status")),str(messageMap.get("callId")))
-                                : new Message(str(messageMap.get("role")), str(messageMap.get("text")),
-                                        num(messageMap.get("time")));
-                        conversation.getMessages().add(message);
-                    }
-                } catch (IOException | RuntimeException exception) {
-                    System.err.println("读取单会话历史出错，该会话按无消息加载: " + conversation.getId()
-                            + " " + exception.getMessage());
-                }
+                // 按需加载：启动只读元数据，消息挂回读钩子，首次触达该会话消息时才读单会话文件。
+                // 消息只认单会话文件（文件名=会话 id）——旧格式内嵌消息不迁移，读到坏文件按无消息处理
+                String id = conversation.getId();
+                conversation.attachLoader(() -> readSessionMessages(id));
                 conversations.add(conversation);
             }
             activeId = conversations.isEmpty() ? null : conversations.get(0).getId();
         } catch (Exception e) {
             System.err.println("读取会话历史失败（忽略旧文件）: " + e.getMessage());
         }
+    }
+
+    /** 读单个会话文件并转成消息列表；文件缺失或损坏按无消息处理（只在该会话消息首次被触达时调用一次） */
+    private List<Message> readSessionMessages(String id) {
+        List<Message> messages = new ArrayList<>();
+        Path sessionFile = sessionsDir.resolve(id);
+        if (!Files.exists(sessionFile)) {
+            return messages; // 从没说过话的会话没有单文件，不是错误
+        }
+        try {
+            Object raw = JsonKit.parse(Files.readString(sessionFile));
+            for (Object item : (List<?>) raw) {
+                Map<?, ?> messageMap = (Map<?, ?>) item;
+                messages.add(messageMap.containsKey("name")
+                        ? new Message(str(messageMap.get("role")), str(messageMap.get("text")),
+                                num(messageMap.get("time")), str(messageMap.get("name")),
+                                str(messageMap.get("args")), str(messageMap.get("status")), str(messageMap.get("callId")))
+                        : new Message(str(messageMap.get("role")), str(messageMap.get("text")),
+                                num(messageMap.get("time"))));
+            }
+        } catch (IOException | RuntimeException exception) {
+            System.err.println("读取单会话历史出错，该会话按无消息加载: " + id + " " + exception.getMessage());
+            return new ArrayList<>(); // 半截文件：已解析出来的也不要用，展示空会话比展示半截历史好
+        }
+        return messages;
     }
 
     private static String str(Object value) {

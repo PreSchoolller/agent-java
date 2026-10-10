@@ -3,6 +3,7 @@ package io.github.preschoolller.agentjava.frontend.store;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /** 一段对话：标题 + 消息列表，首条用户消息会自动截取为标题。 */
 public class Conversation {
@@ -17,7 +18,12 @@ public class Conversation {
     private long updatedAt;
     private boolean pinned;
     private final List<Message> messages = new ArrayList<>();
+    /** 消息是否已在内存。新建/分叉出来的会话天然为 true；从索引装载的为 false，首次触达时经 loader 补齐 */
+    private boolean loaded;
+    /** 单会话消息回读钩子（ConversationStore 装载索引时注入，消费一次即清空）；内存新建的会话为 null */
+    private Supplier<List<Message>> loader;
 
+    /** 装载索引用构造：只有元数据，消息等按需加载（attachLoader 注入回读钩子） */
     public Conversation(String id, String title, long createdAt, long updatedAt) {
         this.id = id;
         this.title = title;
@@ -27,7 +33,37 @@ public class Conversation {
 
     public static Conversation create() {
         long now = System.currentTimeMillis();
-        return new Conversation(UUID.randomUUID().toString(), "新对话", now, now);
+        Conversation conversation = new Conversation(UUID.randomUUID().toString(), "新对话", now, now);
+        conversation.loaded = true;
+        return conversation;
+    }
+
+    /** 注入消息回读钩子（包内：只有仓库需要）；必须在首次触达消息之前调用 */
+    void attachLoader(Supplier<List<Message>> loader) {
+        this.loader = loader;
+    }
+
+    /** 消息当前是否已在内存（仓库落盘判断用：未加载的会话磁盘上就是对的，不必重写） */
+    boolean isLoaded() {
+        return loaded;
+    }
+
+    /** 只有"确定加载过且为空"才算空；未加载的会话不触发读盘（落盘不变式：空会话从不进主文件） */
+    boolean isKnownEmpty() {
+        return loaded && messages.isEmpty();
+    }
+
+    /** 首次触达时把磁盘上的消息读进来；loader 读失败按无消息处理（仓库侧已打日志）。
+     *  synchronized 只保证"读一次"：agent 后台线程和 EDT 可能先后触达同一会话 */
+    private synchronized List<Message> ensureLoaded() {
+        if (!loaded) {
+            loaded = true;
+            if (loader != null) {
+                messages.addAll(loader.get());
+                loader = null;
+            }
+        }
+        return messages;
     }
 
     public String getId() {
@@ -55,13 +91,14 @@ public class Conversation {
         this.pinned = pinned;
     }
 
-    /** 内部装载用：返回的是实时列表，请勿在遍历时增删 */
+    /** 返回实时消息列表（未加载时先读盘补齐）；请勿在遍历时增删 */
     public List<Message> getMessages() {
-        return messages;
+        return ensureLoaded();
     }
 
+    /** 消息是否已全在内存；未加载的会话会先触发读盘 */
     public boolean isEmpty() {
-        return messages.isEmpty();
+        return ensureLoaded().isEmpty();
     }
 
     public void setTitle(String title) {
@@ -70,10 +107,11 @@ public class Conversation {
     }
 
     public Message addMessage(String role, String text) {
+        List<Message> loadedMessages = ensureLoaded();
         Message message = new Message(role, text, System.currentTimeMillis());
-        messages.add(message);
+        loadedMessages.add(message);
         touch();
-        if (ROLE_USER.equals(role) && messages.size() == 1) {
+        if (ROLE_USER.equals(role) && loadedMessages.size() == 1) {
             title = abbreviate(text, 20);
         }
         return message;
@@ -82,17 +120,18 @@ public class Conversation {
     /** 追加一条工具调用消息（"运行中"占位，结果由 updateToolResult 回填），返回消息记录 */
     public Message addToolCall(String toolName, String toolArgs, String callId) {
         Message message = new Message(ROLE_TOOL, "", System.currentTimeMillis(), toolName, toolArgs, "running", callId);
-        messages.add(message);
+        ensureLoaded().add(message);
         touch();
         return message;
     }
 
     /** 删除最后一条消息（重新生成流程：后端先删旧回答再重新请求），返回被删消息；空会话返回 null */
     public Message removeLast() {
-        if (messages.isEmpty()) {
+        List<Message> loadedMessages = ensureLoaded();
+        if (loadedMessages.isEmpty()) {
             return null;
         }
-        Message removed = messages.remove(messages.size() - 1);
+        Message removed = loadedMessages.remove(loadedMessages.size() - 1);
         touch();
         return removed;
     }
