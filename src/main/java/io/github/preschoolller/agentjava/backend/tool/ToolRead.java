@@ -40,6 +40,11 @@ public class ToolRead implements Tool {
     }
 
     @Override
+    public boolean readOnly() {
+        return true; // 只读文件，无副作用：编辑模式下不用确认
+    }
+
+    @Override
     public Map<String, Object> schema() {
         return Map.of(
                 "type", "object",

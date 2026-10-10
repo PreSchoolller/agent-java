@@ -127,6 +127,8 @@ final class Ui {
     static Color DANGER;
     /** 危险按钮悬停/按下底色 */
     static Color DANGER_PRESSED;
+    /** 警示文字：工具卡"待确认"徽标这类未出错的提醒（P0-4 权限确认卡） */
+    static Color WARNING;
     /** 滚动条拇指配色：常态浅灰，悬停/拖动加深 */
     static Color SCROLL_THUMB;
     static Color SCROLL_THUMB_ACTIVE;
@@ -179,6 +181,7 @@ final class Ui {
         MARK_BG = theme.markBg;
         DANGER = theme.danger;
         DANGER_PRESSED = theme.dangerPressed;
+        WARNING = theme.warning;
         SCROLL_THUMB = theme.scrollThumb;
         SCROLL_THUMB_ACTIVE = theme.scrollThumbActive;
         // 提示气泡跟随主题；轻量弹层每次 show 时重建，下一次生效

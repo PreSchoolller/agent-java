@@ -45,10 +45,12 @@ import java.util.Properties;
  * 输出：持久化往返 + 删尾/分叉/置顶落盘/主文件元数据化 + 旧格式元数据读取测试（PERSIST_OK）、
  * 按需加载断言（LAZY_OK：新建 store 不读会话文件、元数据保存不重写会话文件、触达消息才读）、
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
- * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、长会话窗口化断言（WINDOWING_OK）+
- * 十六张截图
+ * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
+ * 长会话窗口化断言（WINDOWING_OK）+
+ * 十七张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
- * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片}.png（SHOT_OK）。
+ * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
+ * 17权限确认卡}.png（SHOT_OK）。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
@@ -434,6 +436,50 @@ public class Shot {
                 && "{\"path\": \"src/Demo.java\"}".equals(reloadedTool.toolArgs())
                 && "ok".equals(reloadedTool.toolStatus()), "工具消息落盘往返");
         System.out.println("TOOLCARD_OK");
+
+        // —— 权限确认卡（P0-4 契约：requestApproval(future) → 卡片"待确认"+允许/拒绝 → 点击写 future 并回到运行中） ——
+        // 截图 17：待确认卡。待确认是纯显示态不落库，断言看视图树与 future，落库断言看决完之后的终态
+        Window.ToolCallHandle[] approvalHolder = new Window.ToolCallHandle[1];
+        edt(() -> approvalHolder[0] = WINDOW.addToolCall("write_file", "{\"path\": \"a.txt\"}", "call_approval_1"));
+        java.util.concurrent.CompletableFuture<Boolean>[] decision = new java.util.concurrent.CompletableFuture[1];
+        edt(() -> {
+            decision[0] = new java.util.concurrent.CompletableFuture<>();
+            approvalHolder[0].requestApproval(decision[0]);
+        });
+        Thread.sleep(300);
+        expect(uiHasText("待确认") && uiHasText("允许") && uiHasText("拒绝"), "待确认态徽标与按钮");
+        capture(args[0] + "-17-approval.png");
+        edt(() -> uiClick("允许"));
+        Thread.sleep(300);
+        expect(Boolean.TRUE.equals(decision[0].getNow(null)), "允许按钮写入 future");
+        expect(!uiHasText("待确认") && !uiHasText("允许") && uiHasText("运行中…"), "放行后回到运行中态");
+        edt(() -> approvalHolder[0].finish("写入完成", true, "{\"path\": \"a.txt\"}"));
+        // 拒绝路径：按钮写 false，随后按 provider 的收尾（DENIED_RESULT, 失败）落库
+        Window.ToolCallHandle[] denyHolder = new Window.ToolCallHandle[1];
+        java.util.concurrent.CompletableFuture<Boolean>[] denied = new java.util.concurrent.CompletableFuture[1];
+        edt(() -> {
+            denyHolder[0] = WINDOW.addToolCall("write_file", "{\"path\": \"b.txt\"}", "call_approval_2");
+            denied[0] = new java.util.concurrent.CompletableFuture<>();
+            denyHolder[0].requestApproval(denied[0]);
+        });
+        Thread.sleep(300);
+        edt(() -> uiClick("拒绝"));
+        Thread.sleep(300);
+        expect(Boolean.FALSE.equals(denied[0].getNow(null)), "拒绝按钮写入 future");
+        edt(() -> denyHolder[0].finish("用户拒绝了本次工具调用，工具未执行。", false, "{\"path\": \"b.txt\"}"));
+        // 已结束的卡片再请求审批：必须立刻决成 false，不能让等待方吊死
+        java.util.concurrent.CompletableFuture<Boolean>[] late = new java.util.concurrent.CompletableFuture[1];
+        edt(() -> {
+            late[0] = new java.util.concurrent.CompletableFuture<>();
+            approvalHolder[0].requestApproval(late[0]);
+        });
+        expect(Boolean.FALSE.equals(late[0].getNow(null)), "终态卡请求审批立即拒绝");
+        Thread.sleep(300);
+        int toolBase = store.getActive().getMessages().size() - 4; // 前两张工具卡 + 本段两张
+        expect("ok".equals(store.getActive().getMessages().get(toolBase + 2).toolStatus())
+                && "error".equals(store.getActive().getMessages().get(toolBase + 3).toolStatus()),
+                "允许/拒绝终态落库");
+        System.out.println("APPROVAL_OK");
         // 工具卡演示把主区切到了新会话，切回 Markdown 样例会话供后面 8 号悬停菜单截图用
         edt(() -> WINDOW.getStore().switchTo(c3.getId()));
         Thread.sleep(800);
@@ -676,6 +722,40 @@ public class Shot {
                 collectComponents(child, out);
             }
         }
+    }
+
+    /** 窗口里是否存在显示该文本的标签/按钮（审批卡断言用；自己跳 EDT，Swing 树不许在后台读） */
+    private static boolean uiHasText(String text) throws Exception {
+        boolean[] found = new boolean[1];
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.AbstractButton button && text.equals(button.getText())) {
+                    found[0] = true;
+                    return;
+                }
+                if (component instanceof javax.swing.JLabel label && text.equals(label.getText())) {
+                    found[0] = true;
+                    return;
+                }
+            }
+        });
+        return found[0];
+    }
+
+    /** 点击显示该文本的按钮（必须在 EDT 里调用，与真实点击同一入口） */
+    private static void uiClick(String text) {
+        List<Component> all = new ArrayList<>();
+        collectComponents(WINDOW, all);
+        for (Component component : all) {
+            if (component instanceof javax.swing.JButton button
+                    && text.equals(button.getText()) && button.isShowing() && button.isEnabled()) {
+                button.doClick();
+                return;
+            }
+        }
+        throw new AssertionError("没找到可点击的按钮: " + text);
     }
 
     /** 全窗口里的 JTextPane 数量：物化窗口断言用（未窗口化的 300 条会话会有近千个） */

@@ -29,12 +29,14 @@ import com.openai.models.responses.ResponseReasoningTextDoneEvent;
 import com.openai.models.responses.ResponseStreamEvent;
 import com.openai.models.responses.ResponseTextDeltaEvent;
 import com.openai.services.blocking.ResponseService;
+import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.ResponseStreamEventVisitorAdaptor;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
+import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.provider.common.event.BaseEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDeltaEvent;
@@ -210,7 +212,8 @@ public class OpenAiProvider implements Provider {
         ResponseCreateParams responseCreateParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         StreamResponse<ResponseStreamEvent> response = service.createStreaming(responseCreateParams);
-        ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue);
+        ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue,
+                promptParams.getApprovalGate(), promptParams.getAgentMode());
         new Thread(() -> {
             try {
                 response.stream()
@@ -260,7 +263,9 @@ public class OpenAiProvider implements Provider {
         return "";
     }
 
-    private static ResponseStreamEventVisitorAdaptor getVisitor(BlockingQueue<BaseEvent> blockingQueue) {
+    private static ResponseStreamEventVisitorAdaptor getVisitor(BlockingQueue<BaseEvent> blockingQueue,
+                                                                 ToolApprovalGate approvalGate,
+                                                                 AgentMode agentMode) {
         return new ResponseStreamEventVisitorAdaptor() {
 
             private void putIntoBQ(BaseEvent baseEvent) {
@@ -346,6 +351,12 @@ public class OpenAiProvider implements Provider {
                     toolCall.setCallId(functionCall.callId());
                     putIntoBQ(new FunctionToolCallDoneEvent(functionCall.callId(), toolCall));
                     ThreadPoolFactory.getExecutor().execute(() -> {
+                        // 审批在池线程上做（可阻塞等用户点击）；读流线程只管转发事件，绝不停顿
+                        if (approvalGate != null && !approvalGate.allow(toolCall, agentMode)) {
+                            toolCall.setResult(ToolApprovalGate.DENIED_RESULT);
+                            toolCall.setStatus(ToolCall.Status.INCOMPLETE);
+                            return;
+                        }
                         try {
                             toolCall.setResult(ToolManager.execute(functionCall));
                             toolCall.setStatus(ToolCall.Status.COMPLETE);

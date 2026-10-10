@@ -41,6 +41,11 @@ public class EmptyTool implements Tool {
     }
 
     @Override
+    public boolean readOnly() {
+        return true; // 占位工具：执行体是空的，不参与权限判断
+    }
+
+    @Override
     public String execute(String arguments) {
         return null;
     }

@@ -14,6 +14,18 @@ public class PromptParams {
      */
     private boolean justChat;
 
+    /**
+     * 本轮的权限模式（输入区左下角），审批策略据此决定要不要问（AgentMode#requiresApproval）。
+     */
+    private AgentMode agentMode;
+
+    /**
+     * 工具执行前的审批钩子（P0-4 权限确认卡）：返回 false 表示未放行，工具不执行，
+     * 拒绝文本作为工具结果回给模型。允许实现里阻塞（provider 会在自己的执行线程上调用，
+     * 绝不在 SSE 读流线程上）。null = 不询问，直接执行。
+     */
+    private ToolApprovalGate approvalGate;
+
     private PromptParams() {}
 
     public String getModel() {
@@ -30,6 +42,15 @@ public class PromptParams {
 
     public Boolean getJustChat() {
         return justChat;
+    }
+
+    /** 未显式设置时按较严的 EDIT 处理（漏接线只会多问一次，不会不问就执行） */
+    public AgentMode getAgentMode() {
+        return agentMode == null ? AgentMode.EDIT : agentMode;
+    }
+
+    public ToolApprovalGate getApprovalGate() {
+        return approvalGate;
     }
 
     public static PromptParams.Builder builder() {
@@ -53,6 +74,8 @@ public class PromptParams {
             base.re = promptParams.re;
             base.roleMessages = promptParams.roleMessages;
             base.justChat = promptParams.justChat;
+            base.agentMode = promptParams.agentMode;
+            base.approvalGate = promptParams.approvalGate;
         }
 
         private final PromptParams base;
@@ -78,6 +101,16 @@ public class PromptParams {
 
         public Builder justChat(boolean justChat) {
             base.justChat = justChat;
+            return this;
+        }
+
+        public Builder agentMode(AgentMode agentMode) {
+            base.agentMode = agentMode;
+            return this;
+        }
+
+        public Builder approvalGate(ToolApprovalGate approvalGate) {
+            base.approvalGate = approvalGate;
             return this;
         }
     }

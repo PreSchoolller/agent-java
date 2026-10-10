@@ -1,10 +1,12 @@
 package io.github.preschoolller.agentjava;
 
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
+import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.RoleEnum;
+import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.provider.common.event.BaseEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDeltaEvent;
@@ -32,8 +34,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Main {
@@ -75,6 +80,7 @@ public class Main {
         List<PromptParams.RoleMessage> history = buildRoleMessages(conversation);
         String model = window.getSelectedModel();
         ReasoningEffortEnum re = window.getSelectedEffort(); // 模型与思考强度取输入区右下角的选择（对话级设置）
+        AgentMode mode = window.getSelectedMode(); // 权限模式快照：本轮中途改下拉框不影响已发出的请求
         Window.AiStream stream = window.addAiMessage(""); // 这一步已在 EDT 上（输入/按钮回调都在 EDT）
         CompletableFuture.runAsync(() -> {
             BlockingQueue<BaseEvent> events = null;
@@ -84,7 +90,9 @@ public class Main {
             Map<String, StringBuilder> argsByCallId = new HashMap<>();
             Set<String> doneCalls = new HashSet<>();
             try {
-                PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re);
+                PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
+                        .agentMode(mode).approvalGate((toolCall, agentMode) ->
+                                requestToolApproval(toolCall, agentMode, callIdHandleMap, cancelled));
                 for (PromptParams.RoleMessage roleMessage : history) {
                     paramsBuilder.roleMessages(roleMessage);
                 }
@@ -163,6 +171,45 @@ public class Main {
                 }
             }
         });
+    }
+
+    /**
+     * 审批钩子（P0-4 权限确认卡）：在 provider 的线程池线程上被调用（不在 SSE 读流线程、更不在 EDT），
+     * 所以可以在这里阻塞等用户点"允许/拒绝"。策略由 AgentMode 定：该问才问，不该问直接放行。
+     * 等点击时每 200ms 醒来看一眼 cancelled——用户点停止不会把等待者吊死。
+     */
+    private static boolean requestToolApproval(ToolCall toolCall, AgentMode mode,
+                                               Map<String, Window.ToolCallHandle> callIdHandleMap,
+                                               AtomicBoolean cancelled) {
+        if (!mode.requiresApproval(toolCall.getTool())) {
+            return true;
+        }
+        Window.ToolCallHandle handle = callIdHandleMap.get(toolCall.getCallId());
+        if (handle == null || cancelled.get()) {
+            return false; // 没有卡片可挂 / 已经叫停：宁可拦下也不静默执行
+        }
+        CompletableFuture<Boolean> decision = new CompletableFuture<>();
+        try {
+            SwingUtilities.invokeAndWait(() -> handle.requestApproval(decision));
+            while (!cancelled.get()) {
+                try {
+                    return Boolean.TRUE.equals(decision.get(200, TimeUnit.MILLISECONDS));
+                } catch (TimeoutException stillWaiting) {
+                    // 用户还没点，继续等
+                } catch (CancellationException rejected) {
+                    return false;
+                } catch (ExecutionException impossible) {
+                    return false; // 只有 complete(true/false)，正常到不了
+                }
+            }
+            decision.cancel(true); // 用户点了停止：终结等待，provider 会把这次调用按未放行收尾
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (InvocationTargetException e) {
+            return false;
+        }
     }
 
     private static void appendAiMessage(String chunk, Window.AiStream stream, AtomicBoolean cancelled) {

@@ -66,6 +66,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -195,6 +196,12 @@ public class Window extends JFrame {
         JComponent content;
         /** 工具卡头部的参数摘要标签（参数流式上屏时原地改文本）；drainCard 时置 null */
         JLabel toolArgsLabel;
+        /**
+         * 工具审批（P0-4 权限确认卡）：挂卡片而不是挂按钮——卡片滚出视口会被 drain、换回视口
+         * 会重建，按钮随时是新的，等待放行的后端线程只认这个 future。未决（!isDone()）画
+         * "待确认 + 允许/拒绝"，已决回到常规运行中态。drainCard 不清它，重建头部要据它画按钮。
+         */
+        CompletableFuture<Boolean> approval;
         JButton regenerate;
         JButton menu;
         boolean materialized;
@@ -575,6 +582,16 @@ public class Window extends JFrame {
 
         /** 回填执行结果并结束：卡片翻转到完成/失败态，结果落库 */
         void finish(String result, boolean success, String arguments);
+
+        /**
+         * 工具执行前需要用户放行（P0-4 权限确认卡）：卡片头部翻到"待确认"态，
+         * 出"允许/拒绝"两按钮；点击把 true/false 写进 decision。卡片只负责这个 future 的写入，
+         * 批了要不要执行、怎么执行由等待方（后端线程）决定，卡片不关心。
+         * 待确认只是显示态：不落库（崩了重启按"运行中"残留看，同 P0-5 的边界）。
+         * 句柄已 finish（停止/异常清理）时直接判拒绝，绝不让调用线程挂在永没人点的卡上。
+         * 须在 EDT 上调用。
+         */
+        void requestApproval(CompletableFuture<Boolean> decision);
     }
 
     /**
@@ -652,15 +669,25 @@ public class Window extends JFrame {
             }
             card.message = updated;
             if (conversationId.equals(displayedConvId) && messageCards.contains(card)) {
-                boolean follow = isNearBottom();
-                drainCard(card);
-                fillCard(card);
-                fitCardHeight(messageCards.indexOf(card));
-                if (follow) {
-                    scrollToBottom();
-                }
+                rebuildCard(card);
             }
             System.out.println("工具渲染真结尾：" + System.currentTimeMillis());
+        }
+
+        @Override
+        public void requestApproval(CompletableFuture<Boolean> decision) {
+            if (finished) {
+                // 卡片已终结（停止/异常清理抢在前面）：不会再有人点按钮，直接判否，别挂住等待方
+                decision.complete(false);
+                return;
+            }
+            card.approval = decision;
+            if (conversationId.equals(displayedConvId)) {
+                updateMaterialization(); // 待确认卡一般是最后一张，窗口化下保证它已物化
+                if (card.materialized) {
+                    rebuildCard(card); // 头部要换"待确认"+两按钮，结构变了走重擦重建
+                }
+            }
         }
     }
 
@@ -880,10 +907,17 @@ public class Window extends JFrame {
         messageCard.toolArgsLabel = argsLabel;
         boolean running = "running".equals(message.toolStatus());
         boolean error = "error".equals(message.toolStatus());
-        JLabel statusLabel = new JLabel(running ? "运行中…" : error ? "失败" : "完成");
+        // 待确认（P0-4 权限确认卡）：卡片手里攥着一个还没被点的审批 future。
+        // 徽标沿用三态色位，警示色比"失败"收敛；旁边挂"允许/拒绝"两按钮
+        boolean pending = running && messageCard.approval != null && !messageCard.approval.isDone();
+        JLabel statusLabel = new JLabel(pending ? "待确认" : running ? "运行中…" : error ? "失败" : "完成");
         statusLabel.setFont(new Font("微软雅黑", Font.PLAIN, 11));
-        statusLabel.setForeground(running ? Ui.ACCENT : error ? Ui.DANGER : Ui.TEXT_SECONDARY);
+        statusLabel.setForeground(pending ? Ui.WARNING : running ? Ui.ACCENT : error ? Ui.DANGER : Ui.TEXT_SECONDARY);
         header.add(statusLabel);
+        if (pending) {
+            header.add(createApprovalButton(messageCard, "允许", true));
+            header.add(createApprovalButton(messageCard, "拒绝", false));
+        }
 
         JTextArea result = Ui.displayTextArea();
         result.setFont(new Font("Monospaced", Font.PLAIN, 12));
@@ -923,6 +957,20 @@ public class Window extends JFrame {
         messageCard.toolArgsLabel = null;
         messageCard.regenerate = null;
         messageCard.menu = null;
+    }
+
+    /** 工具卡结构变化（待确认 ↔ 运行中 ↔ 终态）时重擦重建内容并重测高度；用户贴着底部就保持贴底 */
+    private void rebuildCard(MessageCard card) {
+        if (!messageCards.contains(card)) {
+            return;
+        }
+        boolean follow = isNearBottom();
+        drainCard(card);
+        fillCard(card);
+        fitCardHeight(messageCards.indexOf(card));
+        if (follow) {
+            scrollToBottom();
+        }
     }
 
     /**
@@ -1090,6 +1138,23 @@ public class Window extends JFrame {
         button.setPreferredSize(new Dimension(76, 22));
         button.setToolTipText("删除这条回复并让 AI 重新回答");
         button.addActionListener(e -> requestRegenerate());
+        return button;
+    }
+
+    /** 权限确认卡（P0-4）的"允许/拒绝"：写入 decision 后重建卡片（待确认态消失，回到运行中/终态）。
+     *  等待放行的后端线程读同一个 future，卡片只管写入，不管执行 */
+    private JButton createApprovalButton(MessageCard card, String text, boolean approved) {
+        JButton button = approved ? Ui.primaryButton(text) : Ui.dangerButton(text);
+        button.setFont(new Font("微软雅黑", Font.BOLD, 11));
+        button.setPreferredSize(new Dimension(52, 22));
+        button.addActionListener(e -> {
+            CompletableFuture<Boolean> decision = card.approval;
+            if (decision == null || decision.isDone()) {
+                return; // 已被另一击/外层清理决掉：按钮理论上随重建消失了，兜底不双写
+            }
+            decision.complete(approved);
+            rebuildCard(card);
+        });
         return button;
     }
 

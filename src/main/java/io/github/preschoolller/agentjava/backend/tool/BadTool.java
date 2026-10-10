@@ -38,6 +38,11 @@ public class BadTool implements Tool {
     }
 
     @Override
+    public boolean readOnly() {
+        return true; // 占位工具：什么都不做，只回一句错误，没必要为它弹确认
+    }
+
+    @Override
     public String execute(String arguments) {
         return "unknown tool";
     }
