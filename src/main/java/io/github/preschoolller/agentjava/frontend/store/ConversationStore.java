@@ -17,12 +17,12 @@ import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
  */
 public class ConversationStore {
 
-    /** 历史文件格式版本：v0 = 顶层数组；v1 = {"version":1,"conversations":[...]}。以后加字段先升它再改 load */
+    /** 历史文件格式版本：v1 = {"version":1,"conversations":[...]}。以后加字段先升它再改 load */
     private static final int HISTORY_VERSION = 1;
 
     private final Path file;
     // 单会话文件目录（文件名即会话 id）：save() 同步活跃会话，非活跃会话的变更由 saveAndSyncSession 补刷
-    private final Path newHistoryParent;
+    private final Path sessionsDir;
     private final List<Conversation> conversations = new ArrayList<>();
     private String activeId;
     private final List<Runnable> changeListeners = new ArrayList<>();
@@ -33,7 +33,7 @@ public class ConversationStore {
 
     public ConversationStore(Path file) {
         this.file = file;
-        this.newHistoryParent = file.getParent().toAbsolutePath().resolve("sessions");
+        this.sessionsDir = file.getParent().toAbsolutePath().resolve("sessions");
         load();
     }
 
@@ -313,9 +313,9 @@ public class ConversationStore {
     private void syncNewHistory(List<Object> messages, String conversationId) {
         // 同步保存单个会话到 sessions/<会话id>，同样走临时文件 + 原子改名
         try {
-            Path tempPath = newHistoryParent.resolve("temp-" + conversationId);
-            Path realPath = newHistoryParent.resolve(conversationId);
-            Files.createDirectories(newHistoryParent);
+            Path tempPath = sessionsDir.resolve("temp-" + conversationId);
+            Path realPath = sessionsDir.resolve(conversationId);
+            Files.createDirectories(sessionsDir);
             Files.writeString(tempPath, JsonKit.write(messages));
             Files.move(tempPath, realPath, ATOMIC_MOVE);
         } catch (IOException e) {
@@ -325,7 +325,7 @@ public class ConversationStore {
 
     private void deleteSessionFile(String id) {
         try {
-            Files.deleteIfExists(newHistoryParent.resolve(id));
+            Files.deleteIfExists(sessionsDir.resolve(id));
         } catch (IOException e) {
             System.err.println("删除单会话历史失败，id：" + id + " " + e.getMessage());
         }
@@ -337,8 +337,6 @@ public class ConversationStore {
         }
         try {
             Object root = JsonKit.parse(Files.readString(file));
-            // v0 旧格式顶层数组直接当会话列表读；v1 起从 conversations 字段取。
-            // 以后升版本时在 version 分支里做字段迁移，别把用户旧历史读丢。
             List<?> items = null;
             if (root instanceof Map<?, ?> map) {
                 items = (List<?>) map.get("conversations");
@@ -355,7 +353,7 @@ public class ConversationStore {
                         num(map.get("createdAt")), num(map.get("updatedAt")));
                 conversation.setPinned(Boolean.TRUE.equals(map.get("pinned")));
                 try {
-                    Object messages = JsonKit.parse(Files.readString(newHistoryParent.resolve(conversation.getId())));
+                    Object messages = JsonKit.parse(Files.readString(sessionsDir.resolve(conversation.getId())));
                     for (Object raw : (List<?>) messages) {
                         Map<?, ?> messageMap = (Map<?, ?>) raw;
                         Message message = messageMap.containsKey("name")
