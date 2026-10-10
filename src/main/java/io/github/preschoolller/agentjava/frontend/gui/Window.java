@@ -193,6 +193,8 @@ public class Window extends JFrame {
         Message message;
         /** 物化后才存在的组件；drainCard 时置 null */
         JComponent content;
+        /** 工具卡头部的参数摘要标签（参数流式上屏时原地改文本）；drainCard 时置 null */
+        JLabel toolArgsLabel;
         JButton regenerate;
         JButton menu;
         boolean materialized;
@@ -568,13 +570,17 @@ public class Window extends JFrame {
      * agent 工具调用的展示句柄：addToolCall 返回。所有方法须在 EDT 上调用。
      */
     public interface ToolCallHandle {
+        /** 参数增量上屏：只更新卡片显示（内部 120ms 节流），不落库；终态参数以 finish 为准 */
+        void appendArgs(String delta);
+
         /** 回填执行结果并结束：卡片翻转到完成/失败态，结果落库 */
         void finish(String result, boolean success, String arguments);
     }
 
     /**
      * 往当前对话追加一张工具调用卡片（"运行中"状态）。agent 循环里每次调工具：
-     * 先 addToolCall(工具名, 参数摘要) 出卡，执行完 handle.finish(结果文本, 是否成功) 回填。
+     * 先 addToolCall(工具名, 参数摘要) 出卡，参数逐段生成时 handle.appendArgs(增量) 上屏
+     * （只显示不落库），执行完 handle.finish(结果文本, 是否成功, 完整参数) 回填终态。
      * 与 AiStream 对称：后端在 EDT 上调用。须在 EDT 上调用。
      */
     public ToolCallHandle addToolCall(String toolName, String argsSummary, String callId) {
@@ -585,17 +591,49 @@ public class Window extends JFrame {
         return new ToolCallImpl(store.getActive().getId(), message, card);
     }
 
-    /** 工具调用卡的落库与刷新：结果写回仓库（换了新记录对象），卡片在显示中就原地重建成终态 */
+    /** 工具调用卡的落库与刷新：参数增量只显示不写盘（120ms 节流，与 AiStream 同款），finish 时终态参数与结果一起落库 */
     private final class ToolCallImpl implements ToolCallHandle {
         private final String conversationId;
         private final Message message;
         private final MessageCard card;
+        /** 已到达的参数增量：只攒在内存，卡片滚出视口后重新物化时也从这里画 */
+        private final StringBuilder args = new StringBuilder();
+        private final Timer argsTimer = new Timer(120, e -> flushArgs());
         private boolean finished;
 
         private ToolCallImpl(String conversationId, Message message, MessageCard card) {
             this.conversationId = conversationId;
             this.message = message;
             this.card = card;
+            argsTimer.setRepeats(false);
+        }
+
+        @Override
+        public void appendArgs(String delta) {
+            if (finished || delta == null || delta.isEmpty()) {
+                return;
+            }
+            args.append(delta);
+            if (!argsTimer.isRunning()) {
+                argsTimer.start(); // EDT 上的 Swing Timer，到期统一刷一次头部
+            }
+        }
+
+        /** 把攒下的参数刷到卡片头部；不动卡片高度（头部单行，摘要长度只影响标签宽度） */
+        private void flushArgs() {
+            if (finished || args.length() == 0) {
+                return;
+            }
+            // 同步卡面消息：卡片此刻没物化也没关系，fillCard 重建头部时读的就是这份
+            Message m = card.message;
+            card.message = new Message(m.role(), m.text(), m.time(), m.toolName(),
+                    args.toString(), m.toolStatus(), m.callId());
+            if (!conversationId.equals(displayedConvId) || !card.materialized || card.toolArgsLabel == null) {
+                return;
+            }
+            card.toolArgsLabel.setText(toolArgsSummary(args.toString()));
+            card.card.revalidate();
+            card.card.repaint();
         }
 
         @Override
@@ -605,7 +643,9 @@ public class Window extends JFrame {
                 return;
             }
             finished = true;
-            Message updated = store.completeToolCall(conversationId, message, result, success, arguments);
+            argsTimer.stop();
+            String finalArgs = (arguments == null || arguments.isEmpty()) ? args.toString() : arguments;
+            Message updated = store.completeToolCall(conversationId, message, result, success, finalArgs);
             System.out.println("工具入库结尾：" + System.currentTimeMillis());
             if (updated == null) {
                 return;
@@ -758,7 +798,7 @@ public class Window extends JFrame {
 
         JComponent content;
         if (tool) {
-            content = buildToolContent(message);
+            content = buildToolContent(messageCard);
         } else if (user) {
             JTextPane textPane = Ui.displayTextPane();
             textPane.setFont(new Font("微软雅黑", Font.PLAIN, AppSettings.get().getContentFontSize()));
@@ -810,8 +850,18 @@ public class Window extends JFrame {
         refreshRegenerateButtons();
     }
 
+    /** 头部一行放不下完整参数：折行压扁、超长截断，只当摘要看 */
+    private static String toolArgsSummary(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return "";
+        }
+        String flat = raw.replace("\n", " ");
+        return flat.length() > 80 ? flat.substring(0, 80) + "…" : flat;
+    }
+
     /** 工具调用卡内容：一行头部（"工具"角色标 + 工具名 + 参数摘要（超长截断）+ 状态徽标）+ 结果文本区（等宽，超长内部滚动） */
-    private JComponent buildToolContent(Message message) {
+    private JComponent buildToolContent(MessageCard messageCard) {
+        Message message = messageCard.message;
         JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         header.setOpaque(false);
         JLabel roleLabel = new JLabel("工具");
@@ -822,15 +872,12 @@ public class Window extends JFrame {
         nameLabel.setFont(new Font("Monospaced", Font.BOLD, 13));
         nameLabel.setForeground(Ui.TEXT);
         header.add(nameLabel);
-        String args = message.toolArgs() == null ? "" : message.toolArgs();
-        if (!args.isEmpty()) {
-            args = args.length() > 80 ? args.substring(0, 80) + "…" : args;
-            args = args.replace("\n", " ");
-            JLabel argsLabel = new JLabel(args);
-            argsLabel.setFont(new Font("Monospaced", Font.PLAIN, 12));
-            argsLabel.setForeground(Ui.TEXT_SECONDARY);
-            header.add(argsLabel);
-        }
+        // 参数标签恒建（哪怕此刻还没有参数）：参数流式到达时原地改文本，不用重建头部
+        JLabel argsLabel = new JLabel(toolArgsSummary(message.toolArgs()));
+        argsLabel.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        argsLabel.setForeground(Ui.TEXT_SECONDARY);
+        header.add(argsLabel);
+        messageCard.toolArgsLabel = argsLabel;
         boolean running = "running".equals(message.toolStatus());
         boolean error = "error".equals(message.toolStatus());
         JLabel statusLabel = new JLabel(running ? "运行中…" : error ? "失败" : "完成");
@@ -873,6 +920,7 @@ public class Window extends JFrame {
             messageCard.markdown.dematerialize();
         }
         messageCard.content = null;
+        messageCard.toolArgsLabel = null;
         messageCard.regenerate = null;
         messageCard.menu = null;
     }

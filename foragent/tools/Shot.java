@@ -382,26 +382,34 @@ public class Shot {
                 .getMessages().get(store.getActive().getMessages().size() - 1).text()), "流式落库");
         System.out.println("STREAM_OK");
 
-        // —— agent 工具调用卡（前端先行，后端契约：addToolCall(名, 参数摘要) → finish(结果, 是否成功)） ——
-        // 截图 16：一张运行中 + 一张完成；跑完断言落库与落盘往返
+        // —— agent 工具调用卡（契约：addToolCall(名, 参数摘要) → appendArgs(增量) 流式显示 → finish(结果, 是否成功, 完整参数)） ——
+        // 截图 16：一张运行中只显示了一半参数 + 一张完成；跑完断言落库与落盘往返
         Conversation[] toolConvHolder = new Conversation[1];
         edt(() -> toolConvHolder[0] = store.newConversation());
         Conversation cTool = toolConvHolder[0];
         Thread.sleep(1000); // fireChanged 已把主区切到新会话
         Window.ToolCallHandle[] toolHolder = new Window.ToolCallHandle[1];
-        edt(() -> toolHolder[0] = WINDOW.addToolCall("read_file", "{\"path\": \"src/Demo.java\"}", "call_2217929885810011"));
-        Thread.sleep(500);
-        capture(args[0] + "-16-tool-card.png"); // "运行中…"状态
-        edt(() -> toolHolder[0].finish("public class Demo {\n    private Buffer buffer;\n}", true, "{\"path\": \"src/Demo.java\"}"));
+        edt(() -> toolHolder[0] = WINDOW.addToolCall("read_file", "", "call_2217929885810011"));
+        edt(() -> toolHolder[0].appendArgs("{\"path\": "));
+        Thread.sleep(200);
+        edt(() -> toolHolder[0].appendArgs("\"src/Demo."));
+        Thread.sleep(200);
+        capture(args[0] + "-16-tool-card.png"); // "运行中…"状态，参数已流式显示出一半
+        edt(() -> toolHolder[0].appendArgs("java\"}"));
+        Thread.sleep(200);
+        // finish 传空参数：终态参数应回退到流式累积的完整 JSON（argsByCallId 兜底路径）
+        edt(() -> toolHolder[0].finish("public class Demo {\n    private Buffer buffer;\n}", true, ""));
         edt(() -> {
             Window.ToolCallHandle handle = WINDOW.addToolCall("read_file", "{\"path\": \"missing.txt\"}", "call_2217929885810012");
-            handle.finish("错误: 文件不存在", false, "{\"path\": \"src/Demo.java\"}");
+            handle.finish("错误: 文件不存在", false, "{\"path\": \"missing.txt\"}");
         });
         Thread.sleep(400);
         expect(store.getActive().getMessages().size() == 2, "工具卡消息数");
         expect(store.getActive().getMessages().get(0).isToolCall()
                 && "ok".equals(store.getActive().getMessages().get(0).toolStatus())
                 && store.getActive().getMessages().get(0).text().contains("Demo"), "工具结果落库");
+        expect("{\"path\": \"src/Demo.java\"}".equals(store.getActive().getMessages().get(0).toolArgs()),
+                "流式参数累积后 finish 空参回退落库");
         expect("error".equals(store.getActive().getMessages().get(1).toolStatus()), "失败态落库");
         ConversationStore toolReload = new ConversationStore(dir.resolve("shot.json"));
         Message reloadedTool = toolReload.getActive().getMessages().get(0);

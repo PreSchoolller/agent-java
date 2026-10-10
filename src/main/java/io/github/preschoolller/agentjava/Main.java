@@ -77,10 +77,11 @@ public class Main {
         ReasoningEffortEnum re = window.getSelectedEffort(); // 模型与思考强度取输入区右下角的选择（对话级设置）
         Window.AiStream stream = window.addAiMessage(""); // 这一步已在 EDT 上（输入/按钮回调都在 EDT）
         CompletableFuture.runAsync(() -> {
-            boolean stopped = false;
             BlockingQueue<BaseEvent> events = null;
             List<CompletableFuture<Void>> toolCalls = new ArrayList<>();
             Map<String, Window.ToolCallHandle> callIdHandleMap = new HashMap<>();
+            Map<String, String> callIdByItemId = new HashMap<>();
+            Map<String, StringBuilder> argsByCallId = new HashMap<>();
             Set<String> doneCalls = new HashSet<>();
             try {
                 PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re);
@@ -105,8 +106,21 @@ public class Main {
                         appendAiMessage("", stream, cancelled);
                     } else if (event instanceof FunctionToolCallStartEvent e) {
                         addToolCall(window, e.name(), e.callId(), callIdHandleMap);
-                    } else if (event instanceof FunctionToolCallDeltaEvent) {
-                        // TODO 加一个工具卡片参数更新功能
+                        callIdByItemId.put(e.id(), e.callId());
+                        argsByCallId.put(e.callId(), new StringBuilder());
+                    } else if (event instanceof FunctionToolCallDeltaEvent e) {
+                        // 参数增量：事件带的是条目 id，用 Start 事件建立的映射换回 callId 找卡片
+                        String callId = callIdByItemId.get(e.id());
+                        Window.ToolCallHandle handle = callId == null ? null : callIdHandleMap.get(callId);
+                        if (handle == null || cancelled.get()) {
+                            continue;
+                        }
+                        StringBuilder buffered = argsByCallId.get(callId);
+                        if (buffered != null) {
+                            buffered.append(e.argsDelta()); // 本地累积（后台线程独写），给终态兜底
+                        }
+                        String delta = e.argsDelta();
+                        SwingUtilities.invokeLater(() -> handle.appendArgs(delta)); // 卡片 120ms 节流显示
                     } else if (event instanceof FunctionToolCallDoneEvent e) {
                         Window.ToolCallHandle toolCallHandle = callIdHandleMap.get(e.callId());
                         ToolCall toolCall = e.toolCall();
@@ -133,10 +147,11 @@ public class Main {
                     if (doneCalls.contains(callId)) {
                         continue;
                     }
+                    StringBuilder buffered = argsByCallId.get(callId);
+                    String partialArgs = buffered == null ? "" : buffered.toString();
                     SwingUtilities.invokeLater(() -> {
                         String result = cancelled.get() ? "用户手动取消" : "Error: dangling function call without corresponding item done event";
-                        // TODO 待前端实现流式显示工具参数功能后整改IGNORE
-                        callIdHandleMap.get(callId).finish(result, false, "IGNORED");
+                        callIdHandleMap.get(callId).finish(result, false, partialArgs);
                     });
                 }
                 toolCalls.forEach(CompletableFuture::join);
