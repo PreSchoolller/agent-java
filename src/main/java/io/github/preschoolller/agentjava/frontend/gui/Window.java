@@ -29,27 +29,22 @@ import javax.swing.text.View;
 import java.awt.BorderLayout;
 import java.awt.AWTEvent;
 import java.awt.AWTException;
-import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.EventQueue;
 import java.awt.FlowLayout;
 import java.awt.Font;
-import java.awt.FontMetrics;
 import java.awt.GraphicsEnvironment;
-import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.HeadlessException;
 import java.awt.IllegalComponentStateException;
-import java.awt.Image;
 import java.awt.Insets;
 import java.awt.MouseInfo;
 import java.awt.PointerInfo;
 import java.awt.Point;
 import java.awt.Rectangle;
-import java.awt.RenderingHints;
 import java.awt.LayoutManager2;
 import java.awt.SystemTray;
 import java.awt.Toolkit;
@@ -574,7 +569,7 @@ public class Window extends JFrame {
      */
     public interface ToolCallHandle {
         /** 回填执行结果并结束：卡片翻转到完成/失败态，结果落库 */
-        void finish(String result, boolean success);
+        void finish(String result, boolean success, String arguments);
     }
 
     /**
@@ -604,13 +599,13 @@ public class Window extends JFrame {
         }
 
         @Override
-        public void finish(String result, boolean success) {
+        public void finish(String result, boolean success, String arguments) {
             System.out.println("工具渲染结尾：" + System.currentTimeMillis());
             if (finished) {
                 return;
             }
             finished = true;
-            Message updated = store.completeToolCall(conversationId, message, result, success);
+            Message updated = store.completeToolCall(conversationId, message, result, success, arguments);
             System.out.println("工具入库结尾：" + System.currentTimeMillis());
             if (updated == null) {
                 return;

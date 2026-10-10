@@ -213,12 +213,12 @@ public class ConversationStore {
     }
 
     /** 工具执行完成后的落库：回填结果并写终态（按消息对象同一性查找），返回替换后的新记录 */
-    public Message completeToolCall(String id, Message target, String result, boolean success) {
+    public Message completeToolCall(String id, Message target, String result, boolean success, String arguments) {
         Conversation conversation = findById(id);
         if (conversation == null) {
             return null;
         }
-        Message updated = conversation.updateToolResult(target, result, success);
+        Message updated = conversation.updateToolResult(target, result, success, arguments);
         if (updated != null) {
             saveAndSyncSession(conversation);
             fireChanged();

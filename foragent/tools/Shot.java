@@ -389,13 +389,13 @@ public class Shot {
         Conversation cTool = toolConvHolder[0];
         Thread.sleep(1000); // fireChanged 已把主区切到新会话
         Window.ToolCallHandle[] toolHolder = new Window.ToolCallHandle[1];
-        edt(() -> toolHolder[0] = WINDOW.addToolCall("read_file", "{\"path\": \"src/Demo.java\"}"));
+        edt(() -> toolHolder[0] = WINDOW.addToolCall("read_file", "{\"path\": \"src/Demo.java\"}", "call_2217929885810011"));
         Thread.sleep(500);
         capture(args[0] + "-16-tool-card.png"); // "运行中…"状态
-        edt(() -> toolHolder[0].finish("public class Demo {\n    private Buffer buffer;\n}", true));
+        edt(() -> toolHolder[0].finish("public class Demo {\n    private Buffer buffer;\n}", true, "{\"path\": \"src/Demo.java\"}"));
         edt(() -> {
-            Window.ToolCallHandle handle = WINDOW.addToolCall("read_file", "{\"path\": \"missing.txt\"}");
-            handle.finish("错误: 文件不存在", false);
+            Window.ToolCallHandle handle = WINDOW.addToolCall("read_file", "{\"path\": \"missing.txt\"}", "call_2217929885810012");
+            handle.finish("错误: 文件不存在", false, "{\"path\": \"src/Demo.java\"}");
         });
         Thread.sleep(400);
         expect(store.getActive().getMessages().size() == 2, "工具卡消息数");

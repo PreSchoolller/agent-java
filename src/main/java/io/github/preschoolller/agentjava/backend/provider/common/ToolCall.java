@@ -8,8 +8,6 @@ import java.util.concurrent.ExecutionException;
 
 public class ToolCall {
 
-    public static final ToolCall POISON = new ToolCall();
-
     private volatile Tool tool;
 
     private volatile String arguments;
@@ -20,13 +18,11 @@ public class ToolCall {
 
     private volatile String result;
 
-    private CompletableFuture<Status> statusReady;
     private CompletableFuture<Status> statusFinal;
 
     public ToolCall() {
         tool = ToolManager.EMPTY_TOOL;
         status = Status.EMPTY;
-        statusReady = new CompletableFuture<>();
         statusFinal = new CompletableFuture<>();
     }
 
@@ -59,32 +55,23 @@ public class ToolCall {
 
     public void setStatus(Status status) {
         this.status = status;
-        if (status != null && status != Status.EMPTY) {
-            statusReady.complete(status);
-        }
         if (status == Status.INCOMPLETE || status == Status.COMPLETE) {
             statusFinal.complete(status);
         }
     }
 
-    /**
-     * 预期状态流转：EMPTY -> IN_PROGRESS -> COMPLETE/INCOMPLETE
-     */
-    public Status awaitStatus() throws InterruptedException {
+    public Status awaitFinal() throws InterruptedException {
         Status s = getStatus();
-        if (s != null && s != Status.EMPTY) {
+        if (s == Status.COMPLETE || s == Status.INCOMPLETE) {
             return s;
         }
         try {
-            if (statusReady.isDone()) {
-                return statusFinal.get();
-            }
-            return statusReady.get();
+            return statusFinal.get();
         } catch (InterruptedException e) {
-            System.out.println("awaitStatus interrupted");
+            System.out.println("awaitFinal interrupted");
             throw e;
         } catch (ExecutionException e) {
-            System.out.println("awaitStatus execution error");
+            System.out.println("awaitFinal execution error");
             throw new RuntimeException(e);
         }
     }
@@ -97,7 +84,7 @@ public class ToolCall {
         this.arguments = arguments;
     }
 
-    public static enum Status {
+    public enum Status {
         EMPTY,
         IN_PROGRESS,
         COMPLETE,

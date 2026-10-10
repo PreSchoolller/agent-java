@@ -6,20 +6,35 @@ import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreami
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.RoleEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
+import io.github.preschoolller.agentjava.backend.provider.common.event.BaseEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDeltaEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDoneEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallStartEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.PoisonEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ReasoningDeltaDoneEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ReasoningDeltaEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ReasoningDeltaStartEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseCompleteEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaDoneEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaStartEvent;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.frontend.gui.Window;
 import io.github.preschoolller.agentjava.frontend.store.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.Message;
 
 import javax.swing.SwingUtilities;
+import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import static io.github.preschoolller.agentjava.backend.provider.common.Constants.POISON;
 
 public class Main {
     public static void main(String[] args) {
@@ -63,117 +78,111 @@ public class Main {
         Window.AiStream stream = window.addAiMessage(""); // 这一步已在 EDT 上（输入/按钮回调都在 EDT）
         CompletableFuture.runAsync(() -> {
             boolean stopped = false;
-            BlockingQueue<String> chunks = null;
+            BlockingQueue<BaseEvent> events = null;
+            List<CompletableFuture<Void>> toolCalls = new ArrayList<>();
+            Map<String, Window.ToolCallHandle> callIdHandleMap = new HashMap<>();
+            Set<String> doneCalls = new HashSet<>();
             try {
                 PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re);
                 for (PromptParams.RoleMessage roleMessage : history) {
                     paramsBuilder.roleMessages(roleMessage);
                 }
                 ProviderStreamingResponse providerStreamingResponse = provider.sendPromptStreaming(paramsBuilder.build());
-                chunks = providerStreamingResponse.blockingQueue();
-                while (true) {
-                    String chunk = chunks.take(); // 阻塞等下一个增量，节奏由模型决定
-                    if (POISON.equals(chunk)) {
-                        BlockingQueue<ToolCall> toolCalls = providerStreamingResponse.toolCalls();
-                        System.out.println("怎么回事呢？？？");
-                        CompletableFuture.runAsync(() -> performToolCalls(window, toolCalls, cancelled, conversation, provider));
-                        break;
+                events = providerStreamingResponse.blockingQueue();
+                BaseEvent event;
+                while (!cancelled.get() && !((event = events.take()) instanceof PoisonEvent)) {
+                    if (event instanceof ReasoningDeltaStartEvent) {
+                        appendAiMessage("<think>", stream, cancelled);
+                    } else if (event instanceof ReasoningDeltaEvent deltaEvent) {
+                        appendAiMessage(deltaEvent.delta(), stream, cancelled);
+                    } else if (event instanceof ReasoningDeltaDoneEvent) {
+                        appendAiMessage("</think>", stream, cancelled);
+                    } else if (event instanceof ResponseDeltaStartEvent deltaEvent) {
+                        appendAiMessage("", stream, cancelled);
+                    } else if (event instanceof ResponseDeltaEvent deltaEvent) {
+                        appendAiMessage(deltaEvent.delta(), stream, cancelled);
+                    } else if (event instanceof ResponseDeltaDoneEvent) {
+                        appendAiMessage("", stream, cancelled);
+                    } else if (event instanceof FunctionToolCallStartEvent e) {
+                        addToolCall(window, e.name(), e.callId(), callIdHandleMap);
+                    } else if (event instanceof FunctionToolCallDeltaEvent) {
+                        // TODO 加一个工具卡片参数更新功能
+                    } else if (event instanceof FunctionToolCallDoneEvent e) {
+                        Window.ToolCallHandle toolCallHandle = callIdHandleMap.get(e.callId());
+                        ToolCall toolCall = e.toolCall();
+                        toolCalls.add(performToolCall(toolCall, toolCallHandle));
+                        doneCalls.add(e.callId());
+                    } else if (event instanceof ResponseCompleteEvent) {
+                        // TODO 完结？
                     }
-                    if (cancelled.get()) {
-                        stopped = true; // 用户点了停止：后续增量丢弃，已生成部分由下面的 finish 落库
-                        break;
-                    }
-                    SwingUtilities.invokeLater(() -> stream.appendChunk(chunk));
                 }
-            } catch (InterruptedException e) {
-                stopped = true;
             } catch (RuntimeException e) {
                 SwingUtilities.invokeLater(() -> {
                     stream.finish();
                     window.addNotifyMessage("Error: " + e.getMessage());
                     window.setGenerating(false);
                 });
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
             } finally {
                 SwingUtilities.invokeLater(() -> {
                     stream.finish(); // 停止也走 finish：已生成部分照常保留并落库
                     window.setGenerating(false);
                 });
-                if (stopped) {
-                    drainUntilPoison(chunks);
+                for (String callId : callIdHandleMap.keySet()) {
+                    if (doneCalls.contains(callId)) {
+                        continue;
+                    }
+                    SwingUtilities.invokeLater(() -> {
+                        String result = cancelled.get() ? "用户手动取消" : "Error: dangling function call without corresponding item done event";
+                        // TODO 待前端实现流式显示工具参数功能后整改IGNORE
+                        callIdHandleMap.get(callId).finish(result, false, "IGNORED");
+                    });
+                }
+                toolCalls.forEach(CompletableFuture::join);
+                if (!cancelled.get() && !toolCalls.isEmpty()) {
+                    SwingUtilities.invokeLater(() -> realReplyStream(window, cancelled, conversation, provider));
+                }
+                if (cancelled.get()) {
+                    drainUntilPoison(events);
                 }
             }
         });
     }
 
-    private static void performToolCall(Window window, ToolCall toolCall, AtomicBoolean cancelled, Conversation conversation, Provider provider, CompletableFuture<Object> future) {
-        System.out.println("performToolCall：" + System.currentTimeMillis());
-        ToolCall.Status status;
-        try {
-            status = toolCall.awaitStatus();
-            // 工具调用
-        } catch (InterruptedException e) {
-            future.complete(null);
-            throw new RuntimeException(e);
+    private static void appendAiMessage(String chunk, Window.AiStream stream, AtomicBoolean cancelled) {
+        if (cancelled.get()) {
+            return; // 用户点了停止：后续增量丢弃，已生成部分由下面的 finish 落库
         }
+        SwingUtilities.invokeLater(() -> stream.appendChunk(chunk));
+    }
 
-        if (status == null) {
-            future.complete(null);
-            System.out.println("老出错，跳过了！");
-            return;
-        }
-
+    private static void addToolCall(Window window, String name, String callId, Map<String, Window.ToolCallHandle> callIdHandleMap) {
         try {
-            System.out.println("添加工具卡片：" + System.currentTimeMillis());
-            Window.ToolCallHandle toolCallHandle = window.addToolCall(toolCall.getTool().name(), toolCall.getArguments(), toolCall.getCallId());
-            CompletableFuture.runAsync(() -> {
-                try {
-                    toolCall.awaitStatus();
-                } catch (InterruptedException e) {
-                    System.out.println("工具调用：" + toolCall.getTool().name() + " call_id: " + toolCall.getCallId() + "错误！");
-                }
-                SwingUtilities.invokeLater(() -> {
-                            toolCallHandle.finish(toolCall.getResult(),
-                                    ToolCall.Status.COMPLETE.equals(toolCall.getStatus()));;
-                        }
-                );
-                future.complete(null);
+            SwingUtilities.invokeAndWait(() -> {
+                Window.ToolCallHandle toolCallHandle = window.addToolCall(name, "", callId);
+                callIdHandleMap.put(callId, toolCallHandle);
             });
-        } catch (Exception e){
-            future.completeExceptionally(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } catch (InvocationTargetException e) {
+            throw new RuntimeException(e);
         }
     }
 
-    private static void performToolCalls(Window window, BlockingQueue<ToolCall> toolCalls, AtomicBoolean cancelled,
-                                        Conversation conversation, Provider provider) {
-        boolean hasRealToolCall = false;
-        while (true) {
+    private static CompletableFuture<Void> performToolCall(ToolCall toolCall, Window.ToolCallHandle toolCallHandle) {
+        return CompletableFuture.runAsync(() -> {
             try {
-                ToolCall toolCall = toolCalls.take();
-                List<CompletableFuture> futures = new ArrayList<>();
-                if (ToolCall.POISON.equals(toolCall)) {
-                    if (hasRealToolCall) {
-                        SwingUtilities.invokeLater(() -> {
-                            if (cancelled.get()) {
-                                return;
-                            }
-                            System.out.println("啥玩意儿啊？？？");
-                            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                                    .thenRunAsync(
-                                            () -> realReplyStream(window, cancelled, conversation, provider),
-                                            SwingUtilities::invokeLater
-                                    );
-                        });
-                    }
-                    break;
-                }
-                hasRealToolCall = true;
-                CompletableFuture<Object> future = new CompletableFuture<>();
-                futures.add(future);
-                SwingUtilities.invokeLater(() -> performToolCall(window, toolCall, cancelled, conversation, provider, future));
+                toolCall.awaitFinal();
             } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+                System.out.println("工具调用：" + toolCall.getTool().name() + " call_id: " + toolCall.getCallId() + "错误！");
             }
-        }
+            SwingUtilities.invokeLater(() -> {
+                        toolCallHandle.finish(toolCall.getResult(),
+                                ToolCall.Status.COMPLETE.equals(toolCall.getStatus()), toolCall.getArguments());
+                    }
+            );
+        });
     }
 
     /**
@@ -215,11 +224,15 @@ public class Main {
     }
 
     /** 用户停止后把剩余增量抽干丢弃，后端读流线程才能走到 finally 放毒丸正常退出，不残留阻塞线程 */
-    private static void drainUntilPoison(BlockingQueue<String> chunks) {
+    private static void drainUntilPoison(BlockingQueue<BaseEvent> events) {
         try {
-            String chunk;
-            while (!POISON.equals(chunk = chunks.poll(2, TimeUnit.SECONDS))) {
-                if (chunk == null) {
+            if (events == null) {
+                return;
+            }
+            BaseEvent event;
+            while (true) {
+                event = events.poll(2, TimeUnit.SECONDS);
+                if (event == null || event instanceof PoisonEvent) {
                     return; // 超时等不到毒丸就放弃（流可能已异常中断）
                 }
             }

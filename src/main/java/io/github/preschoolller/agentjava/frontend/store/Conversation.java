@@ -122,11 +122,11 @@ public class Conversation {
     }
 
     /** 工具调用完成：回填结果文本并写终态（按消息对象同一性查找），返回替换后的新记录；没找到返回 null */
-    public Message updateToolResult(Message target, String result, boolean success) {
+    public Message updateToolResult(Message target, String result, boolean success, String arguments) {
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) == target) {
                 Message updated = new Message(target.role(), result, target.time(),
-                        target.toolName(), target.toolArgs(), success ? "ok" : "error", target.callId());
+                        target.toolName(), arguments, success ? "ok" : "error", target.callId());
                 messages.set(i, updated);
                 touch();
                 return updated;

@@ -13,7 +13,10 @@ import com.openai.models.responses.Response;
 import com.openai.models.responses.ResponseCompletedEvent;
 import com.openai.models.responses.ResponseContentPartAddedEvent;
 import com.openai.models.responses.ResponseCreateParams;
+import com.openai.models.responses.ResponseFailedEvent;
+import com.openai.models.responses.ResponseFunctionCallArgumentsDeltaEvent;
 import com.openai.models.responses.ResponseFunctionToolCall;
+import com.openai.models.responses.ResponseIncompleteEvent;
 import com.openai.models.responses.ResponseInputItem;
 import com.openai.models.responses.ResponseInputText;
 import com.openai.models.responses.ResponseOutputItem;
@@ -31,7 +34,19 @@ import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockin
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.ResponseStreamEventVisitorAdaptor;
+import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
+import io.github.preschoolller.agentjava.backend.provider.common.event.BaseEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDeltaEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDoneEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallStartEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.PoisonEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ReasoningDeltaDoneEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ReasoningDeltaEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ReasoningDeltaStartEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseCompleteEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaStartEvent;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
@@ -39,15 +54,12 @@ import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.stream.Collectors;
-
-import static io.github.preschoolller.agentjava.backend.provider.common.Constants.POISON;
 
 public class OpenAiProvider implements Provider {
     private volatile Headers headers;
@@ -196,22 +208,19 @@ public class OpenAiProvider implements Provider {
             service = responseService;
         }
         ResponseCreateParams responseCreateParams = buildParams(promptParams);
-        BlockingQueue<String> blockingQueue = new ArrayBlockingQueue<>(256, true);
-        BlockingQueue<ToolCall> toolcallsBQ = new ArrayBlockingQueue<>(4, true);
-        Map<String, ToolCall> callIdTooCallMap = new HashMap<>();
+        BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         StreamResponse<ResponseStreamEvent> response = service.createStreaming(responseCreateParams);
-        ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue, toolcallsBQ, callIdTooCallMap);
+        ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue);
         new Thread(() -> {
             try {
                 response.stream()
                         .forEach(responseStreamEvent -> responseStreamEvent.accept(visitor));
             } finally {
-                blockingQueue.offer(POISON);
-                toolcallsBQ.offer(ToolCall.POISON);
+                blockingQueue.offer(new PoisonEvent());
             }
         }).start();
 
-        return new ProviderStreamingResponse(blockingQueue, toolcallsBQ);
+        return new ProviderStreamingResponse(blockingQueue);
     }
 
     public static String getReasoningContent(Response response) {
@@ -251,22 +260,12 @@ public class OpenAiProvider implements Provider {
         return "";
     }
 
-    private static ResponseStreamEventVisitorAdaptor getVisitor(BlockingQueue<String> blockingQueue,
-                                                                BlockingQueue<ToolCall> toolCallBQ,
-                                                                Map<String, ToolCall> callIdTooCallMap) {
+    private static ResponseStreamEventVisitorAdaptor getVisitor(BlockingQueue<BaseEvent> blockingQueue) {
         return new ResponseStreamEventVisitorAdaptor() {
 
-            private void putIntoBQ(String delta) {
+            private void putIntoBQ(BaseEvent baseEvent) {
                 try {
-                    blockingQueue.put(delta);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
-            }
-
-            private void putIntoToolCall(ToolCall toolCall) {
-                try {
-                    toolCallBQ.put(toolCall);
+                    blockingQueue.put(baseEvent);
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);
                 }
@@ -275,70 +274,86 @@ public class OpenAiProvider implements Provider {
             @Override
             public Object visitContentPartAdded(@NotNull ResponseContentPartAddedEvent responseContentPartAddedEvent) {
                 if (responseContentPartAddedEvent.part().isReasoningText()) {
-                    putIntoBQ("<think>");
+                    putIntoBQ(new ReasoningDeltaStartEvent(responseContentPartAddedEvent.itemId()));
+                }
+                if (responseContentPartAddedEvent.part().isOutputText()) {
+                    putIntoBQ(new ResponseDeltaStartEvent(responseContentPartAddedEvent.itemId()));
                 }
                 return null;
             }
 
             @Override
-            public Object visitReasoningTextDelta(ResponseReasoningTextDeltaEvent responseReasoningTextDeltaEvent) {
-                putIntoBQ(responseReasoningTextDeltaEvent.delta());
+            public Object visitReasoningTextDelta(@NotNull ResponseReasoningTextDeltaEvent responseReasoningTextDeltaEvent) {
+                putIntoBQ(new ReasoningDeltaEvent(responseReasoningTextDeltaEvent.itemId(), responseReasoningTextDeltaEvent.delta()));
                 return null;
             }
 
             @Override
             public Object visitReasoningTextDone(@NotNull ResponseReasoningTextDoneEvent responseReasoningTextDoneEvent) {
-                putIntoBQ("</think>");
+                putIntoBQ(new ReasoningDeltaDoneEvent(responseReasoningTextDoneEvent.itemId(), responseReasoningTextDoneEvent.text()));
                 return null;
             }
 
             @Override
-            public Object visitOutputTextDelta(ResponseTextDeltaEvent responseTextDeltaEvent) {
-                putIntoBQ(responseTextDeltaEvent.delta());
+            public Object visitOutputTextDelta(@NotNull ResponseTextDeltaEvent responseTextDeltaEvent) {
+                putIntoBQ(new ResponseDeltaEvent(responseTextDeltaEvent.itemId(), responseTextDeltaEvent.delta()));
                 return null;
             }
 
             @Override
-            public Object visitCompleted(ResponseCompletedEvent responseCompletedEvent) {
-                putIntoBQ(POISON);
-                putIntoToolCall(ToolCall.POISON);
+            public Object visitCompleted(@NotNull ResponseCompletedEvent responseCompletedEvent) {
+                putIntoBQ(new ResponseCompleteEvent());
+                putIntoBQ(new PoisonEvent());
+                return null;
+            }
+
+            @Override
+            public Object visitFunctionCallArgumentsDelta(@NotNull ResponseFunctionCallArgumentsDeltaEvent responseFunctionCallArgumentsDeltaEvent) {
+                putIntoBQ(new FunctionToolCallDeltaEvent(responseFunctionCallArgumentsDeltaEvent.itemId(), responseFunctionCallArgumentsDeltaEvent.delta()));
                 return null;
             }
 
             @Override
             public Object visitOutputItemAdded(@NotNull ResponseOutputItemAddedEvent responseOutputItemAddedEvent) {
                 if (responseOutputItemAddedEvent.item().isFunctionCall()) {
-                    ToolCall toolCall = new ToolCall();
-                    toolCall.setStatus(ToolCall.Status.IN_PROGRESS);
-                    System.out.println("工具调用开始传输" + System.currentTimeMillis());
                     ResponseFunctionToolCall functionCall = responseOutputItemAddedEvent.item().asFunctionCall();
-                    toolCall.setTool(ToolManager.findByName(functionCall.name()).orElse(ToolManager.BAD_TOOL));
-                    toolCall.setCallId(functionCall.callId());
-                    putIntoToolCall(toolCall);
-                    callIdTooCallMap.put(functionCall.callId(), toolCall);
-                    System.out.println("toolCall写入完成：" + System.currentTimeMillis());
+                    putIntoBQ(new FunctionToolCallStartEvent(functionCall.id().orElse("wrong_id"),
+                            functionCall.callId(),
+                            functionCall.name()));
                 }
+                return null;
+            }
+
+            @Override
+            public Object visitFailed(@NotNull ResponseFailedEvent responseFailedEvent) {
+                putIntoBQ(new PoisonEvent());
+                return null;
+            }
+
+            @Override
+            public Object visitIncomplete(@NotNull ResponseIncompleteEvent responseIncompleteEvent) {
+                putIntoBQ(new PoisonEvent());
                 return null;
             }
 
             @Override
             public Object visitOutputItemDone(@NotNull ResponseOutputItemDoneEvent responseOutputItemDoneEvent) {
                 if (responseOutputItemDoneEvent.item().isFunctionCall()) {
-                    System.out.println("**********************工具调用传输结束" + System.currentTimeMillis());
                     ResponseFunctionToolCall functionCall = responseOutputItemDoneEvent.item().asFunctionCall();
-                    if (functionCall.status().isPresent() && functionCall.status().get().equals(ResponseFunctionToolCall.Status.COMPLETED)) {
-                        System.out.println("**********************工具调用传输完成" + System.currentTimeMillis());
-                    }
-                    System.out.println("**********************执行工具参数**********************" + System.currentTimeMillis());
-                    System.out.println(functionCall);
-                    System.out.println("**********************执行工具开始**********************" + System.currentTimeMillis());
-                    String result = ToolManager.execute(functionCall);
-//                    System.out.println(result);
-                    ToolCall toolCall = callIdTooCallMap.getOrDefault(functionCall.callId(), new ToolCall());
-                    toolCall.setStatus(ToolCall.Status.COMPLETE);
+                    ToolCall toolCall = new ToolCall();
                     toolCall.setArguments(functionCall.arguments());
-                    toolCall.setResult(result);
-                    System.out.println("**********************执行工具结果**********************" + System.currentTimeMillis());
+                    toolCall.setTool(ToolManager.findByName(functionCall.name()).orElse(ToolManager.BAD_TOOL));
+                    toolCall.setCallId(functionCall.callId());
+                    putIntoBQ(new FunctionToolCallDoneEvent(functionCall.callId(), toolCall));
+                    ThreadPoolFactory.getExecutor().execute(() -> {
+                        try {
+                            toolCall.setResult(ToolManager.execute(functionCall));
+                            toolCall.setStatus(ToolCall.Status.COMPLETE);
+                        } catch (Exception e) {
+                            toolCall.setResult("tool call error, id: " + toolCall.getCallId() + " with message: " + e.getMessage());
+                            toolCall.setStatus(ToolCall.Status.INCOMPLETE);
+                        }
+                    });
                 }
                 return null;
             }
