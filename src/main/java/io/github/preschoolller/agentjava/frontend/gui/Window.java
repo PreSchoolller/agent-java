@@ -114,6 +114,12 @@ public class Window extends JFrame {
     private static final int TOOL_RESULT_CAP = 320;
     /** 展开态结果区下方的复制行（复制参数/复制结果）高度 */
     private static final int TOOL_COPY_ROW_HEIGHT = 28;
+    /** 结果文本区的显示字号（Monospaced，与折叠/展开高度测量共用） */
+    private static final int TOOL_RESULT_FONT_SIZE = 12;
+    /** 折叠工具卡的整卡高度：一行头部 + 上下内衬（不挂时间行） */
+    private static final int TOOL_COLLAPSED_HEIGHT = 48;
+    /** 展开工具卡的框架高度（内衬 + 时间行 + 内容竖缝），比 AI 卡的 72 小——没有角色标签行 */
+    private static final int TOOL_FRAME_EXPANDED = 62;
     private static final DateTimeFormatter TIME_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
@@ -983,10 +989,14 @@ public class Window extends JFrame {
 
         JPanel timeRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         timeRow.setOpaque(false);
-        JLabel timeLabel = new JLabel(TIME_FORMAT.format(Instant.ofEpochMilli(message.time())));
-        timeLabel.setFont(new Font("微软雅黑", Font.PLAIN, 12));
-        timeLabel.setForeground(Ui.TEXT_SECONDARY);
-        timeRow.add(timeLabel);
+        // 折叠的工具卡不挂时间行：整个卡片就是一行头部（时间展开后可见）
+        boolean toolCollapsed = tool && !expandedToolCalls.contains(toolKey(message));
+        if (!toolCollapsed) {
+            JLabel timeLabel = new JLabel(TIME_FORMAT.format(Instant.ofEpochMilli(message.time())));
+            timeLabel.setFont(new Font("微软雅黑", Font.PLAIN, 12));
+            timeLabel.setForeground(Ui.TEXT_SECONDARY);
+            timeRow.add(timeLabel);
+        }
         if (user) {
             // 用户消息复制（计划外）：与 AI 卡"复制"共用按钮实现，拷用户原文
             timeRow.add(createCopyButton(() -> message.text() == null ? "" : message.text()));
@@ -997,7 +1007,9 @@ public class Window extends JFrame {
             timeRow.add(messageCard.regenerate);
         }
         card.add(content, BorderLayout.CENTER);
-        card.add(timeRow, BorderLayout.SOUTH);
+        if (!toolCollapsed) {
+            card.add(timeRow, BorderLayout.SOUTH);
+        }
         if (!user && !tool) {
             // 分叉挂在 AI 回复上（对齐 Codex/ZCode：以某次对话状态为锚点继续），用户卡片不挂菜单
             JButton menuButton = createMenuButton();
@@ -1412,24 +1424,25 @@ public class Window extends JFrame {
         int userWidth = Math.max(USER_CARD_MIN_WIDTH,
                 Math.min(USER_CARD_MAX_WIDTH, panelWidth * 2 / 3));
         int textWidth = messageCard.user ? userWidth - CARD_SIDE_INSETS : panelWidth - CARD_SIDE_INSETS;
-        int textHeight;
+        int height;
         if (messageCard.tool) {
             if (expandedToolCalls.contains(toolKey(messageCard.message))) {
-                // 展开：头部 + 结果文本（超长封顶，卡片内滚动）+ 复制行
-                textHeight = Math.min(measureTextHeight(messageCard.message.text(),
-                        AppSettings.get().getContentFontSize(), textWidth) + TOOL_HEADER_HEIGHT, TOOL_RESULT_CAP)
-                        + TOOL_COPY_ROW_HEIGHT;
+                // 展开：头部 + 结果文本（超长封顶，卡片内滚动）+ 复制行；
+                // 框架 = 上下内衬 20 + 时间行 ~18 + 内容竖缝 12 + 余量（比 AI 卡小：没有角色标签行）
+                int textHeight = Math.min(measureToolResultHeight(messageCard.message.text(), textWidth)
+                        + TOOL_HEADER_HEIGHT, TOOL_RESULT_CAP) + TOOL_COPY_ROW_HEIGHT;
+                height = Math.max(CARD_MIN_HEIGHT_AI, textHeight + TOOL_FRAME_EXPANDED);
             } else {
-                textHeight = TOOL_HEADER_HEIGHT; // 折叠（默认）：一行头部
+                height = TOOL_COLLAPSED_HEIGHT; // 单行：一行头部，不挂时间行（时间展开后可见）
             }
         } else {
-            textHeight = messageCard.user
+            int textHeight = messageCard.user
                     ? measureTextHeight(messageCard.message.text(), AppSettings.get().getContentFontSize(), textWidth)
                     : messageCard.markdown.preferredHeightAt(textWidth);
+            int minHeight = messageCard.user ? CARD_MIN_HEIGHT_USER : CARD_MIN_HEIGHT_AI;
+            int frameHeight = messageCard.user ? CARD_FRAME_HEIGHT_USER : CARD_FRAME_HEIGHT_AI;
+            height = Math.max(minHeight, textHeight + frameHeight);
         }
-        int minHeight = messageCard.user ? CARD_MIN_HEIGHT_USER : CARD_MIN_HEIGHT_AI;
-        int frameHeight = messageCard.user ? CARD_FRAME_HEIGHT_USER : CARD_FRAME_HEIGHT_AI;
-        int height = Math.max(minHeight, textHeight + frameHeight);
         // AI 卡片首选宽保持 0、靠 fill 拉伸；用户卡片把宽度写进首选值供 fill=NONE 使用。
         // 都不能把面板宽度写回首选宽：JViewport 会按首选宽撑大面板，resize 再触发 fit，形成正反馈。
         if (messageCard.user) {
@@ -1469,6 +1482,26 @@ public class Window extends JFrame {
         view.setSize(w, Integer.MAX_VALUE);
         int height = (int) view.getPreferredSpan(View.VERTICAL);
         MeasureCache.put(text, fontSize, w, false, new int[]{height});
+        return height;
+    }
+
+    /** 工具卡结果区的高度测量：与显示一致用 Monospaced 12 的 JTextArea 量（按正文字号量会多出一截空白）。
+     *  MeasureCache 键里字号传负数当独立键位（与正文字号测量不互踢） */
+    private int measureToolResultHeight(String text, int width) {
+        int w = MeasureCache.bucketWidth(width);
+        int[] cached = MeasureCache.get(text, -TOOL_RESULT_FONT_SIZE, w, false);
+        if (cached != null) {
+            return cached[0];
+        }
+        JTextArea measurer = new JTextArea();
+        measurer.setFont(new Font("Monospaced", Font.PLAIN, TOOL_RESULT_FONT_SIZE));
+        measurer.setText(text);
+        measurer.setLineWrap(true);
+        measurer.setWrapStyleWord(false);
+        View view = measurer.getUI().getRootView(measurer);
+        view.setSize(w, Integer.MAX_VALUE);
+        int height = (int) view.getPreferredSpan(View.VERTICAL);
+        MeasureCache.put(text, -TOOL_RESULT_FONT_SIZE, w, false, new int[]{height});
         return height;
     }
 

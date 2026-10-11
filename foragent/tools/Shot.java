@@ -453,6 +453,7 @@ public class Shot {
         Thread.sleep(300);
         expect(uiHasTextAreaStartingWith("public class Demo"), "点头部展开结果");
         expect(uiHasText("复制结果") && uiHasText("复制参数"), "展开后有复制入口");
+        capture(args[0] + "-16b-tool-expanded.png");
         edt(() -> uiClickNamed("tool-header"));
         Thread.sleep(300);
         expect(!uiHasTextAreaStartingWith("public class Demo"), "再点头部收回");
