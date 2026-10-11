@@ -221,6 +221,7 @@ public class Shot {
         testSettings.addProfile("写作", testSettings.getActiveProfile());
         testSettings.setActiveProfileName("写作");
         testSettings.getActiveProfile().setTemperature(0.3);
+        testSettings.getActiveProfile().setApiType("chatcompletion");
         expect(!testSettings.addProfile("写作", testSettings.getActiveProfile()), "重名方案拒绝");
         testSettings.save();
         AppSettings reloaded = AppSettings.at(settingsFile);
@@ -230,6 +231,11 @@ public class Shot {
         expect("model-b".equals(reloaded.getProfile("默认").getModel()), "首个方案参数往返");
         expect(reloaded.getProfile("写作").getModels().equals(List.of("model-a", "model-b")), "模型列表往返");
         expect(reloaded.getProfile("写作").getModel().equals("model-b"), "默认模型往返");
+        // API 类型（计划外，后端待支持）：写值往返；未设置的方案与旧文件缺键都是默认 response
+        expect("chatcompletion".equals(reloaded.getProfile("写作").getApiType()), "API 类型往返");
+        expect("response".equals(reloaded.getProfile("默认").getApiType()), "未设置方案默认 response");
+        reloaded.getProfile("写作").setApiType("bogus");
+        expect("response".equals(reloaded.getProfile("写作").getApiType()), "非法 API 类型回落 response");
         reloaded.removeProfile("默认");
         expect(reloaded.getActiveProfileName().equals("写作"), "删活动方案后兜底");
         reloaded.renameProfile("写作", "写作2");
@@ -252,6 +258,8 @@ public class Shot {
         expect(migrated.getContentFontSize() == 18, "全局字号保留");
         // models 键缺失（旧文件）时用 model 单值兜底成单元素列表
         expect(migrated.getActiveProfile().getModels().equals(List.of("legacy-model")), "旧格式模型列表兜底");
+        // apiType 键缺失（旧文件）时落默认 response
+        expect("response".equals(migrated.getActiveProfile().getApiType()), "旧格式 API 类型默认");
         // 主题偏好：默认浅色、非法值忽略、落盘往返
         expect("light".equals(testSettings.getUiTheme()), "主题默认浅色");
         testSettings.setUiTheme("深色");

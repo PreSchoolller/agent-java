@@ -240,6 +240,7 @@ public final class AppSettings {
             properties.setProperty(prefix + "key", profile.getKey());
             properties.setProperty(prefix + "model", profile.getModel());
             properties.setProperty(prefix + "models", String.join(",", profile.getModels()));
+            properties.setProperty(prefix + "apiType", profile.getApiType());
             properties.setProperty(prefix + "temperature", String.valueOf(profile.getTemperature()));
             properties.setProperty(prefix + "maxTokens", String.valueOf(profile.getMaxTokens()));
             properties.setProperty(prefix + "systemPrompt", profile.getSystemPrompt());
@@ -305,6 +306,8 @@ public final class AppSettings {
         profile.setModels(models != null && !models.isBlank()
                 ? Arrays.stream(models.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList()
                 : List.of(profile.getModel()));
+        // apiType 缺省（老文件）时保持字段默认 response；非法值在 setApiType 里回落
+        profile.setApiType(properties.getProperty(prefix + "apiType", profile.getApiType()));
         profile.setTemperature(parseDouble(properties.getProperty(prefix + "temperature"), profile.getTemperature()));
         profile.setMaxTokens(parseInt(properties.getProperty(prefix + "maxTokens"), profile.getMaxTokens()));
         profile.setSystemPrompt(properties.getProperty(prefix + "systemPrompt", profile.getSystemPrompt()));

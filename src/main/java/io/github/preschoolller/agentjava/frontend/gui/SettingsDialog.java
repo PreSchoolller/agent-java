@@ -60,6 +60,8 @@ public class SettingsDialog extends JDialog {
     private final JButton profileDeleteButton = Ui.button("删除");
     private final JTextField backendUrlField = new JTextField();
     private final JTextField keyField = new JTextField();
+    /** 后端 API 类型（协议分派由后端实现，当前仅 response 生效） */
+    private final JComboBox<String> apiTypeCombo = new JComboBox<>(Profile.API_TYPES.toArray(new String[0]));
     /** 模型编辑：只读下拉（选中项=输入区默认模型）+ 添加/删除按钮 */
     private final JComboBox<String> modelCombo = new JComboBox<>();
     private final JButton modelAddButton = Ui.button("添加");
@@ -108,6 +110,10 @@ public class SettingsDialog extends JDialog {
         Ui.styleSpinner(maxTokensSpinner);
         Ui.styleSpinner(fontSizeSpinner);
         Ui.styleComboBox(profileCombo);
+        Ui.styleComboBox(apiTypeCombo);
+        apiTypeCombo.setToolTipText("后端 API 协议：response=OpenAI Responses（当前实现）；"
+                + "chatcompletion=OpenAI Chat Completions、messages=Anthropic Messages 待后端支持");
+        apiTypeCombo.setPreferredSize(new Dimension(150, 30));
         Ui.styleComboBox(themeCombo);
         themeCombo.setPreferredSize(new Dimension(150, 30));
         profileCombo.setPreferredSize(new Dimension(150, 30));
@@ -132,6 +138,7 @@ public class SettingsDialog extends JDialog {
         row = addRow(backendCard, row, "配置方案", profileRow());
         row = addRow(backendCard, row, "后端地址", backendUrlField);
         row = addRow(backendCard, row, "Key", keyField);
+        row = addRow(backendCard, row, "API 类型", apiTypeCombo);
         row = addRow(backendCard, row, "模型", modelRow());
         row = addRow(backendCard, row, "温度", temperatureSpinner);
         addRow(backendCard, row, "最大 Tokens", maxTokensSpinner);
@@ -323,6 +330,7 @@ public class SettingsDialog extends JDialog {
         }
         backendUrlField.setText(profile.getBackendUrl());
         keyField.setText(profile.getKey());
+        apiTypeCombo.setSelectedItem(profile.getApiType());
         modelCombo.removeAllItems();
         for (String model : profile.getModels()) {
             modelCombo.addItem(model);
@@ -407,6 +415,7 @@ public class SettingsDialog extends JDialog {
         Profile profile = working.get(selectedName);
         profile.setBackendUrl(backendUrlField.getText().strip());
         profile.setKey(keyField.getText().strip());
+        profile.setApiType((String) apiTypeCombo.getSelectedItem());
         List<String> models = new ArrayList<>();
         for (int i = 0; i < modelCombo.getItemCount(); i++) {
             String item = modelCombo.getItemAt(i);

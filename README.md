@@ -32,8 +32,9 @@ mvn exec:java -Dexec.mainClass=io.github.preschoolller.agentjava.Main
   超长内部滚动，可复制参数与结果
 - AI 回复 Markdown 渲染：标题/列表/引用/代码块（高亮底 + 复制）/diff 增删行着色/任务勾选，`<think>` 推理块
   单独成块展示（默认收起显示已思考时长，点击展开），流式逐段渲染（120ms 节流），可中断
-- 设置面板：多套「配置方案」（地址 / Key / 可选模型列表 / 温度 / 最大 Tokens / 系统提示词），
-  保存即热生效（后端监听变更重建 client），深浅主题跟随
+- 设置面板：多套「配置方案」（地址 / Key / API 类型 / 可选模型列表 / 温度 / 最大 Tokens / 系统提示词），
+  保存即热生效（后端监听变更重建 client），深浅主题跟随；API 类型可选
+  response（当前实现）/ chatcompletion / messages（后端待支持）
 - 输入区：左下权限模式（计划 / 编辑 / 完全访问 / 纯聊天），右下模型与思考强度按对话选择
 - 托盘常驻：关闭按钮可配置为最小化到托盘，右键菜单 / 双击恢复
 - 后端：OpenAI Responses API（`backend/provider`），通过 `Provider` 接口对接，工厂创建
