@@ -118,6 +118,9 @@ public class Sidebar extends JPanel {
 
         listScroll = new JScrollPane(convList);
         listScroll.setBorder(BorderFactory.createEmptyBorder());
+        // 滚动面板和视口要一起设底色：透明轨道透出的是面板自己的默认 #EEEEEE，和侧栏底色差一点
+        // 色相，列表长到出滚动条时就是一道不搭的竖条（踩坑 #19，主区 waterfallScroll 两处都设了）
+        listScroll.setBackground(Ui.SIDEBAR_BG);
         listScroll.getViewport().setBackground(Ui.SIDEBAR_BG);
         // 片段预览/超长标题宁可裁切也不出横向滚动条（侧栏宽度是固定的）
         listScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
