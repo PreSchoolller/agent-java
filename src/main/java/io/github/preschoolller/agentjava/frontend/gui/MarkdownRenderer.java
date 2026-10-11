@@ -7,6 +7,7 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextPane;
+import javax.swing.JViewport;
 import javax.swing.Timer;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.SimpleAttributeSet;
@@ -26,6 +27,8 @@ import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
@@ -106,6 +109,11 @@ public final class MarkdownRenderer {
         int measureAt(Font base, int width);
     }
 
+    /** 文本行底衬：emoji 等回退字形（微软雅黑不含这些字形，渲染时走回退字体）的墨迹会超出行框底部，
+     *  而文本行高度恰等于文档高度零余量，组件边界正好切在末行墨迹上——实测 😊 下半被裁。
+     *  显示 pane 留这点底衬（墨迹画进组件内不被裁），测量加同款常量保持两条路径一致（QuoteRow 同套路） */
+    private static final int TEXT_ROW_INK_SLACK = 3;
+
     /** 连续的文本流块（段落/标题/列表项）合成一个文本面板行 */
     private record TextRow(List<Block> units) implements Row {
         @Override
@@ -114,6 +122,7 @@ public final class MarkdownRenderer {
             pane.setFont(base);
             fillFlow(pane.getStyledDocument(), units, base);
             attachLinkHandler(pane); // 正文带链接（P1-6）
+            pane.setBorder(BorderFactory.createEmptyBorder(0, 0, TEXT_ROW_INK_SLACK, 0));
             return pane;
         }
 
@@ -124,7 +133,7 @@ public final class MarkdownRenderer {
             fillFlow(measurer.getStyledDocument(), units, base);
             View view = measurer.getUI().getRootView(measurer);
             view.setSize(width, Integer.MAX_VALUE);
-            return (int) Math.ceil(view.getPreferredSpan(View.VERTICAL));
+            return (int) Math.ceil(view.getPreferredSpan(View.VERTICAL)) + TEXT_ROW_INK_SLACK;
         }
     }
 
@@ -543,6 +552,19 @@ public final class MarkdownRenderer {
                 scroll.getVerticalScrollBar().setUnitIncrement(16);
                 Ui.styleScrollPane(scroll);
                 panel.add(scroll, BorderLayout.CENTER);
+                if (!think.closed()) {
+                    // 流式中的思考段：每次 flush 都整行重建（新滚动容器视口恒在顶部，看到的是
+                    // 思考段开头而不是正在吐出的字），挂视口贴底跟随——组件每次重建都是新的，
+                    // 这个监听器只活到下次 flush，之后走折叠分支不再创建
+                    pane.addComponentListener(new ComponentAdapter() {
+                        @Override
+                        public void componentResized(ComponentEvent e) {
+                            JViewport viewport = scroll.getViewport();
+                            int bottom = Math.max(0, pane.getHeight() - viewport.getExtentSize().height);
+                            viewport.setViewPosition(new Point(0, bottom));
+                        }
+                    });
+                }
             }
             if (onToggle != null) {
                 header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
