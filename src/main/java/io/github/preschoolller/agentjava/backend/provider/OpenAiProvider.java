@@ -6,6 +6,8 @@ import com.openai.client.okhttp.OkHttpClient;
 import com.openai.core.ClientOptions;
 import com.openai.core.http.Headers;
 import com.openai.core.http.StreamResponse;
+import com.openai.errors.OpenAIIoException;
+import com.openai.errors.OpenAIServiceException;
 import com.openai.models.Reasoning;
 import com.openai.models.ReasoningEffort;
 import com.openai.models.responses.EasyInputMessage;
@@ -13,6 +15,8 @@ import com.openai.models.responses.Response;
 import com.openai.models.responses.ResponseCompletedEvent;
 import com.openai.models.responses.ResponseContentPartAddedEvent;
 import com.openai.models.responses.ResponseCreateParams;
+import com.openai.models.responses.ResponseError;
+import com.openai.models.responses.ResponseErrorEvent;
 import com.openai.models.responses.ResponseFailedEvent;
 import com.openai.models.responses.ResponseFunctionCallArgumentsDeltaEvent;
 import com.openai.models.responses.ResponseFunctionToolCall;
@@ -39,6 +43,7 @@ import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFacto
 import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.provider.common.event.BaseEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ErrorMessageEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDeltaEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDoneEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallStartEvent;
@@ -214,15 +219,33 @@ public class OpenAiProvider implements Provider {
         }
         ResponseCreateParams responseCreateParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
-        StreamResponse<ResponseStreamEvent> response = service.createStreaming(responseCreateParams);
         ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue,
                 promptParams.getApprovalGate(), promptParams.getAgentMode(), promptParams.getWorkspace());
         ThreadPoolFactory.getResponseExecutor().execute(() -> {
-            try {
+            List<ErrorMessageEvent> errors = new ArrayList<>();
+            try (StreamResponse<ResponseStreamEvent> response = service.createStreaming(responseCreateParams)) {
                 response.stream()
                         .forEach(responseStreamEvent -> responseStreamEvent.accept(visitor));
+            } catch (OpenAIServiceException exception) {
+                String errorMessage = "Stream exception found. Code: " + exception.code().orElse("")
+                        + "\nStatus code: " + exception.statusCode()
+                        + "\nDetail message: " + exception.getMessage();
+                errors.add(new ErrorMessageEvent(errorMessage));
+            } catch (OpenAIIoException exception) {
+                errors.add(new ErrorMessageEvent("Stream event iteration failed: " + exception.getMessage()));
+            } catch (RuntimeException exception) {
+                exception.printStackTrace();
+                errors.add(new ErrorMessageEvent("Unexpected stream error: " + exception.getMessage()));
             } finally {
-                blockingQueue.offer(new PoisonEvent());
+                try {
+                    for (ErrorMessageEvent error : errors) {
+                        blockingQueue.put(error);
+                    }
+                    blockingQueue.put(new PoisonEvent());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    blockingQueue.offer(new PoisonEvent());
+                }
             }
         });
 
@@ -340,12 +363,26 @@ public class OpenAiProvider implements Provider {
 
             @Override
             public Object visitFailed(@NotNull ResponseFailedEvent responseFailedEvent) {
+                responseFailedEvent.response().error()
+                        .ifPresent(responseError -> putIntoBQ(
+                                new ErrorMessageEvent("Stream failed. Code: " + responseError.code() + "\nMessage: " + responseError.message())));
                 putIntoBQ(new PoisonEvent());
                 return null;
             }
 
             @Override
             public Object visitIncomplete(@NotNull ResponseIncompleteEvent responseIncompleteEvent) {
+                responseIncompleteEvent.response().incompleteDetails()
+                        .flatMap(Response.IncompleteDetails::reason)
+                        .ifPresent(reason -> putIntoBQ(new ErrorMessageEvent("Stream incomplete. Reason: " + reason)));
+                putIntoBQ(new PoisonEvent());
+                return null;
+            }
+
+            @Override
+            public Object visitError(@NotNull ResponseErrorEvent responseErrorEvent) {
+                putIntoBQ(new ErrorMessageEvent("Stream encountered error. Code: " + responseErrorEvent.code().orElse("")
+                        + "\n message: " + responseErrorEvent.message()));
                 putIntoBQ(new PoisonEvent());
                 return null;
             }
