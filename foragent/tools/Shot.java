@@ -49,7 +49,7 @@ import java.util.Properties;
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
  * 长会话窗口化断言（WINDOWING_OK）+
- * 十七张截图
+ * 二十一张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
  * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索}.png（SHOT_OK）。

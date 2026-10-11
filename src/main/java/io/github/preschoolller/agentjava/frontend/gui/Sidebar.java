@@ -62,7 +62,7 @@ public class Sidebar extends JPanel {
     }
 
     public static final int EXPANDED_WIDTH = 240;
-    public static final int COLLAPSED_WIDTH = 48;
+    public static final int COLLAPSED_WIDTH = 70;
 
     private static final DateTimeFormatter TIME_FORMAT =
             DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault());
