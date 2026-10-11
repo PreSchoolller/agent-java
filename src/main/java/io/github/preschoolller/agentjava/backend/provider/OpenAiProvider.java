@@ -307,7 +307,12 @@ public class OpenAiProvider implements Provider {
 
             @Override
             public Object visitCompleted(@NotNull ResponseCompletedEvent responseCompletedEvent) {
-                putIntoBQ(new ResponseCompleteEvent());
+                // token 用量随 completed 事件的 response.usage 一起来，捎给前端胶囊展示
+                long inputTokens = responseCompletedEvent.response().usage()
+                        .map(com.openai.models.responses.ResponseUsage::inputTokens).orElse(0L);
+                long outputTokens = responseCompletedEvent.response().usage()
+                        .map(com.openai.models.responses.ResponseUsage::outputTokens).orElse(0L);
+                putIntoBQ(new ResponseCompleteEvent(inputTokens, outputTokens));
                 putIntoBQ(new PoisonEvent());
                 return null;
             }

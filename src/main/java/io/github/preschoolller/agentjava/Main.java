@@ -19,6 +19,7 @@ import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseC
 import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaDoneEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaStartEvent;
+import io.github.preschoolller.agentjava.backend.provider.common.event.ErrorMessageEvent;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.frontend.gui.Window;
 import io.github.preschoolller.agentjava.frontend.store.Conversation;
@@ -118,6 +119,7 @@ public class Main {
         ReasoningEffortEnum re = window.getSelectedEffort(); // 模型与思考强度取输入区右下角的选择（对话级设置）
         AgentMode mode = window.getSelectedMode(); // 权限模式快照：本轮中途改下拉框不影响已发出的请求
         Window.AiStream stream = window.addAiMessage(conversation.getId(), "");
+        long roundStartNanos = System.nanoTime(); // 本轮耗时（含 HTTP 建流），胶囊上展示用
         CompletableFuture.runAsync(() -> {
             BlockingQueue<BaseEvent> events = null;
             List<CompletableFuture<Void>> toolCalls = new ArrayList<>();
@@ -125,6 +127,8 @@ public class Main {
             Map<String, String> callIdByItemId = new HashMap<>();
             Map<String, StringBuilder> argsByCallId = new HashMap<>();
             Set<String> doneCalls = new HashSet<>();
+            long inputTokens = 0;
+            long outputTokens = 0;
             try {
                 PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
                         .agentMode(mode).approvalGate((toolCall, agentMode) ->
@@ -170,8 +174,13 @@ public class Main {
                         ToolCall toolCall = e.toolCall();
                         toolCalls.add(performToolCall(toolCall, toolCallHandle));
                         doneCalls.add(e.callId());
-                    } else if (event instanceof ResponseCompleteEvent) {
-                        // TODO 完结？
+                    } else if (event instanceof ResponseCompleteEvent complete) {
+                        inputTokens = complete.inputTokens();
+                        outputTokens = complete.outputTokens();
+                    } else if (event instanceof ErrorMessageEvent error) {
+                        // 流式错误（visitError/visitFailed/visitIncomplete/SSE 异常发射，后端接线待做）：
+                        // 通知气泡展示，流本身照常走到毒丸收束
+                        SwingUtilities.invokeLater(() -> window.addNotifyMessage("Error: " + error.message()));
                     }
                 }
             } catch (RuntimeException e) {
@@ -203,6 +212,19 @@ public class Main {
                     // 双参 remove：条目还是本轮令牌才清（防御性的对称）
                     RUNNING.remove(conversation.getId(), cancelled);
                     SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), false));
+                    if (!cancelled.get() && (inputTokens > 0 || outputTokens > 0)) {
+                        // 用量上胶囊（排在生成态刷新之后：refreshGeneratingUi 会把胶囊刷回"就绪"）。
+                        // 只在轮主会话正在显示时刷，避免后台会话的用量盖掉前台状态
+                        String convId = conversation.getId();
+                        long elapsedMillis = (System.nanoTime() - roundStartNanos) / 1_000_000;
+                        String summary = "tokens 输入 " + inputTokens + " · 输出 " + outputTokens
+                                + " · 耗时 " + (elapsedMillis / 1000.0) + " 秒";
+                        SwingUtilities.invokeLater(() -> {
+                            if (convId.equals(window.getStore().getActive().getId())) {
+                                window.setRealtimeInfo(summary);
+                            }
+                        });
+                    }
                 }
             }
         });
