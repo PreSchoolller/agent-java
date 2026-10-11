@@ -59,9 +59,7 @@ public class Main {
         Provider openAiProvider = ProviderFactory.createOpenAiProvider();
         SwingUtilities.invokeLater(() -> {
             Window window = new Window("Agent");
-            // 关闭行为由 Window 自己接管（EXIT_ON_CLOSE 或最小化到托盘，设置里配置）
-            window.setSize(1280, 720);
-            window.setLocation(640, 360);
+            // 尺寸/位置/分隔条由 Window 从 AppSettings 恢复（无记录回落居中），关闭行为 Window 自己接管
             window.setVisible(true);
 
             // 回调触发时本轮用户消息已入库（Window.submitInput 先画卡再回调），

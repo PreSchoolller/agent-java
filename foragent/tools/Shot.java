@@ -347,7 +347,7 @@ public class Shot {
         edt(() -> {
             Window window = new Window("Agent", store);
             window.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
-            window.setSize(1280, 720);
+            // 尺寸/位置由 Window 按 AppSettings 恢复（不强制 1280×720，避免把回归用的尺寸写回用户设置）
             window.setVisible(true);
             WINDOW = window;
         });

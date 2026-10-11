@@ -38,6 +38,13 @@ public final class AppSettings {
     private String uiTheme = "light";
     /** 关闭按钮最小化到托盘（全局 UI 偏好，默认关闭=直接退出） */
     private boolean minimizeToTray;
+    /** 主窗口尺寸/位置与侧栏分隔条位置（全局 UI 偏好；坐标 -1 = 首次启动居中）。
+     *  最大化期间的 bounds 不记录，还原后仍是用户习惯的窗口大小 */
+    private int windowWidth = 1280;
+    private int windowHeight = 720;
+    private int windowX = -1;
+    private int windowY = -1;
+    private int sidebarDivider = -1;
 
     private AppSettings(Path file) {
         this.file = file;
@@ -216,6 +223,46 @@ public final class AppSettings {
         this.minimizeToTray = minimizeToTray;
     }
 
+    public int getWindowWidth() {
+        return windowWidth;
+    }
+
+    public void setWindowWidth(int windowWidth) {
+        this.windowWidth = windowWidth;
+    }
+
+    public int getWindowHeight() {
+        return windowHeight;
+    }
+
+    public void setWindowHeight(int windowHeight) {
+        this.windowHeight = windowHeight;
+    }
+
+    public int getWindowX() {
+        return windowX;
+    }
+
+    public void setWindowX(int windowX) {
+        this.windowX = windowX;
+    }
+
+    public int getWindowY() {
+        return windowY;
+    }
+
+    public void setWindowY(int windowY) {
+        this.windowY = windowY;
+    }
+
+    public int getSidebarDivider() {
+        return sidebarDivider;
+    }
+
+    public void setSidebarDivider(int sidebarDivider) {
+        this.sidebarDivider = sidebarDivider;
+    }
+
     // —— 变更通知与持久化 ——
 
     public void addChangeListener(Runnable listener) {
@@ -248,6 +295,11 @@ public final class AppSettings {
         properties.setProperty("contentFontSize", String.valueOf(contentFontSize));
         properties.setProperty("uiTheme", uiTheme);
         properties.setProperty("minimizeToTray", String.valueOf(minimizeToTray));
+        properties.setProperty("windowWidth", String.valueOf(windowWidth));
+        properties.setProperty("windowHeight", String.valueOf(windowHeight));
+        properties.setProperty("windowX", String.valueOf(windowX));
+        properties.setProperty("windowY", String.valueOf(windowY));
+        properties.setProperty("sidebarDivider", String.valueOf(sidebarDivider));
         try {
             Files.createDirectories(file.getParent());
             try (OutputStream out = Files.newOutputStream(file)) {
@@ -272,6 +324,11 @@ public final class AppSettings {
             return;
         }
         contentFontSize = parseInt(properties.getProperty("contentFontSize"), contentFontSize);
+        windowWidth = parseInt(properties.getProperty("windowWidth"), windowWidth);
+        windowHeight = parseInt(properties.getProperty("windowHeight"), windowHeight);
+        windowX = parseInt(properties.getProperty("windowX"), windowX);
+        windowY = parseInt(properties.getProperty("windowY"), windowY);
+        sidebarDivider = parseInt(properties.getProperty("sidebarDivider"), sidebarDivider);
         setUiTheme(properties.getProperty("uiTheme"));
         minimizeToTray = Boolean.parseBoolean(properties.getProperty("minimizeToTray", "false"));
         String names = properties.getProperty("profileNames");

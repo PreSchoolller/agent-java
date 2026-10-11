@@ -26,6 +26,8 @@ import javax.swing.SwingConstants;
 import javax.swing.Timer;
 import javax.swing.WindowConstants;
 import javax.swing.text.View;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import java.awt.BorderLayout;
 import java.awt.AWTEvent;
 import java.awt.AWTException;
@@ -186,6 +188,9 @@ public class Window extends JFrame {
     /** 展开结果区的工具卡（P1-4 折叠）：按 callId 记（无 callId 的旧消息退化为时间戳键），
      *  内存态不落盘——重启后回到默认折叠 */
     private final Set<String> expandedToolCalls = new HashSet<>();
+    /** 各会话的输入框草稿：切会话保留各自的未发送文本，也防 A 会话的草稿误发进 B。
+     *  输入区 DocumentListener 实时写、showConversation 按会话取；内存态不落盘 */
+    private final Map<String, String> draftsByConversation = new HashMap<>();
 
     /** AI 回复的流式句柄：addAiMessage 返回。所有方法须在 EDT 上调用。 */
     public interface AiStream {
@@ -395,6 +400,56 @@ public class Window extends JFrame {
         buildUi();
         showConversation(store.getActive());
         initCloseBehavior();
+        applyPersistedBounds();
+    }
+
+    /** 尺寸/位置/分隔条防抖落盘（1 秒无变更才写）：拖动/缩放期间只记内存，停手后落盘 */
+    private final Timer boundsSaveTimer = new Timer(1000, e -> AppSettings.get().save());
+
+    {
+        boundsSaveTimer.setRepeats(false);
+    }
+
+    /** 应用持久化的窗口尺寸/位置与侧栏分隔条：位置不在屏内（拔了显示器等）回落居中 */
+    private void applyPersistedBounds() {
+        AppSettings settings = AppSettings.get();
+        Rectangle screen = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+        int width = Math.max(720, Math.min(settings.getWindowWidth(), screen.width));
+        int height = Math.max(480, Math.min(settings.getWindowHeight(), screen.height));
+        setSize(width, height);
+        if (settings.getWindowX() >= 0 && settings.getWindowY() >= 0
+                && screen.contains(settings.getWindowX() + width / 2, settings.getWindowY() + height / 2)) {
+            setLocation(settings.getWindowX(), settings.getWindowY());
+        } else {
+            setLocation(screen.x + (screen.width - width) / 2, screen.y + (screen.height - height) / 2);
+        }
+        if (settings.getSidebarDivider() >= 0) {
+            splitPane.setDividerLocation(settings.getSidebarDivider());
+        }
+        // 尺寸/位置/分隔条变更记内存 + 防抖落盘；最大化期间不记，还原后仍是用户习惯的窗口大小
+        addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                rememberBounds();
+            }
+
+            @Override
+            public void componentMoved(ComponentEvent e) {
+                rememberBounds();
+            }
+        });
+    }
+
+    private void rememberBounds() {
+        if ((getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0) {
+            return;
+        }
+        AppSettings settings = AppSettings.get();
+        settings.setWindowWidth(getWidth());
+        settings.setWindowHeight(getHeight());
+        settings.setWindowX(getX());
+        settings.setWindowY(getY());
+        boundsSaveTimer.start();
     }
 
     /**
@@ -867,6 +922,8 @@ public class Window extends JFrame {
         messageCards.clear();
         waterfallPanel.removeAll();
         waterfallRowCount = 0;
+        // 草稿按会话取回：上次没发完的文本还在（setText 会触发 DocumentListener 写回同值，无碍）
+        inputTextArea.setText(draftsByConversation.getOrDefault(conversation.getId(), ""));
         if (conversation.isEmpty()) {
             GridBagConstraints gbc = rowConstraints(false);
             gbc.fill = GridBagConstraints.NONE;
@@ -1712,6 +1769,29 @@ public class Window extends JFrame {
                 submitInput();
             }
         });
+        // 草稿按会话暂存：输入内容一变就写当前会话的键，切会话由 showConversation 取回
+        inputTextArea.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                saveDraft();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                saveDraft();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                saveDraft();
+            }
+
+            private void saveDraft() {
+                if (displayedConvId != null) {
+                    draftsByConversation.put(displayedConvId, inputTextArea.getText());
+                }
+            }
+        });
         inputTextArea.addFocusListener(new FocusAdapter() {
             @Override
             public void focusGained(FocusEvent e) {
@@ -1832,6 +1912,9 @@ public class Window extends JFrame {
             } else if (sidebar.isExpanded() && location < Sidebar.COLLAPSED_WIDTH + 8) {
                 sidebar.setExpanded(false);
             }
+            // 分隔条位置持久化（与窗口 bounds 同一套防抖落盘）
+            AppSettings.get().setSidebarDivider(location);
+            boundsSaveTimer.start();
         });
     }
 
