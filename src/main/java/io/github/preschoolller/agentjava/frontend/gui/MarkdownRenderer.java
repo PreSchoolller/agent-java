@@ -57,7 +57,8 @@ public final class MarkdownRenderer {
     public record Span(String text, boolean bold, boolean italic, boolean mono, boolean strike, String link) {
     }
 
-    public sealed interface Block permits Paragraph, Heading, ListItem, CodeBlock, Quote, Rule, ThinkBlock {
+    public sealed interface Block permits Paragraph, Heading, ListItem, CodeBlock, Quote, Rule, ThinkBlock,
+            TableBlock {
     }
 
     /** 段落：span 里的 "\n" 表示同段内的软换行 */
@@ -85,6 +86,11 @@ public final class MarkdownRenderer {
     /** 思考块：<think>…</think> 包住的推理内容，每条是一行 span 列表；流式未闭合时吞到文本尾。
      *  closed 区分闭合与流式中：折叠的默认态据此定——闭合收起、流式中展开（见 MarkdownPane） */
     public record ThinkBlock(List<List<Span>> lines, boolean closed) implements Block {
+    }
+
+    /** 表格块（P1-5）：rows[0] 是表头；rows = 行 → 单元格 → 行内 span 列表。
+     *  对齐标记（:---:）暂不解析，全部左对齐； ragged 行（列数不齐）缺的格按空单元格渲染 */
+    public record TableBlock(List<List<List<Span>>> rows) implements Block {
     }
 
     // ===== 渲染行 =====
@@ -317,8 +323,161 @@ public final class MarkdownRenderer {
         }
     }
 
-    private static final int THINK_HEADER_HEIGHT = 24;
-    private static final int THINK_PAD_TOP = 6;
+    private static final int TABLE_CELL_PAD_X = 10;
+    private static final int TABLE_CELL_PAD_Y = 5;
+    private static final int TABLE_HEIGHT_CAP = 420; // 与代码块同款高度帽
+
+    /** 表格行（P1-5）：列宽按单元格内容单行测量取列最大，整表超宽横向内部滚动、行多竖向滚动
+     *  （代码块的高度帽套路）；表头加粗 + 衬底，网格线自绘走边框色。单元格用 StyledDocument
+     *  复用行内样式解析。测量的列宽/行高与显示用同一套算法，保证高度一致 */
+    private record TableRow(TableBlock table) implements Row {
+        @Override
+        public Component component(Font base) {
+            final int[] columnWidths = columnWidths(base);
+            final int[] rowHeights = rowHeights(base, columnWidths);
+            final int totalWidth;
+            final int totalHeight;
+            int w = 0;
+            for (int width : columnWidths) {
+                w += width;
+            }
+            totalWidth = w;
+            int h = 0;
+            for (int rh : rowHeights) {
+                h += rh;
+            }
+            totalHeight = h;
+
+            JPanel grid = new JPanel(null) {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setColor(Ui.CODE_BG);
+                    g2.fillRect(0, 0, totalWidth, rowHeights[0]); // 表头衬底
+                    g2.setColor(Ui.BORDER);
+                    g2.drawRect(0, 0, totalWidth - 1, totalHeight - 1);
+                    int y = 0;
+                    for (int r = 0; r < rowHeights.length - 1; r++) {
+                        y += rowHeights[r];
+                        g2.drawLine(0, y, totalWidth - 1, y);
+                    }
+                    int x = 0;
+                    for (int c = 0; c < columnWidths.length - 1; c++) {
+                        x += columnWidths[c];
+                        g2.drawLine(x, 0, x, totalHeight - 1);
+                    }
+                    g2.dispose();
+                }
+            };
+            grid.setOpaque(false);
+            int y = 0;
+            List<List<List<Span>>> rows = table.rows();
+            for (int r = 0; r < rows.size(); r++) {
+                int x = 0;
+                List<List<Span>> row = rows.get(r);
+                for (int c = 0; c < columnWidths.length; c++) {
+                    JTextPane cell = Ui.displayTextPane();
+                    cell.setFont(base);
+                    try {
+                        insertSpans(cell.getStyledDocument(), c < row.size() ? row.get(c) : List.of(),
+                                base, Ui.TEXT, r == 0, false);
+                    } catch (BadLocationException e) {
+                        throw new IllegalStateException(e);
+                    }
+                    cell.setBorder(BorderFactory.createEmptyBorder(
+                            TABLE_CELL_PAD_Y, TABLE_CELL_PAD_X, TABLE_CELL_PAD_Y, TABLE_CELL_PAD_X));
+                    cell.setBounds(x, y, columnWidths[c], rowHeights[r]);
+                    grid.add(cell);
+                    x += columnWidths[c];
+                }
+                y += rowHeights[r];
+            }
+            grid.setPreferredSize(new Dimension(totalWidth, totalHeight));
+
+            JScrollPane scroll = new JScrollPane(grid,
+                    JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                    JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+            scroll.setBorder(BorderFactory.createEmptyBorder());
+            scroll.setOpaque(false); // 表格比视口窄时视口会拉大 grid，滚动容器自身必须透明（踩坑 #19 同源）
+            scroll.getViewport().setOpaque(false);
+            scroll.setViewportBorder(BorderFactory.createEmptyBorder());
+            scroll.getVerticalScrollBar().setUnitIncrement(16);
+            scroll.getHorizontalScrollBar().setUnitIncrement(16);
+            Ui.styleScrollPane(scroll);
+            return scroll;
+        }
+
+        @Override
+        public int measureAt(Font base, int width) {
+            int[] rowHeights = rowHeights(base, columnWidths(base));
+            int total = 0;
+            for (int rh : rowHeights) {
+                total += rh;
+            }
+            return Math.min(total, TABLE_HEIGHT_CAP) + 1;
+        }
+
+        /** 列宽 = 该列所有单元格的自然宽度（单行不折行）取最大 + 左右内衬 */
+        private int[] columnWidths(Font base) {
+            int columnCount = 0;
+            for (List<List<Span>> row : table.rows()) {
+                columnCount = Math.max(columnCount, row.size());
+            }
+            int[] widths = new int[columnCount];
+            for (List<List<Span>> row : table.rows()) {
+                for (int c = 0; c < columnCount; c++) {
+                    List<Span> spans = c < row.size() ? row.get(c) : List.of();
+                    widths[c] = Math.max(widths[c], spanWidth(spans, base) + TABLE_CELL_PAD_X * 2);
+                }
+            }
+            return widths;
+        }
+
+        /** 行高 = 行内最高的单元格（按列宽折行测）+ 上下内衬 */
+        private int[] rowHeights(Font base, int[] columnWidths) {
+            int[] heights = new int[table.rows().size()];
+            for (int r = 0; r < table.rows().size(); r++) {
+                List<List<Span>> row = table.rows().get(r);
+                int h = 0;
+                for (int c = 0; c < columnWidths.length; c++) {
+                    List<Span> spans = c < row.size() ? row.get(c) : List.of();
+                    h = Math.max(h, spanHeight(spans, base, columnWidths[c] - TABLE_CELL_PAD_X * 2));
+                }
+                heights[r] = h + TABLE_CELL_PAD_Y * 2;
+            }
+            return heights;
+        }
+
+        /** 单元格自然宽度：克隆测量（踩坑记录 #2），单行不折行。+1 补亚像素取整误差，防末字被裁 */
+        private int spanWidth(List<Span> spans, Font base) {
+            JTextPane measurer = new JTextPane();
+            measurer.setFont(base);
+            try {
+                insertSpans(measurer.getStyledDocument(), spans, base, Ui.TEXT, false, false);
+            } catch (BadLocationException e) {
+                throw new IllegalStateException(e);
+            }
+            View view = measurer.getUI().getRootView(measurer);
+            view.setSize(Integer.MAX_VALUE, Integer.MAX_VALUE);
+            return (int) Math.ceil(view.getPreferredSpan(View.HORIZONTAL)) + 1;
+        }
+
+        /** 单元格高度：按列宽（扣除内衬）折行测 */
+        private int spanHeight(List<Span> spans, Font base, int width) {
+            JTextPane measurer = new JTextPane();
+            measurer.setFont(base);
+            try {
+                insertSpans(measurer.getStyledDocument(), spans, base, Ui.TEXT, false, false);
+            } catch (BadLocationException e) {
+                throw new IllegalStateException(e);
+            }
+            View view = measurer.getUI().getRootView(measurer);
+            view.setSize(Math.max(20, width), Integer.MAX_VALUE);
+            return (int) Math.ceil(view.getPreferredSpan(View.VERTICAL));
+        }
+    }
+
+    private static final int THINK_HEADER_HEIGHT = 24;    private static final int THINK_PAD_TOP = 6;
     private static final int THINK_PAD_LEFT = 12;
     private static final int THINK_PAD_RIGHT = 12;
     private static final int THINK_PAD_BOTTOM = 8;
@@ -452,6 +611,8 @@ public final class MarkdownRenderer {
                 rows.add(new QuoteRow(quote));
             } else if (block instanceof ThinkBlock think) {
                 rows.add(new ThinkRow(think));
+            } else if (block instanceof TableBlock table) {
+                rows.add(new TableRow(table));
             } else if (block instanceof Rule) {
                 rows.add(new RuleRow());
             }
@@ -676,6 +837,11 @@ public final class MarkdownRenderer {
                 i++;
                 continue;
             }
+            // 表格（P1-5）：本行含竖线且下一行是 :---/--- 分隔行才算；表头在段落中间出现也要能接管
+            if (trimmed.contains("|") && i + 1 < lines.length && isTableDelimiter(lines[i + 1])) {
+                i = parseTable(lines, i, blocks);
+                continue;
+            }
             if (trimmed.startsWith(">")) {
                 List<List<Span>> quoteLines = new ArrayList<>();
                 while (i < lines.length && lines[i].strip().startsWith(">")) {
@@ -698,7 +864,8 @@ public final class MarkdownRenderer {
             while (i < lines.length) {
                 String t = lines[i].strip();
                 if (t.isEmpty() || isRule(t) || headingLevel(t) > 0 || t.startsWith("```") || t.startsWith("~~~")
-                        || t.startsWith(">") || listMarker(lines[i]) != null) {
+                        || t.startsWith(">") || listMarker(lines[i]) != null
+                        || (t.contains("|") && i + 1 < lines.length && isTableDelimiter(lines[i + 1]))) {
                     break;
                 }
                 para.add(t);
@@ -731,8 +898,63 @@ public final class MarkdownRenderer {
         return blocks;
     }
 
-    /** 围栏代码块：从 start 行的 ``` 起，吞到闭栏或文件尾，返回新的行游标 */
-    private static int parseFence(String[] lines, int start, List<Block> blocks) {
+    /** 解析表格（P1-5）：当前行=表头，下一行=分隔行，后续含竖线的行都是体行，
+     *  空行/无竖线/围栏收束。对齐标记暂不解析。返回消费后的新行游标 */
+    private static int parseTable(String[] lines, int headerIndex, List<Block> blocks) {
+        List<List<List<Span>>> rows = new ArrayList<>();
+        rows.add(parseTableRow(lines[headerIndex]));
+        int i = headerIndex + 2; // 跳过分隔行
+        while (i < lines.length) {
+            String trimmed = lines[i].strip();
+            if (trimmed.isEmpty() || !trimmed.contains("|")
+                    || trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
+                break;
+            }
+            rows.add(parseTableRow(lines[i]));
+            i++;
+        }
+        blocks.add(new TableBlock(rows));
+        return i;
+    }
+
+    /** 表格行 → 单元格 span 列表：去首尾竖线（尾竖线须非转义）、\| 转义占位后按 | 切分，逐格行内解析 */
+    private static List<List<Span>> parseTableRow(String line) {
+        String trimmed = line.strip();
+        if (trimmed.startsWith("|")) {
+            trimmed = trimmed.substring(1);
+        }
+        if (trimmed.endsWith("|") && !trimmed.endsWith("\\|")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        String escaped = trimmed.replace("\\|", "\u0001");
+        List<List<Span>> cells = new ArrayList<>();
+        for (String raw : escaped.split("\\|", -1)) {
+            cells.add(inline(raw.replace('\u0001', '|').strip()));
+        }
+        return cells;
+    }
+
+    /** 分隔行判定：| --- | :---: | 这类——去掉首尾竖线后每段都是可选冒号包着的连字符 */
+    private static boolean isTableDelimiter(String line) {
+        String trimmed = line.strip();
+        if (trimmed.startsWith("|")) {
+            trimmed = trimmed.substring(1);
+        }
+        if (trimmed.endsWith("|")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        boolean anyCell = false;
+        for (String raw : trimmed.split("\\|", -1)) {
+            String cell = raw.strip();
+            if (!cell.matches(":?-+:?")) {
+                return false;
+            }
+            anyCell = true;
+        }
+        return anyCell;
+    }
+
+    /** 围栏代码块：从 start 行的 ``` 起，吞到闭栏或文件尾，返回新的行游标 */    private static int parseFence(String[] lines, int start, List<Block> blocks) {
         String open = lines[start].strip();
         String fenceChar = open.substring(0, 1);
         String info = open.replaceFirst("^[`~]+", "").strip();

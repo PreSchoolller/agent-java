@@ -68,6 +68,13 @@ public class Shot {
             这是 **加粗**贴字、*斜体*贴字、`行内代码`、[链接](https://example.com)、~~删除线~~ 的段落，
             第二行紧跟着上一行，还有裸地址 https://example.com/path?q=1。
 
+            工具一览：
+
+            | 工具 | 权限 | 说明 |
+            | --- | --- | --- |
+            | read | 只读 | 读取文本文件内容 |
+            | write | 需确认 | 写入文件前经用户放行 |
+
             - 无序列表一
             - 无序列表二
                 - 嵌套项
@@ -261,7 +268,7 @@ public class Shot {
         // —— Markdown 解析断言（块类型与数量） ——
         List<MarkdownRenderer.Block> md = MarkdownRenderer.parse(SAMPLE_MD);
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Heading).count() == 1, "标题数");
-        expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Paragraph).count() == 3, "段落数");
+        expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Paragraph).count() == 4, "段落数");
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.ListItem).count() == 6, "列表项数");
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.CodeBlock).count() == 2, "代码块数");
         // diff 块：内容原样进 CodeBlock（渲染层按行着色），增行删行都在
@@ -292,6 +299,21 @@ public class Shot {
         MarkdownRenderer.Paragraph stray = (MarkdownRenderer.Paragraph) MarkdownRenderer
                 .parse("有 </think> 游离闭标的正文").get(0);
         expect(stray.spans().stream().noneMatch(s -> s.text().contains("</think>")), "游离闭标剔除");
+        // 表格（P1-5）：分隔行识别、单元格内容、转义竖线、表头夹在段落里也能接管
+        List<MarkdownRenderer.Block> tableOnly = md.stream()
+                .filter(b -> b instanceof MarkdownRenderer.TableBlock).toList();
+        expect(tableOnly.size() == 1, "表格块数");
+        MarkdownRenderer.TableBlock table = (MarkdownRenderer.TableBlock) tableOnly.get(0);
+        expect(table.rows().size() == 3
+                && "工具".equals(table.rows().get(0).get(0).get(0).text())
+                && "读取文本文件内容".equals(table.rows().get(1).get(2).get(0).text())
+                && "write".equals(table.rows().get(2).get(0).get(0).text()), "表头/体行单元格");
+        List<MarkdownRenderer.Block> notTable = MarkdownRenderer.parse("没有分隔行不算表格\n| a | b |\n| --- | --- |");
+        expect(notTable.get(0) instanceof MarkdownRenderer.Paragraph, "无分隔行的孤立段落不成表");
+        expect(notTable.get(1) instanceof MarkdownRenderer.TableBlock, "段落后的表头能接管成表");
+        List<MarkdownRenderer.Block> escaped = MarkdownRenderer.parse("| a \\| b | c |\n| --- | --- |");
+        expect(((MarkdownRenderer.TableBlock) escaped.get(0)).rows().get(0).get(0).get(0).text().equals("a | b"),
+                "转义竖线");
         System.out.println("MD_PARSE_OK");
 
         // —— 造两段会话（c1 六条消息让瀑布流溢出，滚动条才可见） ——
