@@ -35,6 +35,9 @@ final class Theme {
     Color accent;
     /** 主题色悬停 */
     Color accentPressed;
+    /** 划词选区的底色与文字色（显示组件可选中，Ctrl+C 复制） */
+    Color selectionBg;
+    Color selectionFg;
     /** 实时数据小胶囊底色 */
     Color pillBg;
     /** 代码块底色与描边 */
@@ -95,6 +98,8 @@ final class Theme {
         t.textSecondary = new Color(0x8A919F);
         t.accent = new Color(0x3D7EFF);
         t.accentPressed = new Color(0x2F66DB);
+        t.selectionBg = new Color(0xD6E5FF);
+        t.selectionFg = new Color(0x1B2A4A);
         t.pillBg = new Color(0xE9EBEF);
         t.codeBg = new Color(0xF6F8FA);
         t.codeBorder = new Color(0xE2E6EB);
@@ -138,6 +143,8 @@ final class Theme {
         t.textSecondary = new Color(0x9AA3B0);
         t.accent = new Color(0x4E8BFF);
         t.accentPressed = new Color(0x3A78E6);
+        t.selectionBg = new Color(0x2E4C77);
+        t.selectionFg = new Color(0xE7E9EC);
         t.pillBg = new Color(0x272B32);
         t.codeBg = new Color(0x1A1D23);
         t.codeBorder = new Color(0x343A42);

@@ -52,7 +52,7 @@ import java.util.Properties;
  * 十七张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
- * 17权限确认卡}.png（SHOT_OK）。
+ * 16b工具卡展开,17权限确认卡,18划词选区}.png（SHOT_OK）。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
@@ -425,6 +425,12 @@ public class Shot {
         expect("给我演示一下 Markdown 渲染".equals(clipboardText()), "用户消息复制到剪贴板");
         // 链接跳转（P1-6）：显示中正文 pane 的链接字符带 url 属性，modelToView 反推坐标能命中
         expect(uiLinkHit("https://example.com/path?q=1"), "链接字符带 url 属性且命中检测可取回");
+        // 划词复制（计划外）：显示组件可聚焦可选中，Ctrl+C 拷选区而非整卡
+        selectAndCtrlC("给我演示一下 Markdown 渲染", 0, 4);
+        Thread.sleep(400); // 选区重绘是异步的，等一拍再截，不然截图里没有高亮
+        capture(args[0] + "-18-selection.png");
+        Thread.sleep(200);
+        expect("给我演示".equals(clipboardText()), "划词 Ctrl+C 复制选区");
 
         // —— 截图 7：流式输出（appendChunk 节流渲染 + 高度自适应 + 自动滚底） ——
         // 开头带思考段：流式中展开看得到增长，闭合后自动收起并显示计得时长（P1-7）
@@ -892,6 +898,34 @@ public class Shot {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** 划词复制断言：在包含该文本的显示 pane 里选中 [start, end) 并派发 Ctrl+C。
+     *  事件直接派发给该组件——TextAction 对事件源组件生效，不依赖窗口焦点。
+     *  setSelectionVisible(true) 强制高亮可见（正常交互是持焦才高亮；自动化里窗口可能
+     *  不在前台、requestFocusInWindow 是尽力而为，截图要确定性） */
+    private static void selectAndCtrlC(String contained, int start, int end) throws Exception {
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.JTextPane pane
+                        && pane.getText() != null && pane.getText().contains(contained)) {
+                    // 选区绘制查 hasFocus：自动化时窗口多半不在前台，先把窗口带到前台再要焦点
+                    WINDOW.toFront();
+                    WINDOW.requestFocus();
+                    pane.requestFocusInWindow();
+                    pane.setCaretPosition(start);
+                    pane.moveCaretPosition(end);
+                    pane.getCaret().setSelectionVisible(true);
+                    pane.dispatchEvent(new java.awt.event.KeyEvent(pane, java.awt.event.KeyEvent.KEY_PRESSED,
+                            System.currentTimeMillis(), java.awt.event.KeyEvent.CTRL_DOWN_MASK,
+                            java.awt.event.KeyEvent.VK_C, java.awt.event.KeyEvent.CHAR_UNDEFINED));
+                    return;
+                }
+            }
+            throw new AssertionError("没找到可划词的文本组件: " + contained);
+        });
     }
 
     /** 链接命中断言（P1-6）：在显示中的正文 pane 里扫属性等于该 URL 的字符偏移，

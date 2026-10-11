@@ -89,6 +89,9 @@ final class Ui {
     static Color ACCENT;
     /** 主题色悬停 */
     static Color ACCENT_PRESSED;
+    /** 划词选区的底色与文字色（显示组件可选中，Ctrl+C 复制） */
+    static Color SELECTION_BG;
+    static Color SELECTION_FG;
     /** 实时数据小胶囊底色 */
     static Color PILL_BG;
     /** 代码块底色与描边（AI 消息 Markdown 渲染） */
@@ -157,6 +160,8 @@ final class Ui {
         TEXT_SECONDARY = theme.textSecondary;
         ACCENT = theme.accent;
         ACCENT_PRESSED = theme.accentPressed;
+        SELECTION_BG = theme.selectionBg;
+        SELECTION_FG = theme.selectionFg;
         PILL_BG = theme.pillBg;
         CODE_BG = theme.codeBg;
         CODE_BORDER = theme.codeBorder;
@@ -600,7 +605,11 @@ final class Ui {
         };
         pane.setEditable(false);
         pane.setOpaque(false);
-        pane.setFocusable(false);
+        // 可聚焦可划选（Ctrl+C 复制选区）；光标对只读展示无意义，设全透明防止聚焦后闪烁
+        pane.setFocusable(true);
+        pane.setSelectionColor(SELECTION_BG);
+        pane.setSelectedTextColor(SELECTION_FG);
+        pane.setCaretColor(new Color(0, 0, 0, 0));
         return pane;
     }
 
@@ -613,7 +622,10 @@ final class Ui {
         };
         area.setEditable(false);
         area.setOpaque(false);
-        area.setFocusable(false);
+        area.setFocusable(true);
+        area.setSelectionColor(SELECTION_BG);
+        area.setSelectedTextColor(SELECTION_FG);
+        area.setCaretColor(new Color(0, 0, 0, 0));
         return area;
     }
 
