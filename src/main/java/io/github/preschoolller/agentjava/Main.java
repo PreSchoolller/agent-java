@@ -82,6 +82,9 @@ public class Main {
                 AtomicBoolean token = RUNNING.get(window.getStore().getActive().getId());
                 if (token != null) {
                     token.set(true);
+                    // 已派发的工具还在后台跑完才收尾（P2-5）：胶囊上说明状态，避免用户以为卡死连点。
+                    // 纯文案不改停止语义；链结束 setConversationGenerating(false) 会把胶囊刷回"就绪"
+                    window.setRealtimeInfo("正在等待工具收尾…");
                 }
             });
         });
