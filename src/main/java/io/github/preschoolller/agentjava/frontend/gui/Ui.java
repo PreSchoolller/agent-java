@@ -582,6 +582,12 @@ final class Ui {
                 g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
                 g2.setColor(BORDER_STRONG);
                 g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 14, 14);
+                // 角标（client property "badgeDot" 设 Color 才画）：侧栏折叠时汉堡按钮上
+                // 提示"有会话在生成/待审批"，颜色由调用方按紧急程度给
+                if (getClientProperty("badgeDot") instanceof Color dotColor) {
+                    g2.setColor(dotColor);
+                    g2.fillOval(getWidth() - 13, 5, 8, 8);
+                }
                 g2.dispose();
                 super.paintComponent(g);
             }

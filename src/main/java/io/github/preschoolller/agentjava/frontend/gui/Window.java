@@ -8,6 +8,7 @@ import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 import io.github.preschoolller.agentjava.frontend.store.Message;
 
 import javax.swing.BorderFactory;
+import javax.swing.AbstractAction;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
@@ -19,8 +20,10 @@ import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JScrollBar;
 import javax.swing.JSplitPane;
+import javax.swing.JTextField;
 import javax.swing.JTextArea;
 import javax.swing.JTextPane;
+import javax.swing.KeyStroke;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingConstants;
 import javax.swing.Timer;
@@ -191,6 +194,15 @@ public class Window extends JFrame {
     /** 各会话的输入框草稿：切会话保留各自的未发送文本，也防 A 会话的草稿误发进 B。
      *  输入区 DocumentListener 实时写、showConversation 按会话取；内存态不落盘 */
     private final Map<String, String> draftsByConversation = new HashMap<>();
+    /** 会话内搜索（Ctrl+F）：搜索条 + 消息级匹配。匹配按卡片下标记，定位滚到卡片
+     *  （骨架占位就有 bounds，滚动顺带触发窗口化重物化）+ 描边闪烁 */
+    private JPanel searchBar;
+    private JTextField searchField;
+    private JLabel searchCountLabel;
+    private List<Integer> searchMatches = new ArrayList<>();
+    private int searchCursor = -1;
+    private MessageCard flashedCard;
+    private Timer searchFlashTimer;
 
     /** AI 回复的流式句柄：addAiMessage 返回。所有方法须在 EDT 上调用。 */
     public interface AiStream {
@@ -371,7 +383,7 @@ public class Window extends JFrame {
         setIconImages(java.util.List.of(Ui.createAppIcon(16), Ui.createAppIcon(32), Ui.createAppIcon(48)));
 
         // 先把保存的主题应用到 Ui 镜像再构建；首次构建与换主题重建走同一条 buildUi 路
-        Ui.applyTheme(AppSettings.get().getUiTheme());
+        Ui.applyTheme(AppSettings.get().resolvedUiTheme());
         sidebarCallbacks = new Sidebar.Callbacks() {
             @Override
             public void onToggleCollapse() {
@@ -401,6 +413,35 @@ public class Window extends JFrame {
         showConversation(store.getActive());
         initCloseBehavior();
         applyPersistedBounds();
+        initStopShortcut();
+        initSearchShortcut();
+    }
+
+    /** Esc 停止生成（P2 候补）：窗口级绑定，生成中（停止键可见）才触发；会话内搜索框自己
+     *  消费 Esc 关搜索条，不受影响 */
+    private void initStopShortcut() {
+        getRootPane().getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), "stopGeneration");
+        getRootPane().getActionMap().put("stopGeneration", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                if (stopButton.isVisible()) {
+                    stopButton.doClick();
+                }
+            }
+        });
+    }
+
+    /** Ctrl+F 会话内搜索：窗口级绑定，开搜索条并聚焦 */
+    private void initSearchShortcut() {
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(KeyStroke.getKeyStroke("control F"), "openSearch");
+        getRootPane().getActionMap().put("openSearch", new AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                openSearch();
+            }
+        });
     }
 
     /** 尺寸/位置/分隔条防抖落盘（1 秒无变更才写）：拖动/缩放期间只记内存，停手后落盘 */
@@ -593,7 +634,7 @@ public class Window extends JFrame {
 
     /** 应用设置里的主题并原地重建界面（设置保存后调用）。显示中的会话生成中先挂起，空闲时补做 */
     public void retheme() {
-        Ui.applyTheme(AppSettings.get().getUiTheme());
+        Ui.applyTheme(AppSettings.get().resolvedUiTheme());
         if (isGenerating(displayedConvId)) {
             pendingRebuild = true;
             return;
@@ -1472,6 +1513,171 @@ public class Window extends JFrame {
         // change 事件在 viewPosition 更新之后触发，getViewRect 才是准的
         waterfallScroll.getViewport().addChangeListener(e -> updateMaterialization());
         innerPanel.add(waterfallScroll, BorderLayout.CENTER);
+        searchBar = buildSearchBar();
+        searchBar.setVisible(false);
+        innerPanel.add(searchBar, BorderLayout.NORTH);
+    }
+
+    /** 会话内搜索（Ctrl+F）：搜索条挂在主区顶部，默认隐藏 */
+    private JPanel buildSearchBar() {
+        searchField = new JTextField();
+        Ui.styleInput(searchField);
+        searchField.setPreferredSize(new Dimension(220, 28));
+        searchCountLabel = new JLabel("");
+        searchCountLabel.setFont(new Font("微软雅黑", Font.PLAIN, 12));
+        searchCountLabel.setForeground(Ui.TEXT_SECONDARY);
+        JButton prevButton = Ui.button("上一个");
+        JButton nextButton = Ui.button("下一个");
+        JButton closeButton = Ui.button("收起");
+        for (JButton button : new JButton[]{prevButton, nextButton, closeButton}) {
+            button.setFont(new Font("微软雅黑", Font.PLAIN, 12));
+            button.setPreferredSize(new Dimension(64, 26));
+        }
+        prevButton.addActionListener(e -> jumpSearch(-1));
+        nextButton.addActionListener(e -> jumpSearch(1));
+        closeButton.addActionListener(e -> closeSearch());
+        // 输入即搜；Esc 收起走字段自己的键绑定（焦点绑定先于窗口级 Esc 停止绑定生效）
+        searchField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                runSearch();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                runSearch();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                runSearch();
+            }
+        });
+        searchField.getInputMap(JComponent.WHEN_FOCUSED)
+                .put(KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), "closeSearch");
+        searchField.getActionMap().put("closeSearch", new AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                closeSearch();
+            }
+        });
+        searchField.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                    e.consume();
+                    jumpSearch(e.isShiftDown() ? -1 : 1);
+                }
+            }
+        });
+
+        JPanel bar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 6));
+        bar.setBackground(Ui.BG);
+        bar.add(searchField);
+        bar.add(searchCountLabel);
+        bar.add(prevButton);
+        bar.add(nextButton);
+        bar.add(closeButton);
+        return bar;
+    }
+
+    /** 打开会话内搜索条（Ctrl+F 入口） */
+    public void openSearch() {
+        searchBar.setVisible(true);
+        searchField.requestFocusInWindow();
+        searchField.selectAll();
+        runSearch();
+        innerPanel.revalidate();
+        innerPanel.repaint();
+    }
+
+    /** 打开并直接填入搜索词（回归工具用；等价于手动输入触发实时搜索） */
+    public void openSearch(String query) {
+        openSearch();
+        searchField.setText(query);
+    }
+
+    /** 收起会话内搜索条 */
+    public void closeSearch() {
+        searchBar.setVisible(false);
+        clearSearchFlash();
+        searchMatches = new ArrayList<>();
+        searchCursor = -1;
+        searchCountLabel.setText("");
+        innerPanel.revalidate();
+        innerPanel.repaint();
+        inputTextArea.requestFocusInWindow();
+    }
+
+    /** 按当前搜索词重建匹配列表（消息级、忽略大小写），有结果就跳到第一处 */
+    private void runSearch() {
+        String query = searchField.getText().strip().toLowerCase();
+        searchMatches = new ArrayList<>();
+        searchCursor = -1;
+        if (!query.isEmpty()) {
+            for (int i = 0; i < messageCards.size(); i++) {
+                if (searchableText(messageCards.get(i)).contains(query)) {
+                    searchMatches.add(i);
+                }
+            }
+        }
+        searchCountLabel.setText(query.isEmpty() || searchMatches.isEmpty()
+                ? (query.isEmpty() ? "" : "无结果")
+                : "共 " + searchMatches.size() + " 处");
+        if (!searchMatches.isEmpty()) {
+            searchCursor = 0;
+            jumpToMatch();
+        }
+    }
+
+    /** 搜索文本：工具卡=名字+参数+结果，用户卡=原文，AI 卡=Markdown 原文 */
+    private String searchableText(MessageCard card) {
+        Message message = card.message;
+        if (card.tool) {
+            return (message.toolName() + " " + message.toolArgs() + " " + message.text()).toLowerCase();
+        }
+        if (card.user) {
+            return message.text() == null ? "" : message.text().toLowerCase();
+        }
+        return card.markdown == null ? "" : card.markdown.getText().toLowerCase();
+    }
+
+    private void jumpSearch(int direction) {
+        if (searchMatches.isEmpty()) {
+            return;
+        }
+        searchCursor = (searchCursor + direction + searchMatches.size()) % searchMatches.size();
+        jumpToMatch();
+    }
+
+    private void jumpToMatch() {
+        int index = searchMatches.get(searchCursor);
+        if (index >= messageCards.size()) {
+            runSearch(); // 消息增删导致下标失效：按当前搜索词重算
+            return;
+        }
+        MessageCard card = messageCards.get(index);
+        searchCountLabel.setText((searchCursor + 1) + " / " + searchMatches.size());
+        // 骨架占位就有 bounds，滚过去；视口变化会触发窗口化重物化
+        card.card.scrollRectToVisible(new Rectangle(0, 0, card.card.getWidth(), card.card.getHeight()));
+        clearSearchFlash();
+        ((Ui.RoundPanel) card.card).borderColor = Ui.ACCENT;
+        card.card.repaint();
+        flashedCard = card;
+        searchFlashTimer = new Timer(700, ev -> clearSearchFlash());
+        searchFlashTimer.setRepeats(false);
+        searchFlashTimer.start();
+    }
+
+    private void clearSearchFlash() {
+        if (searchFlashTimer != null) {
+            searchFlashTimer.stop();
+        }
+        if (flashedCard != null) {
+            ((Ui.RoundPanel) flashedCard.card).borderColor = null;
+            flashedCard.card.repaint();
+            flashedCard = null;
+        }
     }
 
     /** 把卡片调整为按当前宽度折行后的实际高度；用户气泡限宽后靠右上 */

@@ -22,6 +22,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FileDialog;
@@ -174,7 +175,32 @@ public class Sidebar extends JPanel {
         } else {
             convList.clearSelection(); // 过滤时当前会话不在结果里就不高亮，也不切换
         }
+        refreshCollapsedBadge(conversations);
         refreshingList = false;
+    }
+
+    /** 侧栏折叠时汉堡按钮上的角标：有会话在生成/待审批时点个色点提示（待确认优先）。
+     *  展开态条目上本来就有彩色标签，角标主要供折叠态看见 */
+    private void refreshCollapsedBadge(List<Conversation> conversations) {
+        Badge worst = null;
+        for (Conversation conversation : conversations) {
+            Badge badge = badgeLookup.apply(conversation.getId());
+            if (badge == Badge.APPROVAL) {
+                worst = Badge.APPROVAL;
+                break; // 最紧急，直接定
+            }
+            if (badge == Badge.GENERATING) {
+                worst = Badge.GENERATING;
+            }
+        }
+        Color dot = null;
+        if (worst == Badge.APPROVAL) {
+            dot = Ui.WARNING;
+        } else if (worst == Badge.GENERATING) {
+            dot = Ui.ACCENT;
+        }
+        toggleButton.putClientProperty("badgeDot", dot);
+        toggleButton.repaint();
     }
 
     /**

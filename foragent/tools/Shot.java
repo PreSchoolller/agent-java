@@ -52,7 +52,7 @@ import java.util.Properties;
  * 十七张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
- * 16b工具卡展开,17权限确认卡,18划词选区}.png（SHOT_OK）。
+ * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索}.png（SHOT_OK）。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
@@ -260,13 +260,17 @@ public class Shot {
         expect(migrated.getActiveProfile().getModels().equals(List.of("legacy-model")), "旧格式模型列表兜底");
         // apiType 键缺失（旧文件）时落默认 response
         expect("response".equals(migrated.getActiveProfile().getApiType()), "旧格式 API 类型默认");
-        // 主题偏好：默认浅色、非法值忽略、落盘往返
+        // 主题偏好：默认浅色、非法值忽略、跟随系统档、落盘往返
         expect("light".equals(testSettings.getUiTheme()), "主题默认浅色");
         testSettings.setUiTheme("深色");
         expect("light".equals(testSettings.getUiTheme()), "非法主题值忽略");
+        testSettings.setUiTheme("system");
+        expect("system".equals(testSettings.getUiTheme()), "跟随系统档落值");
         testSettings.setUiTheme("dark");
         testSettings.save();
         expect("dark".equals(AppSettings.at(settingsFile).getUiTheme()), "主题落盘往返");
+        // resolveTheme：system 档探测后必落在两套主题之一（Windows 读注册表，失败按浅色）
+        expect(java.util.Set.of("light", "dark").contains(testSettings.resolvedUiTheme()), "系统主题解析收敛");
         expect(!testSettings.isMinimizeToTray(), "托盘偏好默认关闭");
         testSettings.setMinimizeToTray(true);
         testSettings.save();
@@ -439,6 +443,15 @@ public class Shot {
         capture(args[0] + "-18-selection.png");
         Thread.sleep(200);
         expect("给我演示".equals(clipboardText()), "划词 Ctrl+C 复制选区");
+        // 会话内搜索（Ctrl+F）：开搜索条填词，匹配计数与定位跳转；收起后入口消失
+        edt(() -> WINDOW.openSearch("Markdown"));
+        Thread.sleep(400);
+        capture(args[0] + "-19-search.png");
+        expect(uiHasShowingText("上一个") && uiHasShowingText("下一个") && uiHasShowingText("收起"), "搜索条打开");
+        expect(uiHasLabelContaining(" / "), "命中计数与游标显示");
+        edt(() -> WINDOW.closeSearch());
+        Thread.sleep(300);
+        expect(!uiHasShowingText("收起"), "搜索条收起");
 
         // —— 截图 7：流式输出（appendChunk 节流渲染 + 高度自适应 + 自动滚底） ——
         // 开头带思考段：流式中展开看得到增长，闭合后自动收起并显示计得时长（P1-7）
@@ -831,9 +844,29 @@ public class Shot {
         throw new AssertionError("没找到可点击的按钮: " + text);
     }
 
-    /** 窗口里是否存在文本包含该片段的标签（思考块"已思考"标注断言用；uiHasText 是全等匹配） */
-    private static boolean uiHasLabelContaining(String fragment) throws Exception {
+    /** 窗口里是否有正在显示（isShowing）的全等文本按钮/标签：搜索条显隐断言用——
+     *  收起后的组件还在视图树里，只是不可见，uiHasText 会误报 */
+    private static boolean uiHasShowingText(String text) throws Exception {
         boolean[] found = new boolean[1];
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (!component.isShowing()) {
+                    continue;
+                }
+                if (component instanceof javax.swing.AbstractButton button && text.equals(button.getText())
+                        || component instanceof javax.swing.JLabel label && text.equals(label.getText())) {
+                    found[0] = true;
+                    return;
+                }
+            }
+        });
+        return found[0];
+    }
+
+    /** 窗口里是否存在文本包含该片段的标签（思考块"已思考"标注断言用；uiHasText 是全等匹配） */
+    private static boolean uiHasLabelContaining(String fragment) throws Exception {        boolean[] found = new boolean[1];
         edt(() -> {
             List<Component> all = new ArrayList<>();
             collectComponents(WINDOW, all);

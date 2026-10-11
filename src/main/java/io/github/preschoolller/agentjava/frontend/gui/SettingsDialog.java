@@ -52,7 +52,7 @@ public class SettingsDialog extends JDialog {
 
     private final JComboBox<String> profileCombo = new JComboBox<>();
     /** 配色主题：索引 0 浅色 / 1 深色，保存时写回 AppSettings，由主窗口重建生效 */
-    private final JComboBox<String> themeCombo = new JComboBox<>(new String[]{"浅色", "深色"});
+    private final JComboBox<String> themeCombo = new JComboBox<>(new String[]{"跟随系统", "浅色", "深色"});
     /** 关闭按钮最小化到托盘（系统不支持托盘时勾了也只会直接退出） */
     private final JCheckBox trayCheckBox = new JCheckBox("最小化到托盘");
     private final JButton profileAddButton = Ui.button("新建");
@@ -99,7 +99,11 @@ public class SettingsDialog extends JDialog {
         systemPromptArea.setBackground(Ui.INPUT_BG);
         systemPromptArea.setForeground(Ui.TEXT);
         systemPromptArea.setCaretColor(Ui.TEXT);
-        themeCombo.setSelectedIndex("dark".equals(settings.getUiTheme()) ? 1 : 0);
+        themeCombo.setSelectedIndex(switch (settings.getUiTheme()) {
+            case "dark" -> 2;
+            case "system" -> 0;
+            default -> 1;
+        });
         trayCheckBox.setSelected(settings.isMinimizeToTray());
         Ui.styleCheckBox(trayCheckBox);
         trayCheckBox.setToolTipText("系统不支持托盘时，关闭按钮仍会直接退出");
@@ -430,7 +434,11 @@ public class SettingsDialog extends JDialog {
         profile.setMaxTokens(((Number) maxTokensSpinner.getValue()).intValue());
         profile.setSystemPrompt(systemPromptArea.getText());
         settings.setContentFontSize(((Number) fontSizeSpinner.getValue()).intValue());
-        settings.setUiTheme(themeCombo.getSelectedIndex() == 1 ? "dark" : "light");
+        settings.setUiTheme(switch (themeCombo.getSelectedIndex()) {
+            case 0 -> "system";
+            case 2 -> "dark";
+            default -> "light";
+        });
         settings.setMinimizeToTray(trayCheckBox.isSelected());
         settings.applyProfiles(working, selectedName); // 内部落盘 + fireChanged
         saved = true;

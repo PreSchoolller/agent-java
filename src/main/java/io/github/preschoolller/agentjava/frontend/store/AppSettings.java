@@ -34,7 +34,7 @@ public final class AppSettings {
     private String activeProfileName = DEFAULT_PROFILE_NAME;
     /** 消息卡片正文字号（全局 UI 偏好，不属于任何方案） */
     private int contentFontSize = 16;
-    /** 配色主题（全局 UI 偏好）："light" / "dark" */
+    /** 配色主题（全局 UI 偏好）："light" / "dark" / "system"（跟随系统，Ui.resolveTheme 解析） */
     private String uiTheme = "light";
     /** 关闭按钮最小化到托盘（全局 UI 偏好，默认关闭=直接退出） */
     private boolean minimizeToTray;
@@ -210,8 +210,43 @@ public final class AppSettings {
 
     /** 仅接受 "light"/"dark"，其他值忽略 */
     public void setUiTheme(String uiTheme) {
-        if ("light".equals(uiTheme) || "dark".equals(uiTheme)) {
+        if ("light".equals(uiTheme) || "dark".equals(uiTheme) || "system".equals(uiTheme)) {
             this.uiTheme = uiTheme;
+        }
+    }
+
+    private static Boolean systemDark; // 系统深浅色探测一次缓存
+
+    /**
+     * 主题偏好解析成实际主题（Ui.applyTheme 用）："system" 跟随系统——Windows 读注册表
+     * AppsUseLightTheme，非 Windows/失败按浅色；其余按字面。
+     */
+    public String resolvedUiTheme() {
+        if ("system".equals(uiTheme)) {
+            if (systemDark == null) {
+                systemDark = probeSystemDark();
+            }
+            return systemDark ? "dark" : "light";
+        }
+        return "dark".equals(uiTheme) ? "dark" : "light";
+    }
+
+    /** 探测 Windows 系统应用主题：输出按 ISO-8859-1 解——关键 token 全是 ASCII，
+     *  任何单字节解码都不破坏匹配 */
+    private static boolean probeSystemDark() {
+        try {
+            Process process = new ProcessBuilder("reg", "query",
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                    "/v", "AppsUseLightTheme").start();
+            String output = new String(process.getInputStream().readAllBytes(),
+                    java.nio.charset.StandardCharsets.ISO_8859_1);
+            process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                    .compile("AppsUseLightTheme\\s+REG_DWORD\\s+0x([0-9a-fA-F]+)")
+                    .matcher(output);
+            return matcher.find() && "0".equals(matcher.group(1));
+        } catch (Exception e) {
+            return false; // 非 Windows / reg 不可用：按浅色
         }
     }
 
