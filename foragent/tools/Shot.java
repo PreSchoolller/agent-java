@@ -42,7 +42,7 @@ import java.util.Properties;
  *   javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
  *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
- * 输出：持久化往返 + 删尾/分叉/置顶落盘/主文件元数据化 + 旧格式元数据读取测试（PERSIST_OK）、
+ * 输出：持久化往返 + 删尾/分叉/置顶落盘/主文件元数据化（PERSIST_OK）、
  * 按需加载断言（LAZY_OK：新建 store 不读会话文件、元数据保存不重写会话文件、触达消息才读）、
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
@@ -161,17 +161,6 @@ public class Shot {
         expect(pinnedOf(fourth, conv.getId()), "置顶落盘");
         fourth.setPinned(conv.getId(), false);
         expect(!pinnedOf(new ConversationStore(dir.resolve("history.json")), conv.getId()), "取消置顶落盘");
-        // v0 旧格式（顶层数组）读取：元数据照常还原，pinned 缺省 false；缺失单文件的会话
-        // 按无消息加载（局部 try 隔离），旧格式内嵌的 messages 不再迁移——单会话文件是消息唯一存储
-        Path legacyFile = dir.resolve("legacy.json");
-        Files.writeString(legacyFile, JsonKit.write(List.of(Map.of(
-                "id", "legacy-1", "title", "旧格式会话", "createdAt", 1L, "updatedAt", 2L,
-                "messages", List.of(Map.of("role", "user", "text", "旧消息", "time", 3L))))));
-        ConversationStore legacyStore = new ConversationStore(legacyFile);
-        expect(legacyStore.getConversations().size() == 1, "旧格式会话数");
-        expect("旧格式会话".equals(legacyStore.getConversations().get(0).getTitle()), "旧格式标题");
-        expect(legacyStore.getConversations().get(0).getMessages().isEmpty(), "旧格式消息不再迁移");
-        expect(!legacyStore.getConversations().get(0).isPinned(), "旧格式默认不置顶");
         // 删空活跃会话（重新生成走 removeLastMessage 删到最后一条）：主文件不再落盘，残留单文件清掉
         ConversationStore fifth = new ConversationStore(dir.resolve("history.json"));
         String fifthId = fifth.getActive().getId();

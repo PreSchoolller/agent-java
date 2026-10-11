@@ -2,8 +2,7 @@ package io.github.preschoolller.agentjava.backend.provider.common;
 
 import org.jetbrains.annotations.NotNull;
 
-import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -13,28 +12,47 @@ public class ThreadPoolFactory {
 
     private static final int CORE_POOL_SIZE = Runtime.getRuntime().availableProcessors();
 
-    private static final ThreadPoolExecutor executor = new ThreadPoolExecutor(
+    private static final ThreadFactory toolCallThreadFactory = new ThreadFactory() {
+        private final AtomicInteger count = new AtomicInteger(0);
+
+        @Override
+        public Thread newThread(@NotNull Runnable r) {
+            Thread thread = new Thread(r);
+            thread.setDaemon(false);
+            thread.setName("toolcall-pool-1-thread-" + count.incrementAndGet());
+            return thread;
+        }
+    };
+
+
+    private static final ThreadPoolExecutor toolCallExecutor = new ThreadPoolExecutor(
             CORE_POOL_SIZE, 100, 1000, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(), Executors.defaultThreadFactory(),
+            new ArrayBlockingQueue<>(100, true), toolCallThreadFactory,
             new ThreadPoolExecutor.CallerRunsPolicy());
 
-    {
-        executor.setThreadFactory(
-                new ThreadFactory() {
-                    private final AtomicInteger count = new AtomicInteger(0);
+    private static final ThreadFactory responseThreadFactory = new ThreadFactory() {
+        private final AtomicInteger count = new AtomicInteger(0);
 
-                    @Override
-                    public Thread newThread(@NotNull Runnable r) {
-                        Thread thread = new Thread(r);
-                        thread.setDaemon(false);
-                        thread.setName("pool-1-thread-" + count.incrementAndGet());
-                        return thread;
-                    }
-                }
-        );
+        @Override
+        public Thread newThread(@NotNull Runnable r) {
+            Thread thread = new Thread(r);
+            thread.setDaemon(false);
+            thread.setName("response-pool-1-thread-" + count.incrementAndGet());
+            return thread;
+        }
+    };
+
+    private static final ThreadPoolExecutor responseExecutor = new ThreadPoolExecutor(
+            CORE_POOL_SIZE, 100, 1000, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(100, true), responseThreadFactory,
+            new ThreadPoolExecutor.CallerRunsPolicy());
+
+
+    public static ThreadPoolExecutor getToolCallExecutor() {
+        return toolCallExecutor;
     }
 
-    public static ThreadPoolExecutor getExecutor() {
-        return executor;
+    public static ThreadPoolExecutor getResponseExecutor() {
+        return responseExecutor;
     }
 }

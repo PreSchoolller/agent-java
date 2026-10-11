@@ -54,7 +54,10 @@ public class Conversation {
     }
 
     /** 首次触达时把磁盘上的消息读进来；loader 读失败按无消息处理（仓库侧已打日志）。
-     *  synchronized 只保证"读一次"：agent 后台线程和 EDT 可能先后触达同一会话 */
+     *  synchronized 只保证"读一次"：agent 后台线程和 EDT 可能先后触达同一会话。
+     *  loaded 先置位再读是刻意的：若读完再置位，loader 中途抛异常后二次触达会重读、
+     *  已 addAll 的一半加上重读的全部 = 重复追加；一次性语义更稳——前提是 loader 实现
+     *  自己吞掉所有异常（readSessionMessages 如此，换实现时别破坏这条契约）。 */
     private synchronized List<Message> ensureLoaded() {
         if (!loaded) {
             loaded = true;

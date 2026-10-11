@@ -44,6 +44,7 @@ public class BadTool implements Tool {
 
     @Override
     public String execute(String arguments) {
-        return "unknown tool";
+        // 这句话会作为工具结果回给模型：说清楚是名字没对上，模型才有机会纠正
+        return "unknown function call: no registered tool with this name";
     }
 }

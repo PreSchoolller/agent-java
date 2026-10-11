@@ -341,11 +341,11 @@ public class ConversationStore {
         }
         try {
             Object root = JsonKit.parse(Files.readString(file));
+            // v1 起从 conversations 字段取。
+            // 以后升版本时在 version 分支里做字段迁移，别把用户旧历史读丢。
             List<?> items = null;
             if (root instanceof Map<?, ?> map) {
                 items = (List<?>) map.get("conversations");
-            } else if (root instanceof List<?> list) {
-                items = list;
             }
             if (items == null) {
                 return;

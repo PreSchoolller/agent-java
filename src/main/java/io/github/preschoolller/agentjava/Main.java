@@ -6,7 +6,6 @@ import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.RoleEnum;
-import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.provider.common.event.BaseEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDeltaEvent;
@@ -36,12 +35,25 @@ import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Main {
+
+    /**
+     * 会话级 agent 循环锁（id → 本轮链的取消令牌）：不同会话各自并行，同一会话同一时刻最多一轮。
+     * UI 的生成态置灰是第一道，这里是后端兜底；令牌随工具续轮传递，整条链结束才移除条目。
+     * 旧版全 app 共用一个 AtomicBoolean，续轮间隙输入解锁后新请求会把旧轮的取消位复位，
+     * 旧轮收尾时误判"没取消"再续一轮——并行请求就是这么来的，现在各会话各拿各的令牌。
+     */
+    private static final Map<String, AtomicBoolean> RUNNING = new ConcurrentHashMap<>();
+
+    /** 工具执行阶段的等待上限：审批等待不计入（那个靠用户点击/停止结束），只防工具 I/O 卡死拖住整轮 */
+    private static final long TOOL_EXECUTE_TIMEOUT_SECONDS = 60;
+
     public static void main(String[] args) {
         Provider openAiProvider = ProviderFactory.createOpenAiProvider();
         SwingUtilities.invokeLater(() -> {
@@ -51,37 +63,58 @@ public class Main {
             window.setLocation(640, 360);
             window.setVisible(true);
 
-            AtomicBoolean cancelled = new AtomicBoolean(false);
-
             // 回调触发时本轮用户消息已入库（Window.submitInput 先画卡再回调），
             // 历史快照直接取整个会话，无需单独传问题文本
-            window.onInputSubmitted((conversation, text) ->
-                    realReplyStream(window, cancelled, conversation, openAiProvider));
+            window.onInputSubmitted((conversation, text) -> startAgentLoop(window, conversation, openAiProvider));
 
-            // 重新生成：回调触发时旧回复已从界面移除，先删仓库里的旧回答，再带全量历史重新请求
+            // 重新生成：先抢会话锁再删旧回答，然后带全量历史重新请求
             window.onRegenerate(conversation -> {
+                AtomicBoolean token = tryAcquire(conversation.getId());
+                if (token == null) {
+                    return; // 该会话已在生成（理论上不可达：生成中按钮隐藏），不动仓库
+                }
                 window.getStore().removeLastMessage(conversation.getId());
-                realReplyStream(window, cancelled, conversation, openAiProvider);
+                streamReply(window, conversation, openAiProvider, token);
             });
 
             window.onStopRequested(() -> {
-                // 通知后端中断本次生成；已生成的部分由 realReplyStream 里的 finish 保留并照常落库
-                cancelled.set(true);
+                // 停的是当前显示的会话：通知那轮链中断；审批等待 200ms 内退出，已生成部分照常落库
+                AtomicBoolean token = RUNNING.get(window.getStore().getActive().getId());
+                if (token != null) {
+                    token.set(true);
+                }
             });
         });
     }
 
-    /** 真实流式回复：EDT 上取历史快照 → 后台线程从 BlockingQueue 取增量 → EDT 上 appendChunk（Window 内部 120ms 节流）→ 毒丸后 finish 落库 */
-    private static void realReplyStream(Window window, AtomicBoolean cancelled, Conversation conversation, Provider provider) {
-        window.setGenerating(true);
-        cancelled.set(false);
-        // 历史快照与模型/强度选择都在 EDT 上取（此时本轮 AI 占位卡还没建），
+    /** 抢会话锁：抢到返回本链的取消令牌，该会话已在跑返回 null */
+    private static AtomicBoolean tryAcquire(String conversationId) {
+        AtomicBoolean token = new AtomicBoolean(false);
+        return RUNNING.putIfAbsent(conversationId, token) == null ? token : null;
+    }
+
+    private static void startAgentLoop(Window window, Conversation conversation, Provider provider) {
+        AtomicBoolean token = tryAcquire(conversation.getId());
+        if (token == null) {
+            return; // 该会话已在生成：正常情况 UI 已拦，这里是后端兜底
+        }
+        streamReply(window, conversation, provider, token);
+    }
+
+    /**
+     * 一轮流式回复（agent 循环的单轮）：EDT 上取历史快照 → 后台线程从事件队列取增量 → EDT 上回填 →
+     * 队列毒丸后等工具收尾，有工具结果就带着同一个取消令牌续下一轮，没有（或已停止）就释放会话锁。
+     * 生成的会话不必在前台：卡片经会话 id 定向落库，用户切走再切回由 Window 的 rebind 重新上屏。
+     */
+    private static void streamReply(Window window, Conversation conversation, Provider provider, AtomicBoolean cancelled) {
+        window.setConversationGenerating(conversation.getId(), true);
+        // 历史快照与模型/强度/模式选择都在 EDT 上取（此时本轮 AI 占位卡还没建），
         // 之后仓库与下拉框可能被 EDT 修改，后台线程只读这份不可变数据
         List<PromptParams.RoleMessage> history = buildRoleMessages(conversation);
         String model = window.getSelectedModel();
         ReasoningEffortEnum re = window.getSelectedEffort(); // 模型与思考强度取输入区右下角的选择（对话级设置）
         AgentMode mode = window.getSelectedMode(); // 权限模式快照：本轮中途改下拉框不影响已发出的请求
-        Window.AiStream stream = window.addAiMessage(""); // 这一步已在 EDT 上（输入/按钮回调都在 EDT）
+        Window.AiStream stream = window.addAiMessage(conversation.getId(), "");
         CompletableFuture.runAsync(() -> {
             BlockingQueue<BaseEvent> events = null;
             List<CompletableFuture<Void>> toolCalls = new ArrayList<>();
@@ -106,14 +139,14 @@ public class Main {
                         appendAiMessage(deltaEvent.delta(), stream, cancelled);
                     } else if (event instanceof ReasoningDeltaDoneEvent) {
                         appendAiMessage("</think>", stream, cancelled);
-                    } else if (event instanceof ResponseDeltaStartEvent deltaEvent) {
+                    } else if (event instanceof ResponseDeltaStartEvent) {
                         appendAiMessage("", stream, cancelled);
                     } else if (event instanceof ResponseDeltaEvent deltaEvent) {
                         appendAiMessage(deltaEvent.delta(), stream, cancelled);
                     } else if (event instanceof ResponseDeltaDoneEvent) {
                         appendAiMessage("", stream, cancelled);
                     } else if (event instanceof FunctionToolCallStartEvent e) {
-                        addToolCall(window, e.name(), e.callId(), callIdHandleMap);
+                        addToolCall(window, conversation.getId(), e.name(), e.callId(), callIdHandleMap);
                         callIdByItemId.put(e.id(), e.callId());
                         argsByCallId.put(e.callId(), new StringBuilder());
                     } else if (event instanceof FunctionToolCallDeltaEvent e) {
@@ -139,18 +172,11 @@ public class Main {
                     }
                 }
             } catch (RuntimeException e) {
-                SwingUtilities.invokeLater(() -> {
-                    stream.finish();
-                    window.addNotifyMessage("Error: " + e.getMessage());
-                    window.setGenerating(false);
-                });
+                SwingUtilities.invokeLater(() -> window.addNotifyMessage("Error: " + e.getMessage()));
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             } finally {
-                SwingUtilities.invokeLater(() -> {
-                    stream.finish(); // 停止也走 finish：已生成部分照常保留并落库
-                    window.setGenerating(false);
-                });
+                SwingUtilities.invokeLater(() -> stream.finish()); // 停止也走 finish：已生成部分照常保留并落库
                 for (String callId : callIdHandleMap.keySet()) {
                     if (doneCalls.contains(callId)) {
                         continue;
@@ -162,12 +188,18 @@ public class Main {
                         callIdHandleMap.get(callId).finish(result, false, partialArgs);
                     });
                 }
+                // 审批阶段由点击/停止结束，执行阶段有超时兜底，这里不会永久挂起
                 toolCalls.forEach(CompletableFuture::join);
-                if (!cancelled.get() && !toolCalls.isEmpty()) {
-                    SwingUtilities.invokeLater(() -> realReplyStream(window, cancelled, conversation, provider));
-                }
                 if (cancelled.get()) {
                     drainUntilPoison(events);
+                }
+                if (!cancelled.get() && !toolCalls.isEmpty()) {
+                    // 工具续轮：同一个取消令牌、同一把会话锁，生成态保持到整条链结束
+                    SwingUtilities.invokeLater(() -> streamReply(window, conversation, provider, cancelled));
+                } else {
+                    // 双参 remove：条目还是本轮令牌才清（防御性的对称）
+                    RUNNING.remove(conversation.getId(), cancelled);
+                    SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), false));
                 }
             }
         });
@@ -219,10 +251,10 @@ public class Main {
         SwingUtilities.invokeLater(() -> stream.appendChunk(chunk));
     }
 
-    private static void addToolCall(Window window, String name, String callId, Map<String, Window.ToolCallHandle> callIdHandleMap) {
+    private static void addToolCall(Window window, String conversationId, String name, String callId, Map<String, Window.ToolCallHandle> callIdHandleMap) {
         try {
             SwingUtilities.invokeAndWait(() -> {
-                Window.ToolCallHandle toolCallHandle = window.addToolCall(name, "", callId);
+                Window.ToolCallHandle toolCallHandle = window.addToolCall(conversationId, name, "", callId);
                 callIdHandleMap.put(callId, toolCallHandle);
             });
         } catch (InterruptedException e) {
@@ -235,15 +267,21 @@ public class Main {
     private static CompletableFuture<Void> performToolCall(ToolCall toolCall, Window.ToolCallHandle toolCallHandle) {
         return CompletableFuture.runAsync(() -> {
             try {
-                toolCall.awaitFinal();
+                toolCall.awaitFinal(TOOL_EXECUTE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 System.out.println("工具调用：" + toolCall.getTool().name() + " call_id: " + toolCall.getCallId() + "错误！");
+            } catch (TimeoutException e) {
+                // 执行阶段超时：必须给模型和卡片一句交代——不写的话 finish(null) 卡片空白，回传历史时整条被跳过
+                String timeoutResult = "工具执行超时（" + TOOL_EXECUTE_TIMEOUT_SECONDS + " 秒未完成），已放弃等待；工具可能仍在后台执行。";
+                toolCall.setResult(timeoutResult);
+                toolCall.setStatus(ToolCall.Status.INCOMPLETE);
+                SwingUtilities.invokeLater(() -> toolCallHandle.finish(timeoutResult, false, toolCall.getArguments()));
+                return;
             }
             SwingUtilities.invokeLater(() -> {
-                        toolCallHandle.finish(toolCall.getResult(),
-                                ToolCall.Status.COMPLETE.equals(toolCall.getStatus()), toolCall.getArguments());
-                    }
-            );
+                toolCallHandle.finish(toolCall.getResult(),
+                        ToolCall.Status.COMPLETE.equals(toolCall.getStatus()), toolCall.getArguments());
+            });
         });
     }
 

@@ -10,12 +10,8 @@ public class PromptParams {
     private List<RoleMessage> roleMessages;
 
     /**
-     * if true, no tool use, purely chat.
-     */
-    private boolean justChat;
-
-    /**
-     * 本轮的权限模式（输入区左下角），审批策略据此决定要不要问（AgentMode#requiresApproval）。
+     * 本轮的权限模式（输入区左下角）：审批策略据此决定要不要问（AgentMode#requiresApproval），
+     * CHAT 还会让 buildParams 摘掉工具声明与历史工具轮次（纯聊天）。
      */
     private AgentMode agentMode;
 
@@ -38,10 +34,6 @@ public class PromptParams {
 
     public List<RoleMessage> getRoleMessages() {
         return roleMessages;
-    }
-
-    public Boolean getJustChat() {
-        return justChat;
     }
 
     /** 未显式设置时按较严的 EDIT 处理（漏接线只会多问一次，不会不问就执行） */
@@ -73,7 +65,6 @@ public class PromptParams {
             base.model = promptParams.model;
             base.re = promptParams.re;
             base.roleMessages = promptParams.roleMessages;
-            base.justChat = promptParams.justChat;
             base.agentMode = promptParams.agentMode;
             base.approvalGate = promptParams.approvalGate;
         }
@@ -96,11 +87,6 @@ public class PromptParams {
 
         public Builder roleMessages(RoleMessage roleMessage) {
             base.roleMessages.add(roleMessage);
-            return this;
-        }
-
-        public Builder justChat(boolean justChat) {
-            base.justChat = justChat;
             return this;
         }
 

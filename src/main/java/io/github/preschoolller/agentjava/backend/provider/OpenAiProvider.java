@@ -133,8 +133,8 @@ public class OpenAiProvider implements Provider {
         synchronized (this) {
             service = responseService;
         }
-        PromptParams justReadParams = promptParams.toBuilder().justChat(true).build();
-        ResponseCreateParams responseCreateParams = buildParams(justReadParams);
+        PromptParams chatParams = promptParams.toBuilder().agentMode(AgentMode.CHAT).build();
+        ResponseCreateParams responseCreateParams = buildParams(chatParams);
         Response response = service.create(responseCreateParams);
 
         return new ProviderBlockingTextResponse(getReasoningContent(response), getMessageContent(response));
@@ -166,8 +166,8 @@ public class OpenAiProvider implements Provider {
                     allMessages.add(ResponseInputItem.ofEasyInputMessage(easyInputMessage));
                 }
                 case TOOL_RESULT -> {
-                    if (promptParams.getJustChat()) {
-                        continue;
+                    if (promptParams.getAgentMode() == AgentMode.CHAT) {
+                        continue; // 纯聊天请求不带工具，历史里的工具轮次一并跳过
                     }
                     ResponseFunctionToolCall responseFunctionToolCall = ResponseFunctionToolCall
                             .builder()
@@ -193,8 +193,8 @@ public class OpenAiProvider implements Provider {
         builder.model(promptParams.getModel())
                 .reasoning(Reasoning.builder().effort(RE_MAP.get(promptParams.getRe())).build())
                 .inputOfResponse(inputList);
-        if (promptParams.getJustChat()) {
-            return builder.build();
+        if (promptParams.getAgentMode() == AgentMode.CHAT) {
+            return builder.build(); // 纯聊天：不声明任何工具，模型调不了东西，审批/执行链路整个不参与
         }
         for (Tool tool : ToolManager.tools) {
             builder.addTool(ToolManager.getFunctionTool(tool));
@@ -214,14 +214,14 @@ public class OpenAiProvider implements Provider {
         StreamResponse<ResponseStreamEvent> response = service.createStreaming(responseCreateParams);
         ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue,
                 promptParams.getApprovalGate(), promptParams.getAgentMode());
-        new Thread(() -> {
+        ThreadPoolFactory.getResponseExecutor().execute(() -> {
             try {
                 response.stream()
                         .forEach(responseStreamEvent -> responseStreamEvent.accept(visitor));
             } finally {
                 blockingQueue.offer(new PoisonEvent());
             }
-        }).start();
+        });
 
         return new ProviderStreamingResponse(blockingQueue);
     }
@@ -347,16 +347,18 @@ public class OpenAiProvider implements Provider {
                     ResponseFunctionToolCall functionCall = responseOutputItemDoneEvent.item().asFunctionCall();
                     ToolCall toolCall = new ToolCall();
                     toolCall.setArguments(functionCall.arguments());
-                    toolCall.setTool(ToolManager.findByName(functionCall.name()).orElse(ToolManager.BAD_TOOL));
+                    toolCall.setTool(ToolManager.findByName(functionCall.name()));
                     toolCall.setCallId(functionCall.callId());
                     putIntoBQ(new FunctionToolCallDoneEvent(functionCall.callId(), toolCall));
-                    ThreadPoolFactory.getExecutor().execute(() -> {
+                    ThreadPoolFactory.getToolCallExecutor().execute(() -> {
                         // 审批在池线程上做（可阻塞等用户点击）；读流线程只管转发事件，绝不停顿
                         if (approvalGate != null && !approvalGate.allow(toolCall, agentMode)) {
+                            toolCall.markExecutionStarted(); // 先解锁等待方，紧随其后的终态让它直接返回
                             toolCall.setResult(ToolApprovalGate.DENIED_RESULT);
                             toolCall.setStatus(ToolCall.Status.INCOMPLETE);
                             return;
                         }
+                        toolCall.markExecutionStarted(); // 进入执行阶段，awaitFinal 的执行超时从这里起算（审批等待不计入）
                         try {
                             toolCall.setResult(ToolManager.execute(functionCall));
                             toolCall.setStatus(ToolCall.Status.COMPLETE);

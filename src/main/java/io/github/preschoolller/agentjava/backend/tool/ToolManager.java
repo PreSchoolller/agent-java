@@ -8,7 +8,6 @@ import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Optional;
 
 public class ToolManager {
     public static final Tool BAD_TOOL = BadTool.getInstance();
@@ -36,15 +35,11 @@ public class ToolManager {
         tools.add(tool);
     }
 
-    public static Optional<Tool> findByName(String name) {
-        return tools.stream().filter(tool -> tool.name().equals(name)).findFirst();
+    public static Tool findByName(String name) {
+        return tools.stream().filter(tool -> tool.name().equals(name)).findAny().orElse(BAD_TOOL);
     }
 
-    public static FunctionTool getFunctionTool(String name) {
-        Optional<Tool> optionalTool = findByName(name);
-        return optionalTool.map(ToolManager::getFunctionTool).orElse(null);
-    }
-
+    /** 只接受已注册的 Tool（buildParams 遍历 tools 时用）；BAD_TOOL.schema() 是 null，别拿占位工具进来 */
     public static FunctionTool getFunctionTool(Tool tool) {
         HashMap<String, JsonValue> parameters = new HashMap<>();
         tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
@@ -65,6 +60,6 @@ public class ToolManager {
             }
             return tool.execute(functionTool.arguments());
         }
-        return "";
+        return BAD_TOOL.execute(functionTool.arguments());
     }
 }

@@ -65,7 +65,9 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -129,16 +131,16 @@ public class Window extends JFrame {
     /** 输入区右下角：本次对话的模型与思考强度（对话级选择，选项来自当前方案的模型列表） */
     private JComboBox<String> modelCombo;
     private JComboBox<String> effortCombo;
-    /** 输入区左下角：权限模式（计划=只读规划 / 编辑=允许改文件 / 完全访问=不受限），后端执行循环消费 */
+    /** 输入区左下角：权限模式（计划=只读规划 / 编辑=允许改文件 / 完全访问=不受限 / 纯聊天=不挂工具），后端执行循环消费 */
     private JComboBox<String> modeCombo;
     /** 思考强度下拉的选项顺序，与"关闭/低/中/高/超高"标签一一对应 */
     private static final ReasoningEffortEnum[] EFFORT_OPTIONS = {
             ReasoningEffortEnum.NO, ReasoningEffortEnum.LOW, ReasoningEffortEnum.MEDIUM,
             ReasoningEffortEnum.HIGH, ReasoningEffortEnum.ULTRA,
     };
-    /** 权限模式下拉的选项顺序，与"计划模式/编辑模式/完全访问"标签一一对应 */
+    /** 权限模式下拉的选项顺序，与"计划模式/编辑模式/完全访问/纯聊天"标签一一对应 */
     private static final AgentMode[] MODE_OPTIONS = {
-            AgentMode.PLAN, AgentMode.EDIT, AgentMode.FULL_ACCESS,
+            AgentMode.PLAN, AgentMode.EDIT, AgentMode.FULL_ACCESS, AgentMode.CHAT,
     };
 
     /** 实时数据小胶囊（底部居中） */
@@ -159,14 +161,17 @@ public class Window extends JFrame {
     private String displayedConvId;
     /** 切换会话后等卡片高度测量完毕，滚到最底部（聊天应用的惯例：打开即最新消息） */
     private boolean pendingScrollToBottom;
-    /** 生成中保存了设置：换主题/字号的重建挂起，setGenerating(false) 时补做（流式卡片引用不能断） */
+    /** 生成中保存了设置：换主题/字号的重建挂起，显示中的会话空闲时补做（rebind 之后的重建对流式引用是安全的） */
     private boolean pendingRebuild;
     /** 托盘图标（系统支持即常驻注册，关闭行为实时读 AppSettings 的偏好）；null=未注册 */
     private TrayIcon trayIcon;
     private BiConsumer<Conversation, String> inputHandler;
     private Runnable stopHandler;
     private Consumer<Conversation> regenerateHandler;
-    private boolean generating;
+    /** 各会话的生成态：并行 agent 循环下每个会话独立一把锁，输入区/停止按钮永远跟随当前显示的会话 */
+    private final Set<String> generatingConversations = new HashSet<>();
+    /** 还在进行中的流式句柄（未 finish 的 AiStream/ToolCallHandle）：会话切走卡片被丢弃，切回时按消息同一性重绑 */
+    private final List<LiveStream> liveStreams = new ArrayList<>();
 
     /** AI 回复的流式句柄：addAiMessage 返回。所有方法须在 EDT 上调用。 */
     public interface AiStream {
@@ -178,6 +183,19 @@ public class Window extends JFrame {
 
         /** 结束流式：渲染剩余内容并把最终文本写回会话仓库 */
         void finish();
+    }
+
+    /**
+     * 进行中的流式句柄共有能力（并行生成，P0-4 之后）：目标会话切走时卡片随瀑布流丢弃重建，
+     * 切回时按消息同一性找到新卡片重新挂上（rebind），攒在句柄里的增量一次性补画。
+     * finish 时从 liveStreams 摘除。
+     */
+    private interface LiveStream {
+        String conversationId();
+
+        Message message();
+
+        void rebind(MessageCard card);
     }
 
     /**
@@ -504,10 +522,10 @@ public class Window extends JFrame {
         add(splitPane, BorderLayout.CENTER);
     }
 
-    /** 应用设置里的主题并原地重建界面（设置保存后调用）。生成中先挂起，setGenerating(false) 补做 */
+    /** 应用设置里的主题并原地重建界面（设置保存后调用）。显示中的会话生成中先挂起，空闲时补做 */
     public void retheme() {
         Ui.applyTheme(AppSettings.get().getUiTheme());
-        if (generating) {
+        if (isGenerating(displayedConvId)) {
             pendingRebuild = true;
             return;
         }
@@ -566,11 +584,23 @@ public class Window extends JFrame {
      * appendChunk，结束时 finish()（会把最终文本写回会话仓库）。须在 EDT 上调用。
      */
     public AiStream addAiMessage(String text) {
-        Message message = store.appendMessage(store.getActive().getId(), Conversation.ROLE_AI, text);
-        MessageCard card = insertMessageCard(message);
-        updateMaterialization(); // 流式卡片是最后一张，窗口化时保证它已物化
-        scrollToBottom();
-        return new AiStreamImpl(store.getActive().getId(), message, card);
+        return addAiMessage(store.getActive().getId(), text);
+    }
+
+    /**
+     * 往指定会话追加 AI 输出卡片（并行生成时目标会话可能不在前台）：非显示中的会话只落库不出卡，
+     * 流式增量攒在句柄里，切回该会话时经 rebind 一次性补画。须在 EDT 上调用。
+     */
+    public AiStream addAiMessage(String conversationId, String text) {
+        Message message = store.appendMessage(conversationId, Conversation.ROLE_AI, text);
+        MessageCard card = conversationId.equals(displayedConvId) ? insertMessageCard(message) : null;
+        if (card != null) {
+            updateMaterialization(); // 流式卡片是最后一张，窗口化时保证它已物化
+            scrollToBottom();
+        }
+        AiStreamImpl stream = new AiStreamImpl(conversationId, message, card);
+        liveStreams.add(stream);
+        return stream;
     }
 
     /**
@@ -601,28 +631,59 @@ public class Window extends JFrame {
      * 与 AiStream 对称：后端在 EDT 上调用。须在 EDT 上调用。
      */
     public ToolCallHandle addToolCall(String toolName, String argsSummary, String callId) {
-        Message message = store.appendToolCall(store.getActive().getId(), toolName, argsSummary, callId);
-        MessageCard card = insertMessageCard(message);
-        updateMaterialization(); // 新卡片在末尾，窗口化时补物化
-        scrollToBottom();
-        return new ToolCallImpl(store.getActive().getId(), message, card);
+        return addToolCall(store.getActive().getId(), toolName, argsSummary, callId);
+    }
+
+    /** 指定会话的版本（并行生成时目标会话可能不在前台）：非显示中的会话只落库，卡片等切回时重绑上屏 */
+    public ToolCallHandle addToolCall(String conversationId, String toolName, String argsSummary, String callId) {
+        Message message = store.appendToolCall(conversationId, toolName, argsSummary, callId);
+        MessageCard card = conversationId.equals(displayedConvId) ? insertMessageCard(message) : null;
+        if (card != null) {
+            updateMaterialization(); // 新卡片在末尾，窗口化时补物化
+            scrollToBottom();
+        }
+        ToolCallImpl handle = new ToolCallImpl(conversationId, message, card);
+        liveStreams.add(handle);
+        return handle;
     }
 
     /** 工具调用卡的落库与刷新：参数增量只显示不写盘（120ms 节流，与 AiStream 同款），finish 时终态参数与结果一起落库 */
-    private final class ToolCallImpl implements ToolCallHandle {
+    private final class ToolCallImpl implements ToolCallHandle, LiveStream {
         private final String conversationId;
         private final Message message;
-        private final MessageCard card;
+        /** 可能为 null（目标会话不在前台）：切回会话时经 rebind 挂上新卡片 */
+        private MessageCard card;
         /** 已到达的参数增量：只攒在内存，卡片滚出视口后重新物化时也从这里画 */
         private final StringBuilder args = new StringBuilder();
         private final Timer argsTimer = new Timer(120, e -> flushArgs());
         private boolean finished;
+        /** 待确认的审批 future：卡片不在前台时先挂在句柄上，rebind 时挪到卡片 */
+        private CompletableFuture<Boolean> pendingApproval;
 
         private ToolCallImpl(String conversationId, Message message, MessageCard card) {
             this.conversationId = conversationId;
             this.message = message;
             this.card = card;
             argsTimer.setRepeats(false);
+        }
+
+        @Override
+        public String conversationId() {
+            return conversationId;
+        }
+
+        @Override
+        public Message message() {
+            return message;
+        }
+
+        @Override
+        public void rebind(MessageCard newCard) {
+            this.card = newCard;
+            if (pendingApproval != null && !finished) {
+                newCard.approval = pendingApproval; // 审批没决完就切走了：待确认态跟到新卡片上
+            }
+            flushArgs(); // 把切走期间攒的参数一次性画上
         }
 
         @Override
@@ -638,7 +699,7 @@ public class Window extends JFrame {
 
         /** 把攒下的参数刷到卡片头部；不动卡片高度（头部单行，摘要长度只影响标签宽度） */
         private void flushArgs() {
-            if (finished || args.length() == 0) {
+            if (finished || args.length() == 0 || card == null) {
                 return;
             }
             // 同步卡面消息：卡片此刻没物化也没关系，fillCard 重建头部时读的就是这份
@@ -661,11 +722,15 @@ public class Window extends JFrame {
             }
             finished = true;
             argsTimer.stop();
+            liveStreams.remove(this);
             String finalArgs = (arguments == null || arguments.isEmpty()) ? args.toString() : arguments;
             Message updated = store.completeToolCall(conversationId, message, result, success, finalArgs);
             System.out.println("工具入库结尾：" + System.currentTimeMillis());
             if (updated == null) {
                 return;
+            }
+            if (card == null) {
+                return; // 会话一直在后台：没有卡片可刷，仓库记录即终态，切回时按落库内容画
             }
             card.message = updated;
             if (conversationId.equals(displayedConvId) && messageCards.contains(card)) {
@@ -681,8 +746,11 @@ public class Window extends JFrame {
                 decision.complete(false);
                 return;
             }
-            card.approval = decision;
-            if (conversationId.equals(displayedConvId)) {
+            pendingApproval = decision;
+            if (card != null) {
+                card.approval = decision;
+            }
+            if (card != null && conversationId.equals(displayedConvId)) {
                 updateMaterialization(); // 待确认卡一般是最后一张，窗口化下保证它已物化
                 if (card.materialized) {
                     rebuildCard(card); // 头部要换"待确认"+两按钮，结构变了走重擦重建
@@ -722,14 +790,38 @@ public class Window extends JFrame {
         this.regenerateHandler = handler;
     }
 
-    /** 标记是否正在生成：发送/停止按钮互切，输入框置灰，实时数据胶囊显示"生成中…" */
-    public void setGenerating(boolean value) {
-        generating = value;
-        if (!value && pendingRebuild) {
-            pendingRebuild = false;
-            rebuildUi(); // 生成期间挂起的换装重建，现在界面空闲，补做
-            return;
+    /**
+     * 标记某个会话的生成态（并行 agent 循环，每个会话独立）：发送/停止按钮、输入框置灰、
+     * 重新生成显隐永远跟随当前显示的会话，切换会话时由 showConversation 重新刷。
+     */
+    public void setConversationGenerating(String conversationId, boolean value) {
+        if (value) {
+            generatingConversations.add(conversationId);
+        } else {
+            generatingConversations.remove(conversationId);
         }
+        if (conversationId.equals(displayedConvId)) {
+            refreshGeneratingUi();
+        }
+        if (!value && pendingRebuild && !isGenerating(displayedConvId)) {
+            // 显示中的会话空闲了：补做生成期间挂起的换装重建（rebind 保证其余会话的流式引用安全）
+            pendingRebuild = false;
+            rebuildUi();
+        }
+    }
+
+    /** 兼容入口：作用于当前显示的会话（Shot 回归工具用；主流程走 setConversationGenerating） */
+    public void setGenerating(boolean value) {
+        setConversationGenerating(displayedConvId, value);
+    }
+
+    private boolean isGenerating(String conversationId) {
+        return generatingConversations.contains(conversationId);
+    }
+
+    /** 按当前显示会话的生成态刷新输入区：发送/停止互切、输入框与下拉置灰、胶囊文案、重新生成显隐 */
+    private void refreshGeneratingUi() {
+        boolean value = isGenerating(displayedConvId);
         inputTextArea.setEnabled(!value);
         modeCombo.setEnabled(!value);
         modelCombo.setEnabled(!value);
@@ -769,11 +861,28 @@ public class Window extends JFrame {
         for (Message message : conversation.getMessages()) {
             insertMessageCard(message);
         }
+        rebindLiveStreams(conversation.getId()); // 切回还在生成的会话：把进行中的句柄挂回新卡片（要在物化前，待确认态才画得出来）
         updateMaterialization(); // 长会话只物化视口附近；短会话在这里全量补齐
         setTitle("Agent - " + displayTitle(conversation));
         waterfallPanel.revalidate();
         waterfallPanel.repaint();
+        refreshGeneratingUi(); // 输入区状态跟随目标会话：切到生成中的会话要置灰并出停止按钮
         inputTextArea.requestFocusInWindow();
+    }
+
+    /** 把进行中的流式句柄重新挂到重建后的卡片上（按消息同一性匹配）；只处理当前会话的 */
+    private void rebindLiveStreams(String conversationId) {
+        for (LiveStream stream : liveStreams) {
+            if (!stream.conversationId().equals(conversationId)) {
+                continue;
+            }
+            for (MessageCard card : messageCards) {
+                if (card.message == stream.message()) {
+                    stream.rebind(card);
+                    break;
+                }
+            }
+        }
     }
 
     private void onStoreChanged() {
@@ -1066,7 +1175,7 @@ public class Window extends JFrame {
     }
 
     private void setMenuVisible(JButton menuButton, boolean visible) {
-        boolean show = visible && !generating;
+        boolean show = visible && !isGenerating(displayedConvId);
         if (menuButton.isVisible() == show) {
             return;
         }
@@ -1091,7 +1200,7 @@ public class Window extends JFrame {
     /** 分叉：以这条 AI 回复为分叉点开新会话（含这条回复，从该状态继续），原会话不动；
      *  store.fork 会把新会话设为当前并通知，主区自动切过去 */
     private void forkConversation(MessageCard card) {
-        if (generating) {
+        if (isGenerating(displayedConvId)) {
             return;
         }
         store.fork(displayedConvId, card.message);
@@ -1160,6 +1269,7 @@ public class Window extends JFrame {
 
     /** 只有最后一张 AI 卡片显示重新生成（且生成中隐藏），其余 AI 卡片的按钮一律藏掉；悬停菜单同步藏起 */
     private void refreshRegenerateButtons() {
+        boolean generating = isGenerating(displayedConvId);
         int last = messageCards.size() - 1;
         for (int i = 0; i < messageCards.size(); i++) {
             MessageCard card = messageCards.get(i);
@@ -1174,7 +1284,7 @@ public class Window extends JFrame {
 
     /** 重新生成：先把最后一张 AI 卡片从界面移除（仓库删除由后端在回调里做），再通知后端重新请求 */
     private void requestRegenerate() {
-        if (generating || messageCards.isEmpty() || messageCards.get(messageCards.size() - 1).user) {
+        if (isGenerating(displayedConvId) || messageCards.isEmpty() || messageCards.get(messageCards.size() - 1).user) {
             return;
         }
         MessageCard last = messageCards.remove(messageCards.size() - 1);
@@ -1310,10 +1420,11 @@ public class Window extends JFrame {
     }
 
     /** 流式句柄实现：增量先攒在缓冲里，Swing Timer 按 120ms 节流重渲染；finish 时落库 */
-    private final class AiStreamImpl implements AiStream {
+    private final class AiStreamImpl implements AiStream, LiveStream {
         private final String conversationId;
         private final Message message;
-        private final MessageCard card;
+        /** 可能为 null（目标会话不在前台）：切回会话时经 rebind 挂上新卡片 */
+        private MessageCard card;
         private final StringBuilder full = new StringBuilder();
         private final StringBuilder pending = new StringBuilder();
         private final Timer flushTimer = new Timer(120, e -> flush());
@@ -1325,6 +1436,22 @@ public class Window extends JFrame {
             this.card = card;
             this.full.append(message.text() == null ? "" : message.text());
             flushTimer.setRepeats(false);
+        }
+
+        @Override
+        public String conversationId() {
+            return conversationId;
+        }
+
+        @Override
+        public Message message() {
+            return message;
+        }
+
+        @Override
+        public void rebind(MessageCard newCard) {
+            this.card = newCard;
+            flush(); // 把切走期间攒的增量一次性画上
         }
 
         @Override
@@ -1359,18 +1486,19 @@ public class Window extends JFrame {
             }
             finished = true;
             flushTimer.stop();
+            liveStreams.remove(this);
             flush();
             System.out.println("渲染收尾：" + System.currentTimeMillis());
             Message updated = store.updateMessageText(conversationId, message, full.toString());
             System.out.println("入库收尾：" + System.currentTimeMillis());
-            if (updated != null) {
+            if (updated != null && card != null) {
                 card.message = updated; // 仓库记录已换成新对象，卡片同步持有（分叉按同一性定位）
             }
         }
 
-        /** 把缓冲内容渲染到卡片并按新高度重排；会话已切走或卡片不在显示中时静默丢弃 */
+        /** 把缓冲内容渲染到卡片并按新高度重排；会话已切走、卡片不在显示中或还没挂上时静默丢弃 */
         private void flush() {
-            if (pending.length() == 0) {
+            if (pending.length() == 0 || card == null) {
                 return;
             }
             pending.setLength(0);
@@ -1413,7 +1541,7 @@ public class Window extends JFrame {
     /** 输入框回车：输入自动加为用户卡片并清空输入框，(会话, 文本) 再交给 inputHandler */
     private void submitInput() {
         String text = inputTextArea.getText().strip();
-        if (text.isEmpty() || generating) {
+        if (text.isEmpty() || isGenerating(displayedConvId)) {
             return;
         }
         addUserMessage(text);
@@ -1496,10 +1624,10 @@ public class Window extends JFrame {
         Ui.styleComboBox(effortCombo);
 
         // 输入框左下角：权限模式（计划=只读 / 编辑=允许改文件 / 完全访问=不受限）
-        modeCombo = new JComboBox<>(new String[]{"计划模式", "编辑模式", "完全访问"});
+        modeCombo = new JComboBox<>(new String[]{"计划模式", "编辑模式", "完全访问", "纯聊天"});
         modeCombo.setSelectedIndex(1);
         modeCombo.setPreferredSize(new Dimension(132, 26));
-        modeCombo.setToolTipText("权限模式：计划=只读规划；编辑=允许改文件；完全访问=不受限");
+        modeCombo.setToolTipText("权限模式：计划=只读规划；编辑=允许改文件；完全访问=不受限；纯聊天=不挂工具");
         Ui.styleComboBox(modeCombo);
 
         // 一排两端：左下角权限模式，右下角模型 + 思考强度 + 发送/停止
