@@ -26,6 +26,7 @@ import java.awt.Frame;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.Toolkit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -191,11 +192,25 @@ public class SettingsDialog extends JDialog {
         buttons.add(cancelButton);
         buttons.add(saveButton);
 
-        root.add(groups, BorderLayout.CENTER);
+        // 内容套滚动容器：装得下就全展示，装不下出竖向滚动条——GridBag 永远不缺高度，
+        // 任何行都不会被挤压重排（主题下拉被拉高、正文字号被压扁的根源），以后再加行
+        // 内容变长自动滚动。滚动面板和视口一起设底色，透明轨道不露默认灰（踩坑 #19）
+        JScrollPane groupsScroll = new JScrollPane(groups);
+        groupsScroll.setBorder(BorderFactory.createEmptyBorder());
+        groupsScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        groupsScroll.setBackground(Ui.BG);
+        groupsScroll.getViewport().setBackground(Ui.BG);
+        Ui.styleScrollPane(groupsScroll);
+        groupsScroll.getVerticalScrollBar().setUnitIncrement(16);
+        root.add(groupsScroll, BorderLayout.CENTER);
         root.add(buttons, BorderLayout.SOUTH);
         setContentPane(root);
 
-        setSize(560, 700);
+        // 高度跟随内容首选：pack 拿全量（保底 700），小屏按屏高九成截断——超出部分由上面的
+        // 滚动容器接管，行高永远按首选渲染
+        pack();
+        int screenHeight = Toolkit.getDefaultToolkit().getScreenSize().height;
+        setSize(560, Math.min(Math.max(getHeight(), 700), screenHeight * 9 / 10));
         setLocationRelativeTo(owner);
     }
 
