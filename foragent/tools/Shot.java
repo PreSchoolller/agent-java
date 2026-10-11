@@ -423,6 +423,8 @@ public class Shot {
         edt(() -> uiClick("复制"));
         Thread.sleep(200);
         expect("给我演示一下 Markdown 渲染".equals(clipboardText()), "用户消息复制到剪贴板");
+        // 链接跳转（P1-6）：显示中正文 pane 的链接字符带 url 属性，modelToView 反推坐标能命中
+        expect(uiLinkHit("https://example.com/path?q=1"), "链接字符带 url 属性且命中检测可取回");
 
         // —— 截图 7：流式输出（appendChunk 节流渲染 + 高度自适应 + 自动滚底） ——
         // 开头带思考段：流式中展开看得到增长，闭合后自动收起并显示计得时长（P1-7）
@@ -890,6 +892,40 @@ public class Shot {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** 链接命中断言（P1-6）：在显示中的正文 pane 里扫属性等于该 URL 的字符偏移，
+     *  用 modelToView 反推坐标再走 linkUrlAt 验证能取回——不真开浏览器。
+     *  链接首字符的 rect 可能是零宽（前面贴着空格的视图特性），所以扫全部偏移不设宽度假定 */
+    private static boolean uiLinkHit(String url) throws Exception {
+        boolean[] found = new boolean[1];
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.JTextPane pane
+                        && pane.getText() != null && pane.getText().contains(url)) {
+                    javax.swing.text.StyledDocument doc = pane.getStyledDocument();
+                    for (int offset = 0; offset < doc.getLength() && !found[0]; offset++) {
+                        Object attr = doc.getCharacterElement(offset).getAttributes()
+                                .getAttribute(MarkdownRenderer.LINK_URL_ATTRIBUTE);
+                        if (!url.equals(attr)) {
+                            continue;
+                        }
+                        try {
+                            java.awt.Rectangle rect = pane.modelToView2D(offset).getBounds();
+                            if (rect != null && url.equals(MarkdownRenderer.linkUrlAt(pane,
+                                    new java.awt.Point(rect.x + rect.width / 2, rect.y + rect.height / 2)))) {
+                                found[0] = true;
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    return;
+                }
+            }
+        });
+        return found[0];
     }
 
     /** 侧栏某会话条目的渲染 HTML（含状态标注）：直接调渲染器拿文本，不依赖列表可见

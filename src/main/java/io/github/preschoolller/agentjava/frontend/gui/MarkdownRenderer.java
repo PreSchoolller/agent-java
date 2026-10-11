@@ -17,15 +17,19 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
+import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseMotionAdapter;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -109,6 +113,7 @@ public final class MarkdownRenderer {
             JTextPane pane = Ui.displayTextPane();
             pane.setFont(base);
             fillFlow(pane.getStyledDocument(), units, base);
+            attachLinkHandler(pane); // 正文带链接（P1-6）
             return pane;
         }
 
@@ -306,6 +311,7 @@ public final class MarkdownRenderer {
             JTextPane pane = Ui.displayTextPane();
             pane.setFont(base);
             fillQuote(pane.getStyledDocument(), quote, base);
+            attachLinkHandler(pane); // 引用里也可能有链接（P1-6）
             pane.setBorder(BorderFactory.createEmptyBorder(
                     QUOTE_PAD_TOP, QUOTE_PAD_LEFT + QUOTE_BAR_WIDTH, QUOTE_PAD_BOTTOM, QUOTE_PAD_RIGHT));
             panel.add(pane, BorderLayout.CENTER);
@@ -526,6 +532,7 @@ public final class MarkdownRenderer {
                 JTextPane pane = Ui.displayTextPane();
                 pane.setFont(base);
                 fillThink(pane.getStyledDocument(), think, base);
+                attachLinkHandler(pane); // 思考内容里的链接同样可点（P1-6）
                 JScrollPane scroll = new JScrollPane(pane,
                         JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                         JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
@@ -752,8 +759,62 @@ public final class MarkdownRenderer {
             }
             if (span.link() != null) {
                 StyleConstants.setUnderline(attrs, true);
+                attrs.addAttribute(LINK_URL_ATTRIBUTE, span.link()); // 点击跳转的命中标记（P1-6）
             }
             doc.insertString(doc.getLength(), span.text(), attrs);
+        }
+    }
+
+    /** 链接字符上挂的 URL 属性键：显示 pane 据此做命中检测（StyledDocument 允许自定义属性） */
+    public static final String LINK_URL_ATTRIBUTE = "link-url";
+
+    /** 给能含链接的文本 pane 挂点击跳转 + 手型光标（P1-6）。只开 http/https，异常静默不打扰 */
+    static void attachLinkHandler(JTextPane pane) {
+        pane.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                String url = linkUrlAt(pane, e.getPoint());
+                if (url != null) {
+                    openExternal(url);
+                }
+            }
+        });
+        pane.addMouseMotionListener(new MouseMotionAdapter() {
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                pane.setCursor(linkUrlAt(pane, e.getPoint()) != null
+                        ? Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                        : Cursor.getDefaultCursor());
+            }
+        });
+    }
+
+    /** 命中检测：坐标 → 字符偏移 → 该处字符属性里的链接 URL；不在链接上返回 null（Shot 断言共用） */
+    public static String linkUrlAt(JTextPane pane, Point point) {
+        try {
+            int offset = pane.viewToModel2D(point);
+            Object url = pane.getStyledDocument().getCharacterElement(offset)
+                    .getAttributes().getAttribute(LINK_URL_ATTRIBUTE);
+            return url instanceof String s ? s : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 打系统浏览器；只放行 http/https（别的 scheme 不碰），Desktop 不可用/URI 不合法静默 */
+    private static void openExternal(String url) {
+        try {
+            URI uri = new URI(url);
+            String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+            if (!scheme.equals("http") && !scheme.equals("https")) {
+                return;
+            }
+            if (Desktop.isDesktopSupported()
+                    && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                Desktop.getDesktop().browse(uri);
+            }
+        } catch (Exception e) {
+            System.err.println("打开链接失败: " + url + " " + e.getMessage());
         }
     }
 
