@@ -898,6 +898,45 @@ final class Ui {
         }
     }
 
+    /** 折叠/展开指示三角（P1-4/P1-7 折叠头部用）。自绘而不是用字符——▸▶这类几何字符
+     *  在微软雅黑物理字体里缺字形渲染成方框（踩坑 #5 同款，字符探针实测只有 ▼ 有），
+     *  自绘顺便让颜色走 foreground 跟随主题（retheme 整窗重建，构造期捕获无碍） */
+    static final class Chevron extends JLabel {
+        private boolean expanded;
+
+        Chevron(boolean expanded) {
+            this.expanded = expanded;
+            setPreferredSize(new Dimension(11, 14));
+        }
+
+        void setExpanded(boolean value) {
+            if (expanded != value) {
+                expanded = value;
+                repaint();
+            }
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(getForeground());
+                int w = getWidth();
+                int h = getHeight();
+                if (expanded) {
+                    g2.fillPolygon(new int[]{w / 2 - 5, w / 2 + 5, w / 2},
+                            new int[]{h / 2 - 2, h / 2 - 2, h / 2 + 4}, 3);
+                } else {
+                    g2.fillPolygon(new int[]{w / 2 - 2, w / 2 - 2, w / 2 + 4},
+                            new int[]{h / 2 - 5, h / 2 + 5, h / 2}, 3);
+                }
+            } finally {
+                g2.dispose();
+            }
+        }
+    }
+
     /** 圆角描边，内边距为零，配合 CompoundBorder 里的空白内衬使用 */
     static class RoundBorder implements Border {
         private final int arc;

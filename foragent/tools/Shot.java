@@ -377,18 +377,31 @@ public class Shot {
         scrollWaterfallToTop();
         Thread.sleep(400);
         capture(args[0] + "-6-markdown.png");
+        // 思考块折叠（P1-7）：默认收成"已思考"一行，点头部展开/收回
+        expect(!uiHasTextPaneContaining("覆盖全部块类型"), "思考块默认折叠");
+        expect(uiHasLabelContaining("已思考"), "折叠思考块显示已思考标注");
+        edt(() -> uiClickNamed("think-header"));
+        Thread.sleep(400);
+        expect(uiHasTextPaneContaining("覆盖全部块类型"), "点标注展开思考内容");
+        edt(() -> uiClickNamed("think-header"));
+        Thread.sleep(400);
+        expect(!uiHasTextPaneContaining("覆盖全部块类型"), "再点标注收回思考内容");
 
         // —— 截图 7：流式输出（appendChunk 节流渲染 + 高度自适应 + 自动滚底） ——
-        String streamed = "### 流式输出\n\n这是**逐段**追加的回复，"
+        // 开头带思考段：流式中展开看得到增长，闭合后自动收起并显示计得时长（P1-7）
+        String streamed = "<think>\n先拆解一下问题再作答。\n</think>\n\n### 流式输出\n\n这是**逐段**追加的回复，"
                 + "每 120ms 渲染一次，`高度`自适应。\n\n```java\nint x = 42;\n```\n";
         Window.AiStream[] streamHolder = new Window.AiStream[1];
         edt(() -> streamHolder[0] = WINDOW.addAiMessage(""));
         Thread.sleep(500);
-        edt(() -> streamHolder[0].appendChunk("### 流式输出\n\n这是**逐段**追加的回复，"));
+        edt(() -> streamHolder[0].appendChunk("<think>\n先拆解一下问题再作答。\n"));
+        Thread.sleep(300);
+        edt(() -> streamHolder[0].appendChunk("</think>\n\n### 流式输出\n\n这是**逐段**追加的回复，"));
         Thread.sleep(300);
         edt(() -> streamHolder[0].appendChunk("每 120ms 渲染一次，`高度`自适应。\n\n```java\nint x = 42;\n```\n"));
         Thread.sleep(600);
         capture(args[0] + "-7-streaming.png");
+        expect(uiHasLabelContaining("已思考") && uiHasLabelContaining("秒"), "思考块闭合后收起并显示时长");
         edt(() -> streamHolder[0].finish());
         expect(streamed.equals(store.getActive()
                 .getMessages().get(store.getActive().getMessages().size() - 1).text()), "流式落库");
@@ -428,6 +441,15 @@ public class Shot {
         expect(reloadedTool.isToolCall() && "read_file".equals(reloadedTool.toolName())
                 && "{\"path\": \"src/Demo.java\"}".equals(reloadedTool.toolArgs())
                 && "ok".equals(reloadedTool.toolStatus()), "工具消息落盘往返");
+        // 工具卡折叠（P1-4）：默认收成一行，点头部展开出结果与复制入口，再点收回
+        expect(!uiHasTextAreaStartingWith("public class Demo"), "工具卡默认折叠");
+        edt(() -> uiClickNamed("tool-header"));
+        Thread.sleep(300);
+        expect(uiHasTextAreaStartingWith("public class Demo"), "点头部展开结果");
+        expect(uiHasText("复制结果") && uiHasText("复制参数"), "展开后有复制入口");
+        edt(() -> uiClickNamed("tool-header"));
+        Thread.sleep(300);
+        expect(!uiHasTextAreaStartingWith("public class Demo"), "再点头部收回");
         System.out.println("TOOLCARD_OK");
 
         // —— 权限确认卡（P0-4 契约：requestApproval(future) → 卡片"待确认"+允许/拒绝 → 点击写 future 并回到运行中） ——
@@ -753,6 +775,72 @@ public class Shot {
             }
         }
         throw new AssertionError("没找到可点击的按钮: " + text);
+    }
+
+    /** 窗口里是否存在文本包含该片段的标签（思考块"已思考"标注断言用；uiHasText 是全等匹配） */
+    private static boolean uiHasLabelContaining(String fragment) throws Exception {
+        boolean[] found = new boolean[1];
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.JLabel label
+                        && label.getText() != null && label.getText().contains(fragment)) {
+                    found[0] = true;
+                    return;
+                }
+            }
+        });
+        return found[0];
+    }
+
+    /** 窗口里是否存在内容包含该片段的 JTextPane（思考块内容展开/收起断言用） */
+    private static boolean uiHasTextPaneContaining(String fragment) throws Exception {
+        boolean[] found = new boolean[1];
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.JTextPane pane
+                        && pane.getText() != null && pane.getText().contains(fragment)) {
+                    found[0] = true;
+                    return;
+                }
+            }
+        });
+        return found[0];
+    }
+
+    /** 窗口里是否存在内容以该前缀开头的 JTextArea（工具卡结果区展开/收起断言用） */
+    private static boolean uiHasTextAreaStartingWith(String prefix) throws Exception {
+        boolean[] found = new boolean[1];
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.JTextArea area
+                        && area.getText() != null && area.getText().startsWith(prefix)) {
+                    found[0] = true;
+                    return;
+                }
+            }
+        });
+        return found[0];
+    }
+
+    /** 按组件名点击（工具卡头部 tool-header / 思考块头部 think-header 的折叠切换）：
+     *  合成 mouseClicked 派发给第一个可见的同名组件，与真实点击同一事件入口 */
+    private static void uiClickNamed(String name) {
+        List<Component> all = new ArrayList<>();
+        collectComponents(WINDOW, all);
+        for (Component component : all) {
+            if (name.equals(component.getName()) && component.isShowing()) {
+                component.dispatchEvent(new MouseEvent(component, MouseEvent.MOUSE_CLICKED,
+                        System.currentTimeMillis(), 0, 5, 5, 1, false));
+                return;
+            }
+        }
+        throw new AssertionError("没找到可点击组件: " + name);
     }
 
     /** 侧栏某会话条目的渲染 HTML（含状态标注）：直接调渲染器拿文本，不依赖列表可见

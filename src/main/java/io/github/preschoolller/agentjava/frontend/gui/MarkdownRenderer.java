@@ -16,6 +16,7 @@ import javax.swing.text.View;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Graphics;
@@ -23,8 +24,11 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -78,8 +82,9 @@ public final class MarkdownRenderer {
     public record Rule() implements Block {
     }
 
-    /** 思考块：<think>…</think> 包住的推理内容，每条是一行 span 列表；流式未闭合时吞到文本尾 */
-    public record ThinkBlock(List<List<Span>> lines) implements Block {
+    /** 思考块：<think>…</think> 包住的推理内容，每条是一行 span 列表；流式未闭合时吞到文本尾。
+     *  closed 区分闭合与流式中：折叠的默认态据此定——闭合收起、流式中展开（见 MarkdownPane） */
+    public record ThinkBlock(List<List<Span>> lines, boolean closed) implements Block {
     }
 
     // ===== 渲染行 =====
@@ -318,38 +323,70 @@ public final class MarkdownRenderer {
     private static final int THINK_PAD_RIGHT = 12;
     private static final int THINK_PAD_BOTTOM = 8;
     private static final int THINK_TEXT_HEIGHT_CAP = 260;
+    /** 折叠态思考行的定值高度（与展开测量的收尾公式对齐）。
+     *  折叠不进 MeasureCache：缓存永远存展开高度，折叠差值由 MarkdownPane 按行修正——
+     *  键加折叠维度会让同一文本的两份状态互踢（P1-7 计划里预警的坑） */
+    static final int THINK_COLLAPSED_HEIGHT = THINK_HEADER_HEIGHT + 2;
 
-    /** 思考块行：淡紫圆角底 + "思考过程"标注 + 次要色斜体文字；超长内部滚动，卡片不至于无限高 */
-    private record ThinkRow(ThinkBlock think) implements Row {
+    /** 思考块行：淡紫圆角底 + "思考过程"标注 + 次要色斜体文字；超长内部滚动，卡片不至于无限高。
+     *  折叠态（P1-7）只留一行"▸ 已思考 N 秒"，点击头部切换；默认态由 MarkdownPane 按闭合/流式定 */
+    record ThinkRow(ThinkBlock think) implements Row {
         @Override
         public Component component(Font base) {
+            return component(base, false, null, null);
+        }
+
+        /** collapsed 折叠态；seconds 为流式计得的思考时长（null 显示"已思考"——整段落库的历史消息没有计时）；
+         *  onToggle 头部点击回调（null 不挂点击） */
+        public Component component(Font base, boolean collapsed, Double seconds, Runnable onToggle) {
             JPanel panel = new Ui.RoundPanel(10, Ui.THINK_BG, Ui.THINK_BORDER);
             panel.setLayout(new BorderLayout());
 
             JPanel header = new JPanel(new BorderLayout(8, 0));
             header.setOpaque(false);
-            header.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createMatteBorder(0, 0, 1, 0, Ui.THINK_BORDER),
-                    BorderFactory.createEmptyBorder(3, 12, 3, 6)));
-            JLabel label = new JLabel("思考过程");
+            header.setName("think-header"); // Shot 回归定位（点头部折叠/展开）
+            String title = collapsed
+                    ? "已思考" + (seconds == null ? "" : " " + formatThinkSeconds(seconds))
+                    : "思考过程";
+            JLabel label = new JLabel(title);
             label.setFont(new Font("微软雅黑", Font.PLAIN, 11));
             label.setForeground(Ui.TEXT_SECONDARY);
-            header.add(label, BorderLayout.WEST);
-            panel.add(header, BorderLayout.NORTH);
+            Ui.Chevron chevron = new Ui.Chevron(!collapsed); // 自绘三角：▸▶ 在微软雅黑里缺字形（踩坑 #5）
+            chevron.setForeground(Ui.TEXT_SECONDARY);
+            header.add(chevron, BorderLayout.WEST);
+            header.add(label, BorderLayout.CENTER);
+            if (collapsed) {
+                header.setBorder(BorderFactory.createEmptyBorder(3, 12, 3, 6));
+                panel.add(header, BorderLayout.CENTER);
+            } else {
+                header.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createMatteBorder(0, 0, 1, 0, Ui.THINK_BORDER),
+                        BorderFactory.createEmptyBorder(3, 12, 3, 6)));
+                panel.add(header, BorderLayout.NORTH);
 
-            JTextPane pane = Ui.displayTextPane();
-            pane.setFont(base);
-            fillThink(pane.getStyledDocument(), think, base);
-            JScrollPane scroll = new JScrollPane(pane,
-                    JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
-                    JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-            scroll.setBorder(BorderFactory.createEmptyBorder());
-            scroll.setOpaque(false); // 滚动容器背景两处一起设，深色下边框内衬不露白（踩坑 #19）
-            scroll.getViewport().setOpaque(false);
-            scroll.setViewportBorder(BorderFactory.createEmptyBorder());
-            scroll.getVerticalScrollBar().setUnitIncrement(16);
-            Ui.styleScrollPane(scroll);
-            panel.add(scroll, BorderLayout.CENTER);
+                JTextPane pane = Ui.displayTextPane();
+                pane.setFont(base);
+                fillThink(pane.getStyledDocument(), think, base);
+                JScrollPane scroll = new JScrollPane(pane,
+                        JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                        JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+                scroll.setBorder(BorderFactory.createEmptyBorder());
+                scroll.setOpaque(false); // 滚动容器背景两处一起设，深色下边框内衬不露白（踩坑 #19）
+                scroll.getViewport().setOpaque(false);
+                scroll.setViewportBorder(BorderFactory.createEmptyBorder());
+                scroll.getVerticalScrollBar().setUnitIncrement(16);
+                Ui.styleScrollPane(scroll);
+                panel.add(scroll, BorderLayout.CENTER);
+            }
+            if (onToggle != null) {
+                header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                header.addMouseListener(new MouseAdapter() {
+                    @Override
+                    public void mouseClicked(MouseEvent e) {
+                        onToggle.run();
+                    }
+                });
+            }
             return panel;
         }
 
@@ -364,6 +401,13 @@ public final class MarkdownRenderer {
                     + THINK_PAD_TOP + THINK_PAD_BOTTOM;
             return THINK_HEADER_HEIGHT + Math.min(textHeight, THINK_TEXT_HEIGHT_CAP) + 2;
         }
+    }
+
+    private static String formatThinkSeconds(double seconds) {
+        if (seconds >= 10) {
+            return Math.round(seconds) + " 秒";
+        }
+        return String.format(Locale.ROOT, "%.1f 秒", seconds);
     }
 
     private static final int RULE_HEIGHT = 13;
@@ -576,10 +620,10 @@ public final class MarkdownRenderer {
             blocks.addAll(parseBlocks(stripThinkClose(text.substring(idx, open))));
             int close = text.indexOf("</think>", open + 7);
             if (close < 0) {
-                addThink(blocks, text.substring(open + 7));
+                addThink(blocks, text.substring(open + 7), false);
                 return blocks;
             }
-            addThink(blocks, text.substring(open + 7, close));
+            addThink(blocks, text.substring(open + 7, close), true);
             idx = close + 8;
         }
     }
@@ -589,7 +633,7 @@ public final class MarkdownRenderer {
     }
 
     /** 思考段内容按行拆成 span，空段不产出块 */
-    private static void addThink(List<Block> blocks, String content) {
+    private static void addThink(List<Block> blocks, String content, boolean closed) {
         String trimmed = content.strip();
         if (trimmed.isEmpty()) {
             return;
@@ -598,7 +642,7 @@ public final class MarkdownRenderer {
         for (String line : trimmed.split("\n", -1)) {
             lines.add(inline(line.strip()));
         }
-        blocks.add(new ThinkBlock(lines));
+        blocks.add(new ThinkBlock(lines, closed));
     }
 
     /** 常规文本的逐行解析：围栏代码 > 标题 > 分隔线 > 引用 > 列表 > 段落；

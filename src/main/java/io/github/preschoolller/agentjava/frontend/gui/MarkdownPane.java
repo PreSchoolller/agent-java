@@ -5,7 +5,9 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * AI 消息卡片的内容面板：把 Markdown 渲染结果（MarkdownRenderer.Row）纵向排布。
@@ -32,9 +34,17 @@ final class MarkdownPane extends JPanel {
     private String text = "";
     /** 当前测量所用的宽度档位（8px 向下取整），rowHeights 与之对应 */
     private int measuredWidth = -1;
+    /** 布局用有效行高：折叠的思考行已换成定值（缓存的展开高度在 measure 里按行修正） */
     private int[] rowHeights = {};
     private int totalHeight;
     private boolean materialized;
+    /** 思考块折叠状态（P1-7）：用户点过的按块序号记下，同一 pane 内多次 setContent 重解析保留；
+     *  没点过的走默认——已闭合收起、流式未闭合展开（流式时看得到思考增长，闭合自动收起） */
+    private final Map<Integer, Boolean> thinkUserState = new HashMap<>();
+    /** 流式计得的思考时长（秒），按块序号；AiStream 在 </think> 到达时写入 */
+    private Map<Integer, Double> thinkDurations = Map.of();
+    /** 折叠切换后高度变了，回调 Window 重测所在卡片 */
+    private Runnable onHeightChange;
 
     MarkdownPane(int fontSize) {
         super(null);
@@ -66,6 +76,19 @@ final class MarkdownPane extends JPanel {
         return materialized;
     }
 
+    /** 写入流式计得的思考时长（秒，按块序号）；已物化时重刷行组件让标注带上时长 */
+    void setThinkDurations(Map<Integer, Double> durations) {
+        this.thinkDurations = durations;
+        if (materialized && !durations.isEmpty()) {
+            rebuildRowComponents();
+            repaint();
+        }
+    }
+
+    void setOnHeightChange(Runnable listener) {
+        this.onHeightChange = listener;
+    }
+
     /** 把行组件建出来挂到面板上；只有视口附近的卡片才调（窗口化） */
     void materialize() {
         if (materialized) {
@@ -90,10 +113,52 @@ final class MarkdownPane extends JPanel {
     private void rebuildRowComponents() {
         removeAll();
         rowComponents.clear();
+        int thinkIndex = 0;
         for (MarkdownRenderer.Row row : rows) {
-            Component component = row.component(baseFont);
+            Component component;
+            if (row instanceof MarkdownRenderer.ThinkRow thinkRow) {
+                final int index = thinkIndex;
+                component = thinkRow.component(baseFont, isThinkCollapsed(index),
+                        thinkDurations.get(index), () -> toggleThink(index));
+                thinkIndex++;
+            } else {
+                component = row.component(baseFont);
+            }
             rowComponents.add(component);
             add(component);
+        }
+    }
+
+    /** 思考块当前是否折叠：用户点过的以点击为准，没点过的默认已闭合收起（流式中展开） */
+    private boolean isThinkCollapsed(int thinkIndex) {
+        Boolean user = thinkUserState.get(thinkIndex);
+        if (user != null) {
+            return user;
+        }
+        int seen = 0;
+        for (MarkdownRenderer.Row row : rows) {
+            if (row instanceof MarkdownRenderer.ThinkRow thinkRow) {
+                if (seen++ == thinkIndex) {
+                    return thinkRow.think().closed();
+                }
+            }
+        }
+        return true;
+    }
+
+    /** 点思考块头部：翻转该块折叠态并重测（用户点过的块此后不再随流式状态翻转） */
+    private void toggleThink(int thinkIndex) {
+        thinkUserState.put(thinkIndex, !isThinkCollapsed(thinkIndex));
+        if (measuredWidth > 0) {
+            measure(measuredWidth);
+        }
+        if (materialized) {
+            rebuildRowComponents();
+        }
+        revalidate();
+        repaint();
+        if (onHeightChange != null) {
+            onHeightChange.run();
         }
     }
 
@@ -130,14 +195,28 @@ final class MarkdownPane extends JPanel {
 
     private void measure(int width) {
         int[] cached = MeasureCache.get(text, fontSize, width, true);
+        int[] expanded;
         if (cached != null && cached.length == rows.size()) {
-            rowHeights = cached;
+            expanded = cached;
         } else {
-            rowHeights = new int[rows.size()];
+            expanded = new int[rows.size()];
             for (int i = 0; i < rows.size(); i++) {
-                rowHeights[i] = rows.get(i).measureAt(baseFont, width);
+                expanded[i] = rows.get(i).measureAt(baseFont, width);
             }
-            MeasureCache.put(text, fontSize, width, true, rowHeights);
+            MeasureCache.put(text, fontSize, width, true, expanded);
+        }
+        // 缓存里永远是展开高度；折叠的思考行在这里按行换成定值（P1-7）——
+        // 折叠维度进缓存键会让同一文本的两种状态互踢，定值常量是计划里选定的路线
+        rowHeights = new int[expanded.length];
+        int thinkIndex = 0;
+        for (int i = 0; i < expanded.length; i++) {
+            rowHeights[i] = expanded[i];
+            if (rows.get(i) instanceof MarkdownRenderer.ThinkRow) {
+                if (isThinkCollapsed(thinkIndex)) {
+                    rowHeights[i] = MarkdownRenderer.THINK_COLLAPSED_HEIGHT;
+                }
+                thinkIndex++;
+            }
         }
         int total = 0;
         for (int height : rowHeights) {

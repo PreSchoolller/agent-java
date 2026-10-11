@@ -31,6 +31,7 @@ import java.awt.AWTEvent;
 import java.awt.AWTException;
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.EventQueue;
 import java.awt.FlowLayout;
@@ -65,8 +66,10 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
@@ -109,6 +112,8 @@ public class Window extends JFrame {
     /** 工具调用卡的头部高度（角色标+工具名+参数+状态一行）与结果区高度帽（超出内部滚动） */
     private static final int TOOL_HEADER_HEIGHT = 26;
     private static final int TOOL_RESULT_CAP = 320;
+    /** 展开态结果区下方的复制行（复制参数/复制结果）高度 */
+    private static final int TOOL_COPY_ROW_HEIGHT = 28;
     private static final DateTimeFormatter TIME_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
@@ -172,6 +177,9 @@ public class Window extends JFrame {
     private final Set<String> generatingConversations = new HashSet<>();
     /** 还在进行中的流式句柄（未 finish 的 AiStream/ToolCallHandle）：会话切走卡片被丢弃，切回时按消息同一性重绑 */
     private final List<LiveStream> liveStreams = new ArrayList<>();
+    /** 展开结果区的工具卡（P1-4 折叠）：按 callId 记（无 callId 的旧消息退化为时间戳键），
+     *  内存态不落盘——重启后回到默认折叠 */
+    private final Set<String> expandedToolCalls = new HashSet<>();
 
     /** AI 回复的流式句柄：addAiMessage 返回。所有方法须在 EDT 上调用。 */
     public interface AiStream {
@@ -920,6 +928,15 @@ public class Window extends JFrame {
         waterfallPanel.add(card, rowConstraints(user));
         waterfallRowCount++;
         MessageCard messageCard = new MessageCard(card, user, tool, message, markdown);
+        if (markdown != null) {
+            // 思考块折叠切换（P1-7）后高度变了：重测所在卡片
+            markdown.setOnHeightChange(() -> {
+                int index = messageCards.indexOf(messageCard);
+                if (index >= 0) {
+                    fitCardHeight(index);
+                }
+            });
+        }
         attachHoverMenu(messageCard);
         messageCards.add(messageCard);
         emptyHint.setVisible(false);
@@ -1003,11 +1020,29 @@ public class Window extends JFrame {
         return flat.length() > 80 ? flat.substring(0, 80) + "…" : flat;
     }
 
-    /** 工具调用卡内容：一行头部（"工具"角色标 + 工具名 + 参数摘要（超长截断）+ 状态徽标）+ 结果文本区（等宽，超长内部滚动） */
+    /** 工具调用卡内容：一行头部（折叠箭头 + "工具"角色标 + 工具名 + 参数摘要 + 状态徽标），默认收成
+     *  一行（P1-4）；点头部展开结果区，展开时结果文本下挂"复制参数/复制结果"。待确认态的
+     *  "允许/拒绝"按钮挂在头部，折叠不影响审批 */
     private JComponent buildToolContent(MessageCard messageCard) {
         Message message = messageCard.message;
+        boolean expanded = expandedToolCalls.contains(toolKey(message));
         JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         header.setOpaque(false);
+        header.setName("tool-header"); // Shot 回归定位（点头部折叠/展开）
+        header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        header.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (!expandedToolCalls.remove(toolKey(message))) {
+                    expandedToolCalls.add(toolKey(message));
+                }
+                rebuildCard(messageCard);
+            }
+        });
+        // 折叠箭头自绘（Ui.Chevron）：▸▶ 在微软雅黑里缺字形渲染成方框（踩坑 #5，字符探针实测）
+        Ui.Chevron chevron = new Ui.Chevron(expanded);
+        chevron.setForeground(Ui.TEXT_SECONDARY);
+        header.add(chevron);
         JLabel roleLabel = new JLabel("工具");
         roleLabel.setFont(new Font("微软雅黑", Font.BOLD, 13));
         roleLabel.setForeground(Ui.ACCENT);
@@ -1036,28 +1071,40 @@ public class Window extends JFrame {
             header.add(createApprovalButton(messageCard, "拒绝", false));
         }
 
-        JTextArea result = Ui.displayTextArea();
-        result.setFont(new Font("Monospaced", Font.PLAIN, 12));
-        // 没设过前景色的文本组件默认黑字，深色主题下必须显式给（见踩坑 #19）
-        result.setForeground(Ui.TEXT);
-        result.setText(message.text());
-        result.setLineWrap(true);
-        result.setWrapStyleWord(false);
-        JScrollPane scroll = new JScrollPane(result,
-                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
-                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        scroll.setBorder(BorderFactory.createEmptyBorder());
-        scroll.setOpaque(false); // 滚动容器背景两处一起设，深色下边框内衬不露白（踩坑 #19）
-        scroll.getViewport().setOpaque(false);
-        scroll.setViewportBorder(BorderFactory.createEmptyBorder());
-        scroll.getVerticalScrollBar().setUnitIncrement(16);
-        Ui.styleScrollPane(scroll);
-
         JPanel content = new JPanel(new BorderLayout(0, 6));
         content.setOpaque(false);
         content.add(header, BorderLayout.NORTH);
-        content.add(scroll, BorderLayout.CENTER);
+        if (expanded) {
+            JTextArea result = Ui.displayTextArea();
+            result.setFont(new Font("Monospaced", Font.PLAIN, 12));
+            // 没设过前景色的文本组件默认黑字，深色主题下必须显式给（见踩坑 #19）
+            result.setForeground(Ui.TEXT);
+            result.setText(message.text());
+            result.setLineWrap(true);
+            result.setWrapStyleWord(false);
+            JScrollPane scroll = new JScrollPane(result,
+                    JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                    JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+            scroll.setBorder(BorderFactory.createEmptyBorder());
+            scroll.setOpaque(false); // 滚动容器背景两处一起设，深色下边框内衬不露白（踩坑 #19）
+            scroll.getViewport().setOpaque(false);
+            scroll.setViewportBorder(BorderFactory.createEmptyBorder());
+            scroll.getVerticalScrollBar().setUnitIncrement(16);
+            Ui.styleScrollPane(scroll);
+            content.add(scroll, BorderLayout.CENTER);
+
+            JPanel copyRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+            copyRow.setOpaque(false);
+            copyRow.add(createCopyButton("复制参数", () -> message.toolArgs() == null ? "" : message.toolArgs()));
+            copyRow.add(createCopyButton("复制结果", () -> message.text() == null ? "" : message.text()));
+            content.add(copyRow, BorderLayout.SOUTH);
+        }
         return content;
+    }
+
+    /** 工具卡展开状态键：callId（会话/重启间按它记忆），无 callId 的旧消息退化为时间戳 */
+    private static String toolKey(Message message) {
+        return message.callId() != null ? message.callId() : "t" + message.time();
     }
 
     /** 摘掉卡片内容（滚出视口）：组件全部丢弃，解析与测量数据留在 MarkdownPane 里 */
@@ -1233,15 +1280,20 @@ public class Window extends JFrame {
 
     /** AI 卡片右下角的复制按钮，拷贝 Supplier 给的文本（Markdown 原文），点击后短暂提示"已复制" */
     private JButton createCopyButton(Supplier<String> source) {
-        JButton copyButton = Ui.button("复制");
+        return createCopyButton("复制", source);
+    }
+
+    /** 复制按钮（工具卡 P1-4 的"复制参数/复制结果"与 AI 卡的"复制"共用），点击后短暂提示"已复制" */
+    private JButton createCopyButton(String label, Supplier<String> source) {
+        JButton copyButton = Ui.button(label);
         copyButton.setFont(new Font("微软雅黑", Font.PLAIN, 11));
         copyButton.setPreferredSize(new Dimension(56, 22));
-        copyButton.setToolTipText("复制这条回复");
+        copyButton.setToolTipText("复制到剪贴板");
         copyButton.addActionListener(e -> {
             Toolkit.getDefaultToolkit().getSystemClipboard()
                     .setContents(new StringSelection(source.get()), null);
             copyButton.setText("已复制");
-            Timer reset = new Timer(1200, ev -> copyButton.setText("复制"));
+            Timer reset = new Timer(1200, ev -> copyButton.setText(label));
             reset.setRepeats(false);
             reset.start();
         });
@@ -1359,9 +1411,14 @@ public class Window extends JFrame {
         int textWidth = messageCard.user ? userWidth - CARD_SIDE_INSETS : panelWidth - CARD_SIDE_INSETS;
         int textHeight;
         if (messageCard.tool) {
-            // 工具卡：头部定高 + 结果文本（超长封顶，卡片内滚动）
-            textHeight = Math.min(measureTextHeight(messageCard.message.text(),
-                    AppSettings.get().getContentFontSize(), textWidth) + TOOL_HEADER_HEIGHT, TOOL_RESULT_CAP);
+            if (expandedToolCalls.contains(toolKey(messageCard.message))) {
+                // 展开：头部 + 结果文本（超长封顶，卡片内滚动）+ 复制行
+                textHeight = Math.min(measureTextHeight(messageCard.message.text(),
+                        AppSettings.get().getContentFontSize(), textWidth) + TOOL_HEADER_HEIGHT, TOOL_RESULT_CAP)
+                        + TOOL_COPY_ROW_HEIGHT;
+            } else {
+                textHeight = TOOL_HEADER_HEIGHT; // 折叠（默认）：一行头部
+            }
         } else {
             textHeight = messageCard.user
                     ? measureTextHeight(messageCard.message.text(), AppSettings.get().getContentFontSize(), textWidth)
@@ -1438,6 +1495,10 @@ public class Window extends JFrame {
         private final StringBuilder pending = new StringBuilder();
         private final Timer flushTimer = new Timer(120, e -> flush());
         private boolean finished;
+        /** 思考阶段计时（P1-7"已思考 N 秒"）：当前第几个思考块 / 本块开始时间 / 各块时长（秒） */
+        private int thinkBlockIndex = -1;
+        private long thinkStartedNanos = -1;
+        private final Map<Integer, Double> thinkDurations = new HashMap<>();
 
         private AiStreamImpl(String conversationId, Message message, MessageCard card) {
             this.conversationId = conversationId;
@@ -1460,6 +1521,7 @@ public class Window extends JFrame {
         @Override
         public void rebind(MessageCard newCard) {
             this.card = newCard;
+            pushThinkDurations(); // 后台期间攒下的时长补到新卡片
             flush(); // 把切走期间攒的增量一次性画上
         }
 
@@ -1468,10 +1530,37 @@ public class Window extends JFrame {
             if (finished || delta == null || delta.isEmpty()) {
                 return;
             }
+            trackThinkMarkers(delta);
             full.append(delta);
             pending.append(delta);
             if (!flushTimer.isRunning()) {
                 flushTimer.start(); // EDT 上的 Swing Timer，到期统一渲染这一批
+            }
+        }
+
+        /** 思考阶段计时：<think>/</think> 标记可能独立成块（Main 逐段发）也可能嵌在文本里
+         *  （Shot 样例），逐字符扫增量；多个思考块按序号各记各的 */
+        private void trackThinkMarkers(String delta) {
+            for (int i = 0; i < delta.length(); i++) {
+                if (delta.startsWith("<think>", i)) {
+                    thinkBlockIndex++;
+                    thinkStartedNanos = System.nanoTime();
+                    i += 6;
+                } else if (delta.startsWith("</think>", i)) {
+                    if (thinkStartedNanos > 0) {
+                        thinkDurations.merge(thinkBlockIndex,
+                                (System.nanoTime() - thinkStartedNanos) / 1_000_000_000.0, Double::sum);
+                        thinkStartedNanos = -1;
+                    }
+                    i += 7;
+                }
+            }
+        }
+
+        /** 已计得的思考时长推给卡片（pane 存下后重解析的行组件才带得上） */
+        private void pushThinkDurations() {
+            if (card != null && card.markdown != null && !thinkDurations.isEmpty()) {
+                card.markdown.setThinkDurations(thinkDurations);
             }
         }
 
@@ -1516,6 +1605,7 @@ public class Window extends JFrame {
                 return;
             }
             boolean follow = isNearBottom(); // 高度马上要变，先记录用户是否本来就在底部
+            pushThinkDurations();
             card.markdown.setContent(full.toString());
             fitCardHeight(index);
             if (follow) {
