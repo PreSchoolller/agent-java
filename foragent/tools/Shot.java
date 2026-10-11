@@ -23,6 +23,8 @@ import java.awt.Component;
 import java.awt.Container;
 import java.awt.GraphicsEnvironment;
 import java.awt.SystemTray;
+import java.awt.Toolkit;
+import java.awt.datatransfer.DataFlavor;
 import java.awt.event.MouseEvent;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
@@ -386,6 +388,10 @@ public class Shot {
         edt(() -> uiClickNamed("think-header"));
         Thread.sleep(400);
         expect(!uiHasTextPaneContaining("覆盖全部块类型"), "再点标注收回思考内容");
+        // 用户消息复制（用户卡尾部"复制"钮）：uiClick 按树序先碰用户卡，剪贴板应是用户原文
+        edt(() -> uiClick("复制"));
+        Thread.sleep(200);
+        expect("给我演示一下 Markdown 渲染".equals(clipboardText()), "用户消息复制到剪贴板");
 
         // —— 截图 7：流式输出（appendChunk 节流渲染 + 高度自适应 + 自动滚底） ——
         // 开头带思考段：流式中展开看得到增长，闭合后自动收起并显示计得时长（P1-7）
@@ -841,6 +847,17 @@ public class Shot {
             }
         }
         throw new AssertionError("没找到可点击组件: " + name);
+    }
+
+    /** 读系统剪贴板文本（用户消息复制断言用）；不可读或非文本返回 null */
+    private static String clipboardText() {
+        try {
+            Object value = Toolkit.getDefaultToolkit().getSystemClipboard()
+                    .getContents(null).getTransferData(DataFlavor.stringFlavor);
+            return value instanceof String s ? s : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 侧栏某会话条目的渲染 HTML（含状态标注）：直接调渲染器拿文本，不依赖列表可见

@@ -987,7 +987,10 @@ public class Window extends JFrame {
         timeLabel.setFont(new Font("微软雅黑", Font.PLAIN, 12));
         timeLabel.setForeground(Ui.TEXT_SECONDARY);
         timeRow.add(timeLabel);
-        if (!user && !tool) {
+        if (user) {
+            // 用户消息复制（计划外）：与 AI 卡"复制"共用按钮实现，拷用户原文
+            timeRow.add(createCopyButton(() -> message.text() == null ? "" : message.text()));
+        } else if (!tool) {
             MarkdownPane pane = messageCard.markdown;
             timeRow.add(createCopyButton(pane::getText));
             messageCard.regenerate = createRegenerateButton();
