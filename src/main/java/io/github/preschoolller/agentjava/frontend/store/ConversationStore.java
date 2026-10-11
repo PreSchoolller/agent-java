@@ -379,10 +379,17 @@ public class ConversationStore {
             Object raw = JsonKit.parse(Files.readString(sessionFile));
             for (Object item : (List<?>) raw) {
                 Map<?, ?> messageMap = (Map<?, ?>) item;
+                // 崩溃恢复（P0-5）：running 只该存在于活着的进程内存里，读盘遇到就是上次崩了/被杀的
+                // 残留，翻成 interrupted（前端显示"已中断"灰态）；其空结果回传时本就被
+                // buildRoleMessages 的空文本跳过，不会发给后端
+                String status = str(messageMap.get("status"));
+                if ("running".equals(status)) {
+                    status = "interrupted";
+                }
                 messages.add(messageMap.containsKey("name")
                         ? new Message(str(messageMap.get("role")), str(messageMap.get("text")),
                                 num(messageMap.get("time")), str(messageMap.get("name")),
-                                str(messageMap.get("args")), str(messageMap.get("status")), str(messageMap.get("callId")))
+                                str(messageMap.get("args")), status, str(messageMap.get("callId")))
                         : new Message(str(messageMap.get("role")), str(messageMap.get("text")),
                                 num(messageMap.get("time"))));
             }

@@ -1074,12 +1074,15 @@ public class Window extends JFrame {
         messageCard.toolArgsLabel = argsLabel;
         boolean running = "running".equals(message.toolStatus());
         boolean error = "error".equals(message.toolStatus());
+        boolean interrupted = "interrupted".equals(message.toolStatus()); // 崩溃残留（P0-5），灰态
         // 待确认（P0-4 权限确认卡）：卡片手里攥着一个还没被点的审批 future。
         // 徽标沿用三态色位，警示色比"失败"收敛；旁边挂"允许/拒绝"两按钮
         boolean pending = running && messageCard.approval != null && !messageCard.approval.isDone();
-        JLabel statusLabel = new JLabel(pending ? "待确认" : running ? "运行中…" : error ? "失败" : "完成");
+        JLabel statusLabel = new JLabel(pending ? "待确认" : running ? "运行中…" : error ? "失败"
+                : interrupted ? "已中断" : "完成");
         statusLabel.setFont(new Font("微软雅黑", Font.PLAIN, 11));
-        statusLabel.setForeground(pending ? Ui.WARNING : running ? Ui.ACCENT : error ? Ui.DANGER : Ui.TEXT_SECONDARY);
+        statusLabel.setForeground(pending ? Ui.WARNING : running ? Ui.ACCENT
+                : error ? Ui.DANGER : Ui.TEXT_SECONDARY);
         header.add(statusLabel);
         if (pending) {
             header.add(createApprovalButton(messageCard, "允许", true));

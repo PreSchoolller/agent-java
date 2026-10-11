@@ -170,6 +170,15 @@ public class Shot {
         while (fifth.removeLastMessage(fifthId) != null) {
         }
         expect(Files.notExists(dir.resolve("sessions").resolve(fifthId)), "删空会话清残留单文件");
+        // 崩溃恢复（P0-5）：落盘的 running 工具消息（程序中途崩了/被杀的残留），重载后翻成"已中断"
+        Path crashDir = Files.createTempDirectory("agentjava-crash");
+        ConversationStore crashFirst = new ConversationStore(crashDir.resolve("history.json"));
+        String crashId = crashFirst.newConversation().getId();
+        crashFirst.appendToolCall(crashId, "read_file", "{}", "call_crash");
+        Message crashTool = new ConversationStore(crashDir.resolve("history.json"))
+                .getActive().getMessages().get(0);
+        expect(crashTool.isToolCall() && "interrupted".equals(crashTool.toolStatus()),
+                "崩溃残留 running 翻成已中断");
         System.out.println("PERSIST_OK");
         // 按需加载：启动只读索引，会话文件延迟到首次触达消息才读；未加载的会话被改元数据时
         // 也不重写会话文件（mtime 不变），触碰消息后仍拿得到磁盘内容
