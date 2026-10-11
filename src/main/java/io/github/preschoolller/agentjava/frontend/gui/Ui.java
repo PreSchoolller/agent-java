@@ -471,6 +471,14 @@ final class Ui {
         combo.setForeground(TEXT);
         combo.setBackground(INPUT_BG);
         combo.setBorder(inputBorder(BORDER_STRONG));
+        // 可编辑下拉的编辑器：默认白底黑字黑光标，深色下刺眼（踩坑 #19——文本控件三件套显式给）
+        if (combo.getEditor() != null && combo.getEditor().getEditorComponent() instanceof JTextComponent editor) {
+            editor.setBackground(INPUT_BG);
+            editor.setForeground(TEXT);
+            editor.setCaretColor(TEXT);
+            editor.setFont(FONT_PLAIN);
+            editor.setOpaque(true);
+        }
         combo.setRenderer(new DefaultListCellRenderer() {
             @Override
             public Component getListCellRendererComponent(JList<?> list, Object value, int index,

@@ -298,6 +298,32 @@ public final class AppSettings {
         this.sidebarDivider = sidebarDivider;
     }
 
+    // —— 工作区 ——
+
+    /**
+     * 默认工作区目录：~/.agentjava/workspace。新建对话不选工作区时所有工具的相对路径落这里；
+     * 默认位置以后要换就改这一处（会话没绑过工作区的会跟着走）。
+     */
+    public static Path defaultWorkspace() {
+        return Path.of(System.getProperty("user.home"), ".agentjava", "workspace");
+    }
+
+    /** 工作区路径规范化：去首尾空白、转绝对路径、去冗余段；空串/非法路径返回 null */
+    public static String normalizeWorkspace(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.strip();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        try {
+            return Path.of(trimmed).toAbsolutePath().normalize().toString();
+        } catch (Exception e) { // InvalidPathException 等：Windows 下保留字符也会走到这
+            return null;
+        }
+    }
+
     // —— 变更通知与持久化 ——
 
     public void addChangeListener(Runnable listener) {

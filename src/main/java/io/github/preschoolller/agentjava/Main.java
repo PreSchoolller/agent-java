@@ -116,6 +116,8 @@ public class Main {
         String model = window.getSelectedModel();
         ReasoningEffortEnum re = window.getSelectedEffort(); // 模型与思考强度取输入区右下角的选择（对话级设置）
         AgentMode mode = window.getSelectedMode(); // 权限模式快照：本轮中途改下拉框不影响已发出的请求
+        // 纯聊天不挂工具，工作区无所谓（保持 null：不建目录、系统提示词不注入）
+        String workspace = AgentMode.CHAT == mode ? null : resolveWorkspace(conversation);
         Window.AiStream stream = window.addAiMessage(conversation.getId(), "");
         long roundStartNanos = System.nanoTime(); // 本轮耗时（含 HTTP 建流），胶囊上展示用
         CompletableFuture.runAsync(() -> {
@@ -129,7 +131,7 @@ public class Main {
             long outputTokens = 0;
             try {
                 PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
-                        .agentMode(mode).approvalGate((toolCall, agentMode) ->
+                        .agentMode(mode).workspace(workspace).approvalGate((toolCall, agentMode) ->
                                 requestToolApproval(toolCall, agentMode, callIdHandleMap, cancelled));
                 for (PromptParams.RoleMessage roleMessage : history) {
                     paramsBuilder.roleMessages(roleMessage);
@@ -306,6 +308,25 @@ public class Main {
                         ToolCall.Status.COMPLETE.equals(toolCall.getStatus()), toolCall.getArguments());
             });
         });
+    }
+
+    /**
+     * 会话绑定的工作区落定成绝对路径：没绑过的用默认（~/.agentjava/workspace），顺手把目录建出来
+     * （没有 write 工具的现在用不上，但相对路径读它下面的文件前目录先在着总没错）。建失败只打日志，
+     * 工具执行时会自然报错，不在这里拦请求。
+     */
+    private static String resolveWorkspace(Conversation conversation) {
+        String workspace = conversation.getWorkspace();
+        if (workspace != null && !workspace.isBlank()) {
+            return workspace;
+        }
+        java.nio.file.Path dir = io.github.preschoolller.agentjava.frontend.store.AppSettings.defaultWorkspace();
+        try {
+            java.nio.file.Files.createDirectories(dir);
+        } catch (java.io.IOException e) {
+            System.err.println("创建默认工作区失败: " + e.getMessage());
+        }
+        return dir.toString();
     }
 
     /**

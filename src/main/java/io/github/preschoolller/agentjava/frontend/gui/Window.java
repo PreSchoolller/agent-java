@@ -12,6 +12,7 @@ import javax.swing.AbstractAction;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
+import javax.swing.JDialog;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
@@ -26,6 +27,7 @@ import javax.swing.JTextPane;
 import javax.swing.KeyStroke;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.WindowConstants;
 import javax.swing.text.View;
@@ -37,6 +39,7 @@ import java.awt.AWTException;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Cursor;
+import java.awt.Dialog;
 import java.awt.Dimension;
 import java.awt.EventQueue;
 import java.awt.FlowLayout;
@@ -395,7 +398,13 @@ public class Window extends JFrame {
 
             @Override
             public void onNewConversation() {
-                showConversation(store.newConversation());
+                String chosen = askWorkspaceDialog();
+                if (chosen == null) {
+                    return; // 取消：什么都不发生
+                }
+                // 默认工作区不落到会话上（默认位置以后可换，没绑过的会话跟着走）
+                boolean isDefault = chosen.equals(AppSettings.defaultWorkspace().toString());
+                showConversation(store.newConversation(isDefault ? null : chosen));
             }
 
             @Override
@@ -415,6 +424,164 @@ public class Window extends JFrame {
         applyPersistedBounds();
         initStopShortcut();
         initSearchShortcut();
+    }
+
+    /**
+     * 新建对话时选工作区（计划外）：路径框（可手输）+「浏览…」弹系统原生"选择文件夹"对话框
+     * （资源管理器风格）。AWT FileDialog 选不了目录（JDK-6927978 至今未实现，探针实测输入
+     * 路径回车只会钻进目录），Windows 上 shell 出去用 PowerShell + .NET FolderBrowserDialog
+     * （pwsh 7 是现代 IFileDialog，老 powershell 5.1 是旧树形，都没有就手输路径）。
+     * 输入的目录不存在时问一下是否现场创建。返回规范化的绝对路径（含默认路径），null = 取消。
+     * 模态弹窗，须在 EDT 上调用。
+     */
+    private String askWorkspaceDialog() {
+        String[] result = {null};
+        String defaultPath = AppSettings.defaultWorkspace().toString();
+
+        JLabel messageLabel = new JLabel("新建对话的工作区——工具的相对路径以此为基准");
+        messageLabel.setFont(new Font("微软雅黑", Font.PLAIN, 13));
+        messageLabel.setForeground(Ui.TEXT);
+        JLabel hint = new JLabel(" ");
+        hint.setFont(new Font("微软雅黑", Font.PLAIN, 12));
+        hint.setForeground(Ui.DANGER);
+
+        JTextField pathField = new JTextField(defaultPath);
+        Ui.styleInput(pathField);
+        pathField.setPreferredSize(new Dimension(360, 30));
+
+        JButton browseButton = Ui.button("浏览…");
+        browseButton.setPreferredSize(new Dimension(72, 30));
+        browseButton.setToolTipText("打开资源管理器选择目录");
+
+        JButton okButton = Ui.primaryButton("开始对话");
+        JButton cancelButton = Ui.button("取消");
+        okButton.setPreferredSize(new Dimension(88, 28));
+        cancelButton.setPreferredSize(new Dimension(70, 28));
+
+        JDialog dialog = new JDialog(this, "选择工作区", Dialog.ModalityType.APPLICATION_MODAL);
+        Runnable confirm = () -> {
+            String normalized = AppSettings.normalizeWorkspace(pathField.getText());
+            if (normalized == null) {
+                hint.setText("请输入有效的目录路径");
+                return;
+            }
+            java.nio.file.Path dir = java.nio.file.Path.of(normalized);
+            if (java.nio.file.Files.exists(dir) && !java.nio.file.Files.isDirectory(dir)) {
+                hint.setText("该路径已存在，且不是目录");
+                return;
+            }
+            if (!java.nio.file.Files.exists(dir)) {
+                boolean created = Ui.confirmDialog(this, "新建工作区",
+                        "目录不存在：\n" + normalized + "\n现在创建吗？", "创建", false);
+                if (!created) {
+                    return; // 留在工作区弹窗里，可以改路径重来
+                }
+                try {
+                    java.nio.file.Files.createDirectories(dir);
+                } catch (java.io.IOException e) {
+                    hint.setText("创建失败: " + e.getMessage());
+                    return;
+                }
+            }
+            result[0] = normalized;
+            dialog.dispose();
+        };
+        okButton.addActionListener(e -> confirm.run());
+        cancelButton.addActionListener(e -> dialog.dispose());
+        pathField.addActionListener(e -> confirm.run()); // 路径框里回车=确定（promptDialog 同款）
+        browseButton.addActionListener(e -> {
+            // 起点用路径框当前值（手输了半个路径也能接着选），没填有效的就用默认
+            String current = AppSettings.normalizeWorkspace(pathField.getText());
+            final String initial = current == null ? defaultPath : current;
+            browseButton.setEnabled(false);
+            hint.setText("正在打开资源管理器…");
+            CompletableFuture.runAsync(() -> {
+                String picked;
+                try {
+                    picked = browseDirectoryInExplorer(initial);
+                } catch (IllegalStateException noShell) {
+                    SwingUtilities.invokeLater(() -> {
+                        browseButton.setEnabled(true);
+                        hint.setText(noShell.getMessage());
+                    });
+                    return;
+                }
+                SwingUtilities.invokeLater(() -> {
+                    browseButton.setEnabled(true);
+                    if (picked != null) {
+                        String normalized = AppSettings.normalizeWorkspace(picked);
+                        pathField.setText(normalized != null ? normalized : picked);
+                        hint.setText(" ");
+                    } else {
+                        hint.setText(" "); // 用户在资源管理器里点了取消，回到弹窗
+                    }
+                });
+            });
+        });
+
+        JPanel pathRow = new JPanel(new BorderLayout(8, 0));
+        pathRow.setOpaque(false);
+        pathRow.add(pathField, BorderLayout.CENTER);
+        pathRow.add(browseButton, BorderLayout.EAST);
+        JPanel fields = new JPanel(new BorderLayout(0, 6));
+        fields.setOpaque(false);
+        fields.add(messageLabel, BorderLayout.NORTH);
+        fields.add(pathRow, BorderLayout.CENTER);
+        fields.add(hint, BorderLayout.SOUTH);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        buttons.add(cancelButton);
+        buttons.add(okButton);
+        JPanel content = new JPanel(new BorderLayout(0, 12));
+        content.setBackground(Ui.BG);
+        content.setBorder(BorderFactory.createEmptyBorder(16, 16, 12, 16));
+        content.add(fields, BorderLayout.CENTER);
+        content.add(buttons, BorderLayout.SOUTH);
+
+        dialog.setContentPane(content);
+        dialog.getRootPane().setDefaultButton(okButton);
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(460, dialog.getPreferredSize().height));
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+        return result[0];
+    }
+
+    /**
+     * 弹系统"选择文件夹"对话框，阻塞到用户关闭（必须在后台线程调用，结果经 invokeLater 回 EDT）。
+     * pwsh 优先（7 的 .NET 是 Explorer 风格现代对话框），老 powershell 兜底（5.1 是旧树形）。
+     * 返回所选目录路径，用户取消返回 null；两个 shell 都没有时抛 IllegalStateException。
+     * 已知边界：弹窗不是主窗的模态附属（没有 owner），极端时序下可能被主窗挡住，任务栏可切回。
+     */
+    private static String browseDirectoryInExplorer(String initial) {
+        // PowerShell 单引号串里撇号要翻倍转义（Windows 路径里撇号合法）
+        String script = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+                + "Add-Type -AssemblyName System.Windows.Forms; "
+                + "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                + "$d.Description = '选择工作区目录'; "
+                + "$d.ShowNewFolderButton = $true; "
+                + "$d.SelectedPath = '" + initial.replace("'", "''") + "'; "
+                + "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }";
+        for (String shell : List.of("pwsh", "powershell")) {
+            try {
+                Process process = new ProcessBuilder(shell, "-STA", "-NoProfile", "-NonInteractive",
+                        "-WindowStyle", "Hidden", "-Command", script).start();
+                String out;
+                try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(process.getInputStream(),
+                                java.nio.charset.StandardCharsets.UTF_8))) {
+                    out = reader.readLine(); // 对话框关闭前一直阻塞（这正是它要在后台线程跑的原因）
+                }
+                process.waitFor();
+                return out == null || out.isBlank() ? null : out.strip();
+            } catch (java.io.IOException shellMissing) {
+                // 本机没有这个 shell，换下一个
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        throw new IllegalStateException("系统没有可用的 PowerShell，请直接输入路径");
     }
 
     /** Esc 停止生成（P2 候补）：窗口级绑定，生成中（停止键可见）才触发；会话内搜索框自己

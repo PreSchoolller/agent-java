@@ -17,6 +17,9 @@ public class Conversation {
     private final long createdAt;
     private long updatedAt;
     private boolean pinned;
+    /** 工作区（规范化的绝对路径）：本会话里 agent 工具的相对路径基准；null = 默认工作区
+     *  （AppSettings.defaultWorkspace——默认位置以后可换，没绑过的会话跟着走） */
+    private String workspace;
     private final List<Message> messages = new ArrayList<>();
     /** 消息是否已在内存。新建/分叉出来的会话天然为 true；从索引装载的为 false，首次触达时经 loader 补齐 */
     private boolean loaded;
@@ -94,6 +97,14 @@ public class Conversation {
         this.pinned = pinned;
     }
 
+    public String getWorkspace() {
+        return workspace;
+    }
+
+    public void setWorkspace(String workspace) {
+        this.workspace = workspace;
+    }
+
     /** 返回实时消息列表（未加载时先读盘补齐）；请勿在遍历时增删 */
     public List<Message> getMessages() {
         return ensureLoaded();
@@ -140,13 +151,15 @@ public class Conversation {
     }
 
     /** 从某次对话状态分叉出新会话：prefix 为分叉点之前（含分叉点那条 AI 回复）的消息，
-     *  标题沿用原会话标题加"（分叉）"后缀，侧栏里看得出来源 */
-    public static Conversation fork(List<Message> prefix, String sourceTitle) {
+     *  标题沿用原会话标题加"（分叉）"后缀，工作区沿用源会话（分叉是同一工作区里继续对话），
+     *  侧栏里看得出来源 */
+    public static Conversation fork(List<Message> prefix, String sourceTitle, String workspace) {
         Conversation forked = create();
         for (Message message : prefix) {
             forked.messages.add(message.copy());
         }
         forked.title = abbreviate(sourceTitle, 20) + "（分叉）";
+        forked.workspace = workspace;
         return forked;
     }
 

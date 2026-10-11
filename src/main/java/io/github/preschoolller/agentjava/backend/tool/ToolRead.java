@@ -36,7 +36,7 @@ public class ToolRead implements Tool {
 
     @Override
     public String description() {
-        return "读取文本文件内容";
+        return "读取文本文件内容（相对路径按当前工作区解析）";
     }
 
     @Override
@@ -48,13 +48,14 @@ public class ToolRead implements Tool {
     public Map<String, Object> schema() {
         return Map.of(
                 "type", "object",
-                "properties", Map.of("path", Map.of("type", "string", "description", "文件相对路径")),
+                "properties", Map.of("path", Map.of("type", "string", "description",
+                        "文件路径，相对路径以当前工作区为基准")),
                 "required", List.of("path")
         );
     }
 
     @Override
-    public String execute(String arguments) {
+    public String execute(String arguments, String workspace) {
         try {
             JsonNode jsonNode = new ObjectMapper().readTree(arguments);
             if (jsonNode == null) {
@@ -64,7 +65,12 @@ public class ToolRead implements Tool {
             if (path == null || path.isBlank()) {
                 return "json parse error: wrong path";
             }
-            return Files.readString(Path.of(path));
+            Path target = Path.of(path);
+            // 相对路径以会话工作区为基准，绝对路径原样用；workspace 缺失时按进程工作目录解析
+            if (!target.isAbsolute() && workspace != null && !workspace.isBlank()) {
+                target = Path.of(workspace).resolve(target);
+            }
+            return Files.readString(target);
         } catch (JsonProcessingException e) {
             return "json parse error: " + e.getMessage();
         } catch (IOException e) {

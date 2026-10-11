@@ -46,7 +46,7 @@ public class EmptyTool implements Tool {
     }
 
     @Override
-    public String execute(String arguments) {
+    public String execute(String arguments, String workspace) {
         return null;
     }
 }

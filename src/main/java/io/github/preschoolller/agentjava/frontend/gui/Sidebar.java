@@ -239,7 +239,7 @@ public class Sidebar extends JPanel {
         toggleButton.addActionListener(e -> callbacks.onToggleCollapse());
 
         newChatButton.setPreferredSize(new Dimension(120, 32));
-        newChatButton.setToolTipText("开始一段新对话");
+        newChatButton.setToolTipText("开始一段新对话（可选择工作区）");
         newChatButton.addActionListener(e -> callbacks.onNewConversation());
 
         JPanel buttonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));

@@ -73,18 +73,30 @@ public class ConversationStore {
         return active;
     }
 
-    /** 新建一段对话并设为当前；当前已是空对话时直接复用，避免堆出一串空会话 */
-    public Conversation newConversation() {
+    /** 新建一段对话并设为当前；当前已是空对话时直接复用（并把工作区改成所选的），避免堆出一串空会话。
+     *  workspace 为会话绑定的工作区目录（规范化绝对路径），null = 默认工作区 */
+    public Conversation newConversation(String workspace) {
         Conversation current = findById(activeId);
         if (current != null && current.isKnownEmpty()) {
+            if (!java.util.Objects.equals(current.getWorkspace(), workspace)) {
+                current.setWorkspace(workspace);
+                save();
+                fireChanged();
+            }
             return current;
         }
         Conversation created = Conversation.create();
+        created.setWorkspace(workspace);
         conversations.add(0, created);
         activeId = created.getId();
         save();
         fireChanged();
         return created;
+    }
+
+    /** 同 newConversation(workspace)，用默认工作区 */
+    public Conversation newConversation() {
+        return newConversation(null);
     }
 
     public void switchTo(String id) {
@@ -164,7 +176,8 @@ public class ConversationStore {
         if (cut < 0) {
             return null;
         }
-        Conversation forked = Conversation.fork(messages.subList(0, cut + 1), source.getTitle());
+        Conversation forked = Conversation.fork(messages.subList(0, cut + 1), source.getTitle(),
+                source.getWorkspace());
         conversations.add(0, forked);
         activeId = forked.getId();
         save();
@@ -293,6 +306,9 @@ public class ConversationStore {
         map.put("createdAt", conversation.getCreatedAt());
         map.put("updatedAt", conversation.getUpdatedAt());
         map.put("pinned", conversation.isPinned());
+        if (conversation.getWorkspace() != null) {
+            map.put("workspace", conversation.getWorkspace()); // null（默认工作区）不写键
+        }
         return map;
     }
 
@@ -356,6 +372,10 @@ public class ConversationStore {
                         str(map.get("id")), str(map.get("title")),
                         num(map.get("createdAt")), num(map.get("updatedAt")));
                 conversation.setPinned(Boolean.TRUE.equals(map.get("pinned")));
+                Object workspace = map.get("workspace"); // 缺键（旧文件/默认工作区）= null
+                if (workspace != null && !String.valueOf(workspace).isBlank()) {
+                    conversation.setWorkspace(String.valueOf(workspace));
+                }
                 // 按需加载：启动只读元数据，消息挂回读钩子，首次触达该会话消息时才读单会话文件。
                 // 消息只认单会话文件（文件名=会话 id）——旧格式内嵌消息不迁移，读到坏文件按无消息处理
                 String id = conversation.getId();

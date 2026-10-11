@@ -53,13 +53,14 @@ public class ToolManager {
         return functionTool;
     }
 
-    public static String execute(ResponseFunctionToolCall functionTool) {
+    /** 执行一次工具调用：workspace 是会话绑定的工作区目录，透传给工具做相对路径解析 */
+    public static String execute(ResponseFunctionToolCall functionTool, String workspace) {
         for (Tool tool : tools) {
             if (!tool.name().equals(functionTool.name())) {
                 continue;
             }
-            return tool.execute(functionTool.arguments());
+            return tool.execute(functionTool.arguments(), workspace);
         }
-        return BAD_TOOL.execute(functionTool.arguments());
+        return BAD_TOOL.execute(functionTool.arguments(), workspace);
     }
 }

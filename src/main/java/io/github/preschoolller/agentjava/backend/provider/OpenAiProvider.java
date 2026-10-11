@@ -78,8 +78,6 @@ public class OpenAiProvider implements Provider {
             ReasoningEffortEnum.ON, ReasoningEffort.HIGH,
             ReasoningEffortEnum.OFF, ReasoningEffort.NONE);
 
-    private volatile ResponseInputItem.Message systemPromptMessage;
-
     OpenAiProvider() {
         httpClient = OkHttpClient.builder().build();
         headers = Headers
@@ -94,14 +92,6 @@ public class OpenAiProvider implements Provider {
                 .build();
         openAIClient = new OpenAIClientImpl(clientOptions);
         responseService = openAIClient.responses();
-        ResponseInputText systemPrompt = ResponseInputText
-                .builder()
-                .text(AppSettings.get().getSystemPrompt())
-                .build();
-        systemPromptMessage = ResponseInputItem.Message
-                .builder()
-                .role(ResponseInputItem.Message.Role.SYSTEM)
-                .addContent(systemPrompt).build();
         AppSettings.get().addChangeListener(this::reload);
     }
 
@@ -116,14 +106,6 @@ public class OpenAiProvider implements Provider {
                     .build();
             openAIClient = new OpenAIClientImpl(clientOptions);
             responseService = openAIClient.responses();
-            ResponseInputText systemPrompt = ResponseInputText
-                    .builder()
-                    .text(AppSettings.get().getSystemPrompt())
-                    .build();
-            systemPromptMessage = ResponseInputItem.Message
-                    .builder()
-                    .role(ResponseInputItem.Message.Role.SYSTEM)
-                    .addContent(systemPrompt).build();
         }
     }
 
@@ -187,7 +169,7 @@ public class OpenAiProvider implements Provider {
             }
         }
         ArrayList<ResponseInputItem> inputList = new ArrayList<>();
-        inputList.add(ResponseInputItem.ofMessage(systemPromptMessage));
+        inputList.add(ResponseInputItem.ofMessage(systemMessage(promptParams)));
         inputList.addAll(allMessages);
         ResponseCreateParams.Builder builder = ResponseCreateParams.builder();
         builder.model(promptParams.getModel())
@@ -202,6 +184,27 @@ public class OpenAiProvider implements Provider {
         return builder.build();
     }
 
+    /**
+     * 系统提示词按请求组装（原来构造期缓存成字段——工作区要每请求注入，缓存没了意义）：
+     * 设置里的文本打底；涉工具的请求（非纯聊天）再补一行工作区说明，告知模型相对路径的
+     * 基准——工具侧（Tool#execute）按同一目录解析，两边必须说同一个词。
+     */
+    private static ResponseInputItem.Message systemMessage(PromptParams promptParams) {
+        String text = AppSettings.get().getSystemPrompt();
+        String workspace = promptParams.getWorkspace();
+        if (promptParams.getAgentMode() != AgentMode.CHAT && workspace != null && !workspace.isBlank()) {
+            text = text + "\n\n当前工作区目录：" + workspace + "。工具调用中的相对路径以此为基准。";
+        }
+        ResponseInputText inputText = ResponseInputText
+                .builder()
+                .text(text)
+                .build();
+        return ResponseInputItem.Message
+                .builder()
+                .role(ResponseInputItem.Message.Role.SYSTEM)
+                .addContent(inputText).build();
+    }
+
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
         System.out.println("有人调用？？？------------------");
@@ -213,7 +216,7 @@ public class OpenAiProvider implements Provider {
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         StreamResponse<ResponseStreamEvent> response = service.createStreaming(responseCreateParams);
         ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue,
-                promptParams.getApprovalGate(), promptParams.getAgentMode());
+                promptParams.getApprovalGate(), promptParams.getAgentMode(), promptParams.getWorkspace());
         ThreadPoolFactory.getResponseExecutor().execute(() -> {
             try {
                 response.stream()
@@ -265,7 +268,8 @@ public class OpenAiProvider implements Provider {
 
     private static ResponseStreamEventVisitorAdaptor getVisitor(BlockingQueue<BaseEvent> blockingQueue,
                                                                  ToolApprovalGate approvalGate,
-                                                                 AgentMode agentMode) {
+                                                                 AgentMode agentMode,
+                                                                 String workspace) {
         return new ResponseStreamEventVisitorAdaptor() {
 
             private void putIntoBQ(BaseEvent baseEvent) {
@@ -365,7 +369,7 @@ public class OpenAiProvider implements Provider {
                         }
                         toolCall.markExecutionStarted(); // 进入执行阶段，awaitFinal 的执行超时从这里起算（审批等待不计入）
                         try {
-                            toolCall.setResult(ToolManager.execute(functionCall));
+                            toolCall.setResult(ToolManager.execute(functionCall, workspace));
                             toolCall.setStatus(ToolCall.Status.COMPLETE);
                         } catch (Exception e) {
                             toolCall.setResult("tool call error, id: " + toolCall.getCallId() + " with message: " + e.getMessage());

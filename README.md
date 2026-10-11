@@ -16,8 +16,9 @@ mvn exec:java -Dexec.mainClass=io.github.preschoolller.agentjava.Main
 本地数据地址
 ```
 ~/.agentjava/
-├── history.json         # 会话索引（只存元数据：标题/时间/置顶），启动只读它
+├── history.json         # 会话索引（只存元数据：标题/时间/置顶/工作区），启动只读它
 ├── settings.properties  # 应用设置
+├── workspace/           # 默认工作区（新建对话不选工作区时，工具的相对路径落这里）
 └── sessions/            # 单会话消息文件，文件名即会话 id（首次打开该会话才读）
     └── ...
 ```
@@ -31,6 +32,9 @@ mvn exec:java -Dexec.mainClass=io.github.preschoolller.agentjava.Main
   输入草稿按会话保留；窗口尺寸/位置记忆
 - agent 工具调用卡片：运行中/待确认/完成/失败/已中断五态，默认收成一行、点头部展开结果，结果等宽展示、
   超长内部滚动，可复制参数与结果
+- 工作区：新建对话时可选（路径框直接输 + 「浏览…」弹系统资源管理器选目录，目录不存在可现场创建），
+  不选就是默认 `~/.agentjava/workspace`；会话里工具的相对路径以工作区为基准，并在系统提示词里告知模型；
+  分叉出的会话沿用源会话工作区
 - AI 回复 Markdown 渲染：标题/列表/引用/表格/代码块（高亮底 + 复制）/diff 增删行着色/任务勾选，`<think>` 推理块
   单独成块展示（默认收起显示已思考时长，点击展开），链接可点击跳转，流式逐段渲染（120ms 节流），可中断；
   消息文本可划词选中 Ctrl+C 复制

@@ -44,15 +44,16 @@ import java.util.Properties;
  *   javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
  *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
- * 输出：持久化往返 + 删尾/分叉/置顶落盘/主文件元数据化（PERSIST_OK）、
+ * 输出：持久化往返 + 删尾/分叉/置顶/工作区落盘/主文件元数据化（PERSIST_OK）、
  * 按需加载断言（LAZY_OK：新建 store 不读会话文件、元数据保存不重写会话文件、触达消息才读）、
- * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、Markdown 解析断言（MD_PARSE_OK）、
+ * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、
+ * Markdown 解析断言（MD_PARSE_OK）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
- * 长会话窗口化断言（WINDOWING_OK）+
- * 二十一张截图
+ * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗断言（WORKSPACE_OK）+
+ * 二十二张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
- * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索}.png（SHOT_OK）。
+ * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索,20工作区弹窗}.png（SHOT_OK）。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
@@ -186,6 +187,31 @@ public class Shot {
                 .getActive().getMessages().get(0);
         expect(crashTool.isToolCall() && "interrupted".equals(crashTool.toolStatus()),
                 "崩溃残留 running 翻成已中断");
+        // 工作区（计划外）：会话绑定目录落盘往返；分叉沿用；默认（null）不写键；空会话复用时改绑
+        String wsPath = dir.resolve("ws-project").toString();
+        first.newConversation(wsPath);
+        first.appendMessage(first.getActive().getId(), Conversation.ROLE_USER, "工作区测试");
+        first.appendMessage(first.getActive().getId(), Conversation.ROLE_AI, "好");
+        Conversation wsForked = first.fork(first.getActive().getId(),
+                first.getActive().getMessages().get(1));
+        expect(wsPath.equals(wsForked.getWorkspace()), "分叉沿用工作区");
+        ConversationStore wsReread = new ConversationStore(dir.resolve("history.json"));
+        expect(wsReread.getConversations().stream()
+                .anyMatch(conversation -> wsPath.equals(conversation.getWorkspace())), "工作区落盘往返");
+        Path wsDefaultDir = Files.createTempDirectory("agentjava-ws");
+        ConversationStore wsDefaultStore = new ConversationStore(wsDefaultDir.resolve("history.json"));
+        Conversation defaultConv = wsDefaultStore.newConversation();
+        expect(defaultConv.getWorkspace() == null, "默认工作区为 null");
+        wsDefaultStore.appendMessage(defaultConv.getId(), Conversation.ROLE_USER, "x");
+        expect(new ConversationStore(wsDefaultDir.resolve("history.json"))
+                .getActive().getWorkspace() == null, "默认工作区不落盘");
+        // 空会话复用时改绑：当前是没说过话的空会话，再 new 一次直接改工作区而不是新建
+        ConversationStore reuseStore = new ConversationStore(
+                Files.createTempDirectory("agentjava-reuse").resolve("history.json"));
+        Conversation firstEmpty = reuseStore.newConversation();
+        Conversation reusedConv = reuseStore.newConversation(wsPath);
+        expect(reusedConv.getId().equals(firstEmpty.getId()), "空会话复用");
+        expect(wsPath.equals(reusedConv.getWorkspace()), "复用空会话改绑工作区");
         System.out.println("PERSIST_OK");
         // 按需加载：启动只读索引，会话文件延迟到首次触达消息才读；未加载的会话被改元数据时
         // 也不重写会话文件（mtime 不变），触碰消息后仍拿得到磁盘内容
@@ -750,6 +776,28 @@ public class Shot {
         }
         System.out.println("TRAY_OK");
 
+        // —— 截图 20：新建对话的工作区弹窗（计划外）。模态弹窗：开窗的点击用 invokeLater 派发
+        // （不等待——edt 会卡在 doClick 里等弹窗关闭），EDT 进模态泵后仍派发后续任务；
+        // 关窗的点击走 edt，弹窗关闭后 doClick 才返回 ——
+        int conversationsBefore = WINDOW.getStore().getConversations().size();
+        Files.createDirectories(AppSettings.defaultWorkspace()); // 默认目录先在着，确定时不触发"是否创建"确认
+        SwingUtilities.invokeLater(() -> uiClickAnyWindow("＋ 新对话"));
+        Thread.sleep(800);
+        expect(uiHasTextAnyWindow("新建对话的工作区——工具的相对路径以此为基准"), "工作区弹窗打开");
+        expect(uiHasTextAnyWindow("浏览…"), "弹窗里有浏览按钮（资源管理器选目录）");
+        captureDialog(args[0] + "-20-workspace.png", "选择工作区");
+        edt(() -> uiClickAnyWindow("取消"));
+        Thread.sleep(300);
+        expect(WINDOW.getStore().getConversations().size() == conversationsBefore, "取消不新建会话");
+        // 确定默认路径：新建会话 workspace 保持 null（默认不落到会话上，recents 也不记默认）
+        SwingUtilities.invokeLater(() -> uiClickAnyWindow("＋ 新对话"));
+        Thread.sleep(800);
+        edt(() -> uiClickAnyWindow("开始对话"));
+        Thread.sleep(600);
+        expect(WINDOW.getStore().getConversations().size() == conversationsBefore + 1, "确定后新建会话");
+        expect(WINDOW.getStore().getActive().getWorkspace() == null, "默认工作区不落到会话");
+        System.out.println("WORKSPACE_OK");
+
         edt(() -> WINDOW.dispose());
         System.out.println("SHOT_OK");
         System.exit(0);
@@ -842,6 +890,65 @@ public class Shot {
             }
         }
         throw new AssertionError("没找到可点击的按钮: " + text);
+    }
+
+    /** 全部顶层窗口里点该文本的按钮：工作区弹窗是独立 JDialog，不在 WINDOW 的组件树里 */
+    private static void uiClickAnyWindow(String text) {
+        for (java.awt.Window window : java.awt.Window.getWindows()) {
+            List<Component> all = new ArrayList<>();
+            collectComponents(window, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.JButton button
+                        && text.equals(button.getText()) && button.isShowing() && button.isEnabled()) {
+                    button.doClick();
+                    return;
+                }
+            }
+        }
+        throw new AssertionError("没找到可点击的按钮: " + text);
+    }
+
+    /** 全部顶层窗口里是否有显示该全等文本的按钮/标签（工作区弹窗断言用，同 uiHasText 但跨窗口） */
+    private static boolean uiHasTextAnyWindow(String text) throws Exception {
+        boolean[] found = new boolean[1];
+        edt(() -> {
+            for (java.awt.Window window : java.awt.Window.getWindows()) {
+                List<Component> all = new ArrayList<>();
+                collectComponents(window, all);
+                for (Component component : all) {
+                    if (component instanceof javax.swing.JLabel label && text.equals(label.getText())) {
+                        found[0] = true;
+                        return;
+                    }
+                    if (component instanceof javax.swing.AbstractButton button && text.equals(button.getText())) {
+                        found[0] = true;
+                        return;
+                    }
+                }
+            }
+        });
+        return found[0];
+    }
+
+    /** 按标题找到正在显示的 JDialog 截图（工作区弹窗，WINDOW.printAll 拍不到独立窗口） */
+    private static void captureDialog(String path, String dialogTitle) throws Exception {
+        edt(() -> {
+            for (java.awt.Window window : java.awt.Window.getWindows()) {
+                if (window instanceof javax.swing.JDialog dialog
+                        && dialogTitle.equals(dialog.getTitle()) && dialog.isShowing()) {
+                    BufferedImage image = new BufferedImage(dialog.getWidth(), dialog.getHeight(),
+                            BufferedImage.TYPE_INT_RGB);
+                    dialog.printAll(image.createGraphics());
+                    try {
+                        ImageIO.write(image, "png", new File(path));
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                    return;
+                }
+            }
+            throw new AssertionError("没找到弹窗: " + dialogTitle);
+        });
     }
 
     /** 窗口里是否有正在显示（isShowing）的全等文本按钮/标签：搜索条显隐断言用——

@@ -22,6 +22,12 @@ public class PromptParams {
      */
     private ToolApprovalGate approvalGate;
 
+    /**
+     * 本会话绑定的工作区目录（规范化绝对路径）：工具的相对路径以此为基准，系统提示词里
+     * 告知模型。null = 不涉工具的请求（纯聊天，buildParams 不注入工作区说明）。
+     */
+    private String workspace;
+
     private PromptParams() {}
 
     public String getModel() {
@@ -43,6 +49,10 @@ public class PromptParams {
 
     public ToolApprovalGate getApprovalGate() {
         return approvalGate;
+    }
+
+    public String getWorkspace() {
+        return workspace;
     }
 
     public static PromptParams.Builder builder() {
@@ -67,6 +77,7 @@ public class PromptParams {
             base.roleMessages = promptParams.roleMessages;
             base.agentMode = promptParams.agentMode;
             base.approvalGate = promptParams.approvalGate;
+            base.workspace = promptParams.workspace;
         }
 
         private final PromptParams base;
@@ -97,6 +108,11 @@ public class PromptParams {
 
         public Builder approvalGate(ToolApprovalGate approvalGate) {
             base.approvalGate = approvalGate;
+            return this;
+        }
+
+        public Builder workspace(String workspace) {
+            base.workspace = workspace;
             return this;
         }
     }
