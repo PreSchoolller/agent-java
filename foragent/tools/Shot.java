@@ -335,7 +335,11 @@ public class Shot {
         edt(() -> WINDOW.setGenerating(true));
         Thread.sleep(500);
         capture(args[0] + "-3-generating.png");
+        expect(sidebarBadgeHtml(WINDOW.getStore().getActive().getId()).contains(">生成中<"),
+                "侧栏亮\"生成中\"标注");
         edt(() -> WINDOW.setGenerating(false));
+        expect(!sidebarBadgeHtml(WINDOW.getStore().getActive().getId()).contains(">生成中<"),
+                "生成结束侧栏标注熄灭");
 
         // —— 截图 4：折叠侧栏 ——
         edt(() -> {
@@ -437,10 +441,14 @@ public class Shot {
         });
         Thread.sleep(300);
         expect(uiHasText("待确认") && uiHasText("允许") && uiHasText("拒绝"), "待确认态徽标与按钮");
+        expect(sidebarBadgeHtml(WINDOW.getStore().getActive().getId()).contains(">待确认<"),
+                "侧栏亮\"待确认\"标注");
         capture(args[0] + "-17-approval.png");
         edt(() -> uiClick("允许"));
         Thread.sleep(300);
         expect(Boolean.TRUE.equals(decision[0].getNow(null)), "允许按钮写入 future");
+        expect(!sidebarBadgeHtml(WINDOW.getStore().getActive().getId()).contains(">待确认<"),
+                "审批决出侧栏标注熄灭");
         expect(!uiHasText("待确认") && !uiHasText("允许") && uiHasText("运行中…"), "放行后回到运行中态");
         edt(() -> approvalHolder[0].finish("写入完成", true, "{\"path\": \"a.txt\"}"));
         // 拒绝路径：按钮写 false，随后按 provider 的收尾（DENIED_RESULT, 失败）落库
@@ -745,6 +753,45 @@ public class Shot {
             }
         }
         throw new AssertionError("没找到可点击的按钮: " + text);
+    }
+
+    /** 侧栏某会话条目的渲染 HTML（含状态标注）：直接调渲染器拿文本，不依赖列表可见
+     *  （4 号截图把侧栏折叠了，可见单元格不保证存在）。找不到该会话返回空串 */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static String sidebarBadgeHtml(String conversationId) throws Exception {
+        String[] html = new String[1];
+        edt(() -> {
+            JList rawList = findConvList(WINDOW);
+            if (rawList == null) {
+                return;
+            }
+            for (int i = 0; i < rawList.getModel().getSize(); i++) {
+                Object value = rawList.getModel().getElementAt(i);
+                if (value instanceof Conversation conversation && conversation.getId().equals(conversationId)) {
+                    Component cell = rawList.getCellRenderer()
+                            .getListCellRendererComponent(rawList, value, i, false, false);
+                    html[0] = cell instanceof javax.swing.JLabel label ? label.getText() : "";
+                    return;
+                }
+            }
+        });
+        return html[0] == null ? "" : html[0];
+    }
+
+    /** 深度优先找第一个 JList（侧栏会话列表） */
+    private static JList<?> findConvList(Component component) {
+        if (component instanceof JList<?> list) {
+            return list;
+        }
+        if (component instanceof Container container) {
+            for (Component child : container.getComponents()) {
+                JList<?> found = findConvList(child);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
     }
 
     /** 全窗口里的 JTextPane 数量：物化窗口断言用（未窗口化的 300 条会话会有近千个） */

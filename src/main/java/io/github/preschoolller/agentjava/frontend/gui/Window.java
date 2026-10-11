@@ -660,6 +660,11 @@ public class Window extends JFrame {
         /** 待确认的审批 future：卡片不在前台时先挂在句柄上，rebind 时挪到卡片 */
         private CompletableFuture<Boolean> pendingApproval;
 
+        /** 有没有还没决出的审批（侧栏"待确认"标注的判断依据） */
+        boolean hasPendingApproval() {
+            return pendingApproval != null && !pendingApproval.isDone();
+        }
+
         private ToolCallImpl(String conversationId, Message message, MessageCard card) {
             this.conversationId = conversationId;
             this.message = message;
@@ -723,6 +728,7 @@ public class Window extends JFrame {
             finished = true;
             argsTimer.stop();
             liveStreams.remove(this);
+            refreshSidebarBadges(); // 兜底：审批未来得及决出就被清理时熄灭"待确认"
             String finalArgs = (arguments == null || arguments.isEmpty()) ? args.toString() : arguments;
             Message updated = store.completeToolCall(conversationId, message, result, success, finalArgs);
             System.out.println("工具入库结尾：" + System.currentTimeMillis());
@@ -750,6 +756,7 @@ public class Window extends JFrame {
             if (card != null) {
                 card.approval = decision;
             }
+            refreshSidebarBadges(); // 侧栏亮"待确认"标注
             if (card != null && conversationId.equals(displayedConvId)) {
                 updateMaterialization(); // 待确认卡一般是最后一张，窗口化下保证它已物化
                 if (card.materialized) {
@@ -803,6 +810,7 @@ public class Window extends JFrame {
         if (conversationId.equals(displayedConvId)) {
             refreshGeneratingUi();
         }
+        refreshSidebarBadges(); // 侧栏"生成中"标注跟随
         if (!value && pendingRebuild && !isGenerating(displayedConvId)) {
             // 显示中的会话空闲了：补做生成期间挂起的换装重建（rebind 保证其余会话的流式引用安全）
             pendingRebuild = false;
@@ -1262,6 +1270,7 @@ public class Window extends JFrame {
                 return; // 已被另一击/外层清理决掉：按钮理论上随重建消失了，兜底不双写
             }
             decision.complete(approved);
+            refreshSidebarBadges(); // 审批决出，"待确认"标注熄灭
             rebuildCard(card);
         });
         return button;
@@ -1664,6 +1673,25 @@ public class Window extends JFrame {
 
     private void initSidebar() {
         sidebar = new Sidebar(store, sidebarCallbacks);
+        sidebar.setBadgeLookup(this::badgeFor);
+    }
+
+    /** 侧栏条目的状态标注：待确认审批 > 生成中（待确认本身就意味着链还开着） */
+    private Sidebar.Badge badgeFor(String conversationId) {
+        for (LiveStream stream : liveStreams) {
+            if (stream instanceof ToolCallImpl toolCall && toolCall.hasPendingApproval()
+                    && stream.conversationId().equals(conversationId)) {
+                return Sidebar.Badge.APPROVAL;
+            }
+        }
+        return generatingConversations.contains(conversationId) ? Sidebar.Badge.GENERATING : null;
+    }
+
+    /** 状态标注可能变了（生成态增删 / 审批挂起或决出 / 句柄终结）：侧栏重刷一次。须在 EDT 上调用 */
+    private void refreshSidebarBadges() {
+        if (sidebar != null) {
+            sidebar.refresh();
+        }
     }
 
     /** 拖动分隔条时联动侧栏内容：拖到贴边自动收起，往右拖开自动展开 */

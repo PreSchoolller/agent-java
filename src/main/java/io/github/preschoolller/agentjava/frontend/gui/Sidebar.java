@@ -41,6 +41,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Function;
 
 /**
  * 左侧面板：顶部是汉堡按钮（折叠/展开，收起后仍留在窗口左上角）和"新对话"主按钮，
@@ -82,6 +83,22 @@ public class Sidebar extends JPanel {
     private boolean searchPlaceholder = true;
     /** 当前生效的搜索词（小写、已去空白；占位状态下为空），渲染器高亮时用 */
     private String currentQuery = "";
+
+    /** 会话条目的运行状态标注（并行 agent 循环：会话在后台生成/等审批时侧栏可见）。
+     *  待确认本身就意味着这轮链还开着，渲染时优先于生成中。 */
+    public enum Badge {
+        /** 这轮 agent 链还在跑（一轮回复或工具收尾中） */
+        GENERATING,
+        /** 有工具调用正等用户点"允许/拒绝" */
+        APPROVAL,
+    }
+
+    /** 状态标注查询（Window 注入）：会话 id → 标注；null = 无标注。须在 EDT 上调用与使用 */
+    private Function<String, Badge> badgeLookup = id -> null;
+
+    public void setBadgeLookup(Function<String, Badge> lookup) {
+        this.badgeLookup = lookup;
+    }
 
     public Sidebar(ConversationStore store, Callbacks callbacks) {
         this.store = store;
@@ -386,6 +403,12 @@ public class Sidebar extends JPanel {
             StringBuilder html = new StringBuilder("<html><body style='padding:2px 0'>");
             html.append(highlightHtml(title, currentQuery));
             html.append("<br><small><font color='").append(secondary).append("'>");
+            // 状态标注与"置顶"同款式（彩色小字标签）；待确认比生成中更该被看见，优先显示
+            Badge badge = badgeLookup.apply(conversation.getId());
+            if (badge != null) {
+                html.append("<font color='").append(Ui.hex(badge == Badge.APPROVAL ? Ui.WARNING : Ui.ACCENT))
+                        .append("'>").append(badge == Badge.APPROVAL ? "待确认" : "生成中").append("</font> · ");
+            }
             if (conversation.isPinned()) {
                 html.append("<font color='").append(Ui.hex(Ui.ACCENT)).append("'>置顶</font> · ");
             }
