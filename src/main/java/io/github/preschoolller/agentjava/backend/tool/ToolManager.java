@@ -14,7 +14,8 @@ public class ToolManager {
     public static final Tool EMPTY_TOOL = EmptyTool.getInstance();
     private static volatile ToolManager instance;
     public static List<Tool> tools = new ArrayList<>(List.of(
-            ToolRead.getInstance()
+            ToolRead.getInstance(),
+            ToolWslBash.getInstance()
     ));
 
     private ToolManager() {

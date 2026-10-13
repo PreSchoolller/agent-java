@@ -15,7 +15,6 @@ import com.openai.models.responses.Response;
 import com.openai.models.responses.ResponseCompletedEvent;
 import com.openai.models.responses.ResponseContentPartAddedEvent;
 import com.openai.models.responses.ResponseCreateParams;
-import com.openai.models.responses.ResponseError;
 import com.openai.models.responses.ResponseErrorEvent;
 import com.openai.models.responses.ResponseFailedEvent;
 import com.openai.models.responses.ResponseFunctionCallArgumentsDeltaEvent;
