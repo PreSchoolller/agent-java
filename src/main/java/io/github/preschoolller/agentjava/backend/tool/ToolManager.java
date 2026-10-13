@@ -1,8 +1,12 @@
 package io.github.preschoolller.agentjava.backend.tool;
 
 import com.openai.core.JsonValue;
+import com.openai.models.FunctionDefinition;
+import com.openai.models.FunctionParameters;
+import com.openai.models.chat.completions.ChatCompletionFunctionTool;
 import com.openai.models.responses.FunctionTool;
 import com.openai.models.responses.ResponseFunctionToolCall;
+import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 
 import java.util.ArrayList;
@@ -54,6 +58,23 @@ public class ToolManager {
         return functionTool;
     }
 
+    /** 只接受已注册的 Tool（buildParams 遍历 tools 时用）；BAD_TOOL.schema() 是 null，别拿占位工具进来 */
+    public static ChatCompletionFunctionTool getChatCompletionFunctionTool(Tool tool) {
+        HashMap<String, JsonValue> parameters = new HashMap<>();
+        tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
+        return ChatCompletionFunctionTool
+                .builder()
+                .function(FunctionDefinition.builder()
+                        .name(tool.name())
+                        .description(tool.description())
+                        .parameters(FunctionParameters.builder()
+                                .putAllAdditionalProperties(parameters)
+                                .build())
+                        .strict(true)
+                        .build())
+                .build();
+    }
+
     /** 执行一次工具调用：workspace 是会话绑定的工作区目录，透传给工具做相对路径解析 */
     public static String execute(ResponseFunctionToolCall functionTool, String workspace) {
         for (Tool tool : tools) {
@@ -63,5 +84,16 @@ public class ToolManager {
             return tool.execute(functionTool.arguments(), workspace);
         }
         return BAD_TOOL.execute(functionTool.arguments(), workspace);
+    }
+
+    /** 执行一次工具调用：workspace 是会话绑定的工作区目录，透传给工具做相对路径解析 */
+    public static String execute(ToolCall toolCall, String workspace) {
+        for (Tool tool : tools) {
+            if (!tool.name().equals(toolCall.getTool().name())) {
+                continue;
+            }
+            return tool.execute(toolCall.getArguments(), workspace);
+        }
+        return BAD_TOOL.execute(toolCall.getArguments(), workspace);
     }
 }

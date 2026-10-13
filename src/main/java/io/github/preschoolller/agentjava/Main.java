@@ -56,7 +56,6 @@ public class Main {
     private static final long TOOL_EXECUTE_TIMEOUT_SECONDS = 60;
 
     public static void main(String[] args) {
-        Provider openAiProvider = ProviderFactory.createOpenAiProvider();
         SwingUtilities.invokeLater(() -> {
             Window window = new Window("Agent");
             // 尺寸/位置/分隔条由 Window 从 AppSettings 恢复（无记录回落居中），关闭行为 Window 自己接管
@@ -64,7 +63,7 @@ public class Main {
 
             // 回调触发时本轮用户消息已入库（Window.submitInput 先画卡再回调），
             // 历史快照直接取整个会话，无需单独传问题文本
-            window.onInputSubmitted((conversation, text) -> startAgentLoop(window, conversation, openAiProvider));
+            window.onInputSubmitted((conversation, text) -> startAgentLoop(window, conversation, ProviderFactory.createProvider()));
 
             // 重新生成：先抢会话锁再删旧回答，然后带全量历史重新请求
             window.onRegenerate(conversation -> {
@@ -73,7 +72,7 @@ public class Main {
                     return; // 该会话已在生成（理论上不可达：生成中按钮隐藏），不动仓库
                 }
                 window.getStore().removeLastMessage(conversation.getId());
-                streamReply(window, conversation, openAiProvider, token);
+                streamReply(window, conversation, ProviderFactory.createProvider(), token);
             });
 
             window.onStopRequested(() -> {

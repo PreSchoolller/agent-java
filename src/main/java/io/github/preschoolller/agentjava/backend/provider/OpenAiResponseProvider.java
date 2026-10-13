@@ -67,7 +67,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.stream.Collectors;
 
-public class OpenAiProvider implements Provider {
+public class OpenAiResponseProvider implements Provider {
     private volatile Headers headers;
     private volatile OkHttpClient httpClient;
     private volatile OpenAIClient openAIClient;
@@ -82,7 +82,7 @@ public class OpenAiProvider implements Provider {
             ReasoningEffortEnum.ON, ReasoningEffort.HIGH,
             ReasoningEffortEnum.OFF, ReasoningEffort.NONE);
 
-    OpenAiProvider() {
+    OpenAiResponseProvider() {
         httpClient = OkHttpClient.builder().build();
         headers = Headers
                 .builder()

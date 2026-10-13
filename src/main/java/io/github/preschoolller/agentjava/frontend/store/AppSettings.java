@@ -194,6 +194,10 @@ public final class AppSettings {
         return getActiveProfile().getSystemPrompt();
     }
 
+    public String getApiType() {
+        return getActiveProfile().getApiType();
+    }
+
     // —— 全局 UI 偏好 ——
 
     public int getContentFontSize() {
