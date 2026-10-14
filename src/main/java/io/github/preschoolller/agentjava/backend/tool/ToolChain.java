@@ -10,6 +10,9 @@ import java.util.Map;
 import static io.github.preschoolller.agentjava.backend.provider.common.Constants.MAPPER;
 import static io.github.preschoolller.agentjava.backend.tool.ToolManager.BAD_TOOL;
 
+/**
+ * 作为思考内容，未接线，未使用，跳过这个类的检查。
+ */
 public class ToolChain implements Tool {
 
     private static final String TOOL_CHAIN = "tool_chain";

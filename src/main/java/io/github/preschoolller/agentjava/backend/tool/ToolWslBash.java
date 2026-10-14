@@ -16,6 +16,7 @@ import static io.github.preschoolller.agentjava.backend.provider.common.Constant
 public class ToolWslBash implements Tool {
 
     private static final String COMMAND = "command";
+    private static final int TIMEOUT = 60; // seconds
 
     private static volatile ToolWslBash instance;
 
@@ -79,10 +80,18 @@ public class ToolWslBash implements Tool {
                             java.nio.charset.StandardCharsets.UTF_8))) {
                 out = reader.lines().collect(Collectors.joining("\n"));
             }
-            process.waitFor(60, TimeUnit.SECONDS);
+            boolean exited = process.waitFor(TIMEOUT, TimeUnit.SECONDS);
+            String timeOut = "";
+            if (!exited) {
+                process.destroyForcibly();
+                timeOut = "\nprocess terminated after " + TIMEOUT + " seconds";
+            }
             int exitCode = process.exitValue();
-            System.out.println("bash参数：" + command + " bash 执行结果：" + out + " 退出码：" + exitCode);
-            return out.isBlank() ? "tool use result is null, exit code is: " + exitCode : (out + "\nexit code: " + exitCode).strip();
+            out = out.isBlank() ? "tool use result is null" : out;
+            out += timeOut;
+            out += "\nexit code: " + exitCode;
+            System.out.println("bash参数：" + command + " bash 执行结果：" + out);
+            return out;
         } catch (JsonProcessingException e) {
             return "json parse error: " + e.getMessage();
         } catch (IOException e) {
