@@ -345,9 +345,9 @@ public class Main {
     }
 
     /**
-     * 会话消息 → 后端轮次列表：空文本跳过，assistant 轮剥掉思考块
+     * 会话消息 → 后端轮次列表：空文本跳过，assistant 轮只发正文。
+     * 思考内容存在 Message.thinking 独立字段，本来就不进 text，回传天然只带正文
      * （模型每轮重新思考，历史里的 CoT 是噪音，DeepSeek 等服务端甚至直接拒绝回传）。
-     * 思考块剥离本质是 API 编码决策，后端 buildParams 稳定后可挪到那边。
      */
     private static List<PromptParams.RoleMessage> buildRoleMessages(Conversation conversation) {
         List<PromptParams.RoleMessage> roleMessages = new ArrayList<>();
@@ -357,10 +357,6 @@ public class Main {
                 continue; // 停止后零增量的空占位卡等
             }
             if (Conversation.ROLE_AI.equals(message.role())) {
-                text = stripThink(text); // 旧记录思考内嵌在正文里的兼容清理；新记录思考走独立字段
-                if (text.isBlank()) {
-                    continue; // 整条都是思考内容被剥光
-                }
                 roleMessages.add(new PromptParams.RoleMessage(RoleEnum.ASSISTANT, text));
             } else if (Conversation.ROLE_USER.equals(message.role())) {
                 roleMessages.add(new PromptParams.RoleMessage(RoleEnum.USER, text));
@@ -370,16 +366,6 @@ public class Main {
             }
         }
         return roleMessages;
-    }
-
-    /** 剥掉 assistant 文本里的思考块：成对的整段删，流式停止导致的未闭合块剥到文本尾 */
-    private static String stripThink(String text) {
-        String stripped = text.replaceAll("(?s)<think>.*?</think>", "");
-        int open = stripped.indexOf("<think>");
-        if (open >= 0) {
-            stripped = stripped.substring(0, open);
-        }
-        return stripped.strip();
     }
 
     /** 用户停止后把剩余增量抽干丢弃，后端读流线程才能走到 finally 放毒丸正常退出，不残留阻塞线程 */

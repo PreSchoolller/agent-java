@@ -2102,9 +2102,9 @@ public class Window extends JFrame {
                 return;
             }
             finished = true;
+            closeThinking(); // 先兜底收尾思考区（此刻 flushTimer 还在跑，不靠它重新点火）
             flushTimer.stop();
             liveStreams.remove(this);
-            closeThinking(); // 思考未显式收尾的，到这里一并定格
             flush();
             System.out.println("渲染收尾：" + System.currentTimeMillis());
             String thinkingText = thinking.length() == 0 ? null : thinking.toString();

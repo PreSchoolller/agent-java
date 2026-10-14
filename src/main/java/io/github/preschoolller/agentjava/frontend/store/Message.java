@@ -5,8 +5,8 @@ package io.github.preschoolller.agentjava.frontend.store;
  * 工具调用消息（role=tool）的 text 存工具结果，toolName/toolArgs/toolStatus 才有值；
  * 聊天消息这三个字段为 null。toolStatus：running（运行中）/ok/error。
  * AI 的思考内容独立放 thinking：appendThinking 的增量只进这个字段，正文 text 里不再
- * 拼 <|im_start|> 标签（前后拼接、与正文混杂、思考正文乱序传递三个问题一起消掉）。
- * 旧历史 text 里仍带 <|im_start|> 标签的，Markdown 渲染器的 ThinkBlock 内联渲染照旧（兼容）。
+ * 拼标签（前后拼接、与正文混杂、思考正文乱序传递三个问题一起消掉）。
+ * 思考内容不由 Markdown 渲染器解析，渲染走独立组件 ThinkingPane。
  */
 public record Message(String role, String text, long time, String toolName, String toolArgs,
                       String toolStatus, String callId, String thinking) {

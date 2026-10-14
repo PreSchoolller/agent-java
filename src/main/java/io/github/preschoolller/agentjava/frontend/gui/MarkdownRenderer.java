@@ -43,8 +43,10 @@ import java.util.regex.Pattern;
  * 零依赖的轻量 Markdown 渲染器（组件计划 P0-1 选了"自写解析"路线：项目不引第三方包）。
  * 支持标题、段落、行内样式（加粗/斜体/行内代码/删除线/链接/裸 URL）、围栏代码块（带语言标注
  * 与复制按钮）、```diff 块（增/删行按行着色）、有序/无序列表（含嵌套与任务勾选）、引用块、
- * 思考块（&lt;think&gt;…&lt;/think&gt;，流式未闭合时吞到文本尾）、水平分隔线；表格暂不渲染（按普通
- * 段落原样显示），链接只做样式不做点击跳转，这两项留待后续按需补。
+ * 水平分隔线；表格暂不渲染（按普通段落原样显示），链接只做样式不做点击跳转，这两项留待后续按需补。
+ *
+ * 思考内容不经过本渲染器：它走独立字段（Message.thinking）与独立组件（ThinkingPane），
+ * 本类只提供两者共用的版式常量与增量写入助手（appendThinkText / thinkTextHeight）。
  *
  * 结构分三层：
  * parse()      —— 文本 → 块模型（Block），纯数据，可单测；
@@ -64,8 +66,7 @@ public final class MarkdownRenderer {
     public record Span(String text, boolean bold, boolean italic, boolean mono, boolean strike, String link) {
     }
 
-    public sealed interface Block permits Paragraph, Heading, ListItem, CodeBlock, Quote, Rule, ThinkBlock,
-            TableBlock {
+    public sealed interface Block permits Paragraph, Heading, ListItem, CodeBlock, Quote, Rule, TableBlock {
     }
 
     /** 段落：span 里的 "\n" 表示同段内的软换行 */
@@ -88,11 +89,6 @@ public final class MarkdownRenderer {
     }
 
     public record Rule() implements Block {
-    }
-
-    /** 思考块：<think>…</think> 包住的推理内容，每条是一行 span 列表；流式未闭合时吞到文本尾。
-     *  closed 区分闭合与流式中：折叠的默认态据此定——闭合收起、流式中展开（见 MarkdownPane） */
-    public record ThinkBlock(List<List<Span>> lines, boolean closed) implements Block {
     }
 
     /** 表格块（P1-5）：rows[0] 是表头；rows = 行 → 单元格 → 行内 span 列表。
@@ -492,105 +488,16 @@ public final class MarkdownRenderer {
         }
     }
 
-    // 常量包内可见：独立思考区（ThinkingPane）与内联思考块（ThinkRow，旧格式兼容）共用一套版式
-    static final int THINK_HEADER_HEIGHT = 24;    static final int THINK_PAD_TOP = 6;
+    // 常量包内可见：独立思考区（ThinkingPane）用；正文渲染不再涉及思考内容
+    static final int THINK_HEADER_HEIGHT = 24;
+    static final int THINK_PAD_TOP = 6;
     static final int THINK_PAD_LEFT = 12;
     static final int THINK_PAD_RIGHT = 12;
     static final int THINK_PAD_BOTTOM = 8;
     static final int THINK_TEXT_HEIGHT_CAP = 260;
-    /** 折叠态思考行的定值高度（与展开测量的收尾公式对齐）。
-     *  折叠不进 MeasureCache：缓存永远存展开高度，折叠差值由 MarkdownPane 按行修正——
-     *  键加折叠维度会让同一文本的两份状态互踢（P1-7 计划里预警的坑） */
+    /** 折叠态思考区的定值高度（与展开测量的收尾公式对齐） */
     static final int THINK_COLLAPSED_HEIGHT = THINK_HEADER_HEIGHT + 2;
 
-    /** 思考块行：淡紫圆角底 + "思考过程"标注 + 次要色斜体文字；超长内部滚动，卡片不至于无限高。
-     *  折叠态（P1-7）只留一行"▸ 已思考 N 秒"，点击头部切换；默认态由 MarkdownPane 按闭合/流式定 */
-    record ThinkRow(ThinkBlock think) implements Row {
-        @Override
-        public Component component(Font base) {
-            return component(base, false, null, null);
-        }
-
-        /** collapsed 折叠态；seconds 为流式计得的思考时长（null 显示"已思考"——整段落库的历史消息没有计时）；
-         *  onToggle 头部点击回调（null 不挂点击） */
-        public Component component(Font base, boolean collapsed, Double seconds, Runnable onToggle) {
-            JPanel panel = new Ui.RoundPanel(10, Ui.THINK_BG, Ui.THINK_BORDER);
-            panel.setLayout(new BorderLayout());
-
-            JPanel header = new JPanel(new BorderLayout(8, 0));
-            header.setOpaque(false);
-            header.setName("think-header"); // Shot 回归定位（点头部折叠/展开）
-            String title = collapsed
-                    ? "已思考" + (seconds == null ? "" : " " + formatThinkSeconds(seconds))
-                    : "思考过程";
-            JLabel label = new JLabel(title);
-            label.setFont(new Font("微软雅黑", Font.PLAIN, 11));
-            label.setForeground(Ui.TEXT_SECONDARY);
-            Ui.Chevron chevron = new Ui.Chevron(!collapsed); // 自绘三角：▸▶ 在微软雅黑里缺字形（踩坑 #5）
-            chevron.setForeground(Ui.TEXT_SECONDARY);
-            header.add(chevron, BorderLayout.WEST);
-            header.add(label, BorderLayout.CENTER);
-            if (collapsed) {
-                header.setBorder(BorderFactory.createEmptyBorder(3, 12, 3, 6));
-                panel.add(header, BorderLayout.CENTER);
-            } else {
-                header.setBorder(BorderFactory.createCompoundBorder(
-                        BorderFactory.createMatteBorder(0, 0, 1, 0, Ui.THINK_BORDER),
-                        BorderFactory.createEmptyBorder(3, 12, 3, 6)));
-                panel.add(header, BorderLayout.NORTH);
-
-                JTextPane pane = Ui.displayTextPane();
-                pane.setFont(base);
-                fillThink(pane.getStyledDocument(), think, base);
-                attachLinkHandler(pane); // 思考内容里的链接同样可点（P1-6）
-                JScrollPane scroll = new JScrollPane(pane,
-                        JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
-                        JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-                scroll.setBorder(BorderFactory.createEmptyBorder());
-                scroll.setOpaque(false); // 滚动容器背景两处一起设，深色下边框内衬不露白（踩坑 #19）
-                scroll.getViewport().setOpaque(false);
-                scroll.setViewportBorder(BorderFactory.createEmptyBorder());
-                scroll.getVerticalScrollBar().setUnitIncrement(16);
-                Ui.styleScrollPane(scroll);
-                panel.add(scroll, BorderLayout.CENTER);
-                if (!think.closed()) {
-                    // 流式中的思考段：每次 flush 都整行重建（新滚动容器视口恒在顶部，看到的是
-                    // 思考段开头而不是正在吐出的字），挂视口贴底跟随——组件每次重建都是新的，
-                    // 这个监听器只活到下次 flush，之后走折叠分支不再创建
-                    pane.addComponentListener(new ComponentAdapter() {
-                        @Override
-                        public void componentResized(ComponentEvent e) {
-                            JViewport viewport = scroll.getViewport();
-                            int bottom = Math.max(0, pane.getHeight() - viewport.getExtentSize().height);
-                            viewport.setViewPosition(new Point(0, bottom));
-                        }
-                    });
-                }
-            }
-            if (onToggle != null) {
-                header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-                header.addMouseListener(new MouseAdapter() {
-                    @Override
-                    public void mouseClicked(MouseEvent e) {
-                        onToggle.run();
-                    }
-                });
-            }
-            return panel;
-        }
-
-        @Override
-        public int measureAt(Font base, int width) {
-            JTextPane measurer = new JTextPane(); // 克隆测量（踩坑记录 #2）
-            measurer.setFont(base);
-            fillThink(measurer.getStyledDocument(), think, base);
-            View view = measurer.getUI().getRootView(measurer);
-            view.setSize(Math.max(40, width - THINK_PAD_LEFT - THINK_PAD_RIGHT), Integer.MAX_VALUE);
-            int textHeight = (int) Math.ceil(view.getPreferredSpan(View.VERTICAL))
-                    + THINK_PAD_TOP + THINK_PAD_BOTTOM;
-            return THINK_HEADER_HEIGHT + Math.min(textHeight, THINK_TEXT_HEIGHT_CAP) + 2;
-        }
-    }
 
     static String formatThinkSeconds(double seconds) {
         if (seconds >= 10) {
@@ -685,8 +592,6 @@ public final class MarkdownRenderer {
                 rows.add("diff".equals(code.language()) ? new DiffRow(code) : new CodeRow(code));
             } else if (block instanceof Quote quote) {
                 rows.add(new QuoteRow(quote));
-            } else if (block instanceof ThinkBlock think) {
-                rows.add(new ThinkRow(think));
             } else if (block instanceof TableBlock table) {
                 rows.add(new TableRow(table));
             } else if (block instanceof Rule) {
@@ -763,32 +668,6 @@ public final class MarkdownRenderer {
             int start = doc.getLength();
             try {
                 insertSpans(doc, quote.lines().get(i), base, Ui.QUOTE_TEXT, false, false);
-            } catch (BadLocationException e) {
-                throw new IllegalStateException(e);
-            }
-            SimpleAttributeSet para = new SimpleAttributeSet();
-            StyleConstants.setSpaceAbove(para, i == 0 ? 0 : 3);
-            doc.setParagraphAttributes(start, doc.getLength() - start, para, false);
-        }
-    }
-
-    /**
-     * 写入一行 span。字体族/字号必须显式写进属性：缺失时 StyledDocument 走默认值
-     * （Dialog 12）而不是组件字体，标题放大和行内等宽都会失效。
-     */
-    private static void fillThink(StyledDocument doc, ThinkBlock think, Font base) {
-        Font italic = base.deriveFont(Font.ITALIC);
-        for (int i = 0; i < think.lines().size(); i++) {
-            if (i > 0) {
-                try {
-                    doc.insertString(doc.getLength(), "\n", null);
-                } catch (BadLocationException e) {
-                    throw new IllegalStateException(e);
-                }
-            }
-            int start = doc.getLength();
-            try {
-                insertSpans(doc, think.lines().get(i), italic, Ui.TEXT_SECONDARY, false, true);
             } catch (BadLocationException e) {
                 throw new IllegalStateException(e);
             }
@@ -891,50 +770,16 @@ public final class MarkdownRenderer {
 
     private static final Pattern LIST_ITEM = Pattern.compile("^(\\s*)([-*+]|\\d{1,9}[.)])[ \\t]+(\\S.*)$");
 
-    /**
-     * 解析入口。先把 &lt;think&gt;…&lt;/think&gt; 思考段切出来（流式时闭标可能还没到，
-     * 吞到文本尾；游离的闭标剔除），两段之间的常规文本再走逐行解析。
-     */
+    /** 解析入口：逐行解析出块模型（思考内容不经此处，走 Message.thinking 独立通道） */
     public static List<Block> parse(String markdown) {
         List<Block> blocks = new ArrayList<>();
         if (markdown == null || markdown.isEmpty()) {
             return blocks;
         }
-        String text = markdown.replace("\r\n", "\n").replace('\r', '\n').replace("\t", "    ");
-        int idx = 0;
-        while (true) {
-            int open = text.indexOf("<think>", idx);
-            if (open < 0) {
-                blocks.addAll(parseBlocks(stripThinkClose(text.substring(idx))));
-                return blocks;
-            }
-            blocks.addAll(parseBlocks(stripThinkClose(text.substring(idx, open))));
-            int close = text.indexOf("</think>", open + 7);
-            if (close < 0) {
-                addThink(blocks, text.substring(open + 7), false);
-                return blocks;
-            }
-            addThink(blocks, text.substring(open + 7, close), true);
-            idx = close + 8;
-        }
+        blocks.addAll(parseBlocks(markdown));
+        return blocks;
     }
 
-    private static String stripThinkClose(String text) {
-        return text.replace("</think>", "");
-    }
-
-    /** 思考段内容按行拆成 span，空段不产出块 */
-    private static void addThink(List<Block> blocks, String content, boolean closed) {
-        String trimmed = content.strip();
-        if (trimmed.isEmpty()) {
-            return;
-        }
-        List<List<Span>> lines = new ArrayList<>();
-        for (String line : trimmed.split("\n", -1)) {
-            lines.add(inline(line.strip()));
-        }
-        blocks.add(new ThinkBlock(lines, closed));
-    }
 
     /** 常规文本的逐行解析：围栏代码 > 标题 > 分隔线 > 引用 > 列表 > 段落；
      * 段落后面紧跟的 ---/=== 按 setext 规则提升为标题。 */

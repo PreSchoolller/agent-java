@@ -60,10 +60,6 @@ public class Shot {
 
     /** Markdown 渲染样例：解析断言和 6 号截图共用，覆盖渲染器支持的全部块类型 */
     private static final String SAMPLE_MD = """
-            <think>
-            用户想看 Markdown 渲染效果，我准备一个覆盖全部块类型的样例，
-            从标题开始逐个展示。
-            </think>
             ## 回答要点
 
             这是 **加粗**贴字、*斜体*贴字、`行内代码`、[链接](https://example.com)、~~删除线~~ 的段落，
@@ -318,25 +314,6 @@ public class Shot {
                 && diffBlock.code().contains("+    private static final int SIZE = 20;"), "diff 增删行原样");
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Quote).count() == 1, "引用数");
         expect(md.stream().filter(b -> b instanceof MarkdownRenderer.Rule).count() == 1, "分隔线数");
-        expect(md.stream().filter(b -> b instanceof MarkdownRenderer.ThinkBlock).count() == 1, "思考块数");
-        MarkdownRenderer.Paragraph firstPara = (MarkdownRenderer.Paragraph) md.stream()
-                .filter(b -> b instanceof MarkdownRenderer.Paragraph).findFirst().orElseThrow();
-        expect(firstPara.spans().stream().anyMatch(s -> s.bold()), "加粗解析");
-        expect(firstPara.spans().stream().anyMatch(s -> s.mono()), "行内代码解析");
-        expect(firstPara.spans().stream().anyMatch(s -> s.link() != null), "链接解析");
-        expect(firstPara.spans().stream().anyMatch(s -> s.strike()), "删除线解析");
-        // 思考块的边界情况：闭合后正文照常解析；流式未闭合吞到尾；空思考段不产块；游离闭标剔除
-        List<MarkdownRenderer.Block> closed = MarkdownRenderer.parse("<think>推理一下</think>正文 **加粗**");
-        expect(closed.size() == 2
-                && closed.get(0) instanceof MarkdownRenderer.ThinkBlock
-                && closed.get(1) instanceof MarkdownRenderer.Paragraph, "闭合思考块+正文");
-        expect(MarkdownRenderer.parse("<think>还没想完").size() == 1
-                && MarkdownRenderer.parse("<think>还没想完").get(0) instanceof MarkdownRenderer.ThinkBlock,
-                "流式未闭合思考块");
-        expect(MarkdownRenderer.parse("<think></think>只有正文").size() == 1, "空思考段不产块");
-        MarkdownRenderer.Paragraph stray = (MarkdownRenderer.Paragraph) MarkdownRenderer
-                .parse("有 </think> 游离闭标的正文").get(0);
-        expect(stray.spans().stream().noneMatch(s -> s.text().contains("</think>")), "游离闭标剔除");
         // 表格（P1-5）：分隔行识别、单元格内容、转义竖线、表头夹在段落里也能接管
         List<MarkdownRenderer.Block> tableOnly = md.stream()
                 .filter(b -> b instanceof MarkdownRenderer.TableBlock).toList();
@@ -441,22 +418,13 @@ public class Shot {
             dialog.dispose();
         });
 
-        // —— 截图 6：Markdown 渲染（思考块/标题/行内样式/代码块/列表/引用/分隔线） ——
-        // 切会话会自动滚到底，先滚回顶部让卡片开头的思考块入镜
+        // —— 截图 6：Markdown 渲染（标题/行内样式/代码块/列表/引用/分隔线/表格） ——
+        // 切会话会自动滚到底，先滚回顶部让卡片开头的标题入镜
         edt(() -> WINDOW.getStore().switchTo(c3.getId()));
         Thread.sleep(1500);
         scrollWaterfallToTop();
         Thread.sleep(400);
         capture(args[0] + "-6-markdown.png");
-        // 思考块折叠（P1-7）：默认收成"已思考"一行，点头部展开/收回
-        expect(!uiHasTextPaneContaining("覆盖全部块类型"), "思考块默认折叠");
-        expect(uiHasLabelContaining("已思考"), "折叠思考块显示已思考标注");
-        edt(() -> uiClickNamed("think-header"));
-        Thread.sleep(400);
-        expect(uiHasTextPaneContaining("覆盖全部块类型"), "点标注展开思考内容");
-        edt(() -> uiClickNamed("think-header"));
-        Thread.sleep(400);
-        expect(!uiHasTextPaneContaining("覆盖全部块类型"), "再点标注收回思考内容");
         // 用户消息复制（用户卡尾部"复制"钮）：uiClick 按树序先碰用户卡，剪贴板应是用户原文
         edt(() -> uiClick("复制"));
         Thread.sleep(200);
@@ -520,6 +488,25 @@ public class Shot {
                         && reloadedStreamed.thinking().contains("先拆解")
                         && streamedBody.equals(reloadedStreamed.text()),
                 "正文与思考落盘往返");
+
+        // —— 异常收尾：只吐了思考就断流（后端报错 / 用户点停止），正文永远不到 ——
+        // 契约：finish() 必须兜底收尾思考区——收成"已思考 N 秒"一行，不能永远停在"思考中…"
+        Window.AiStream[] brokenHolder = new Window.AiStream[1];
+        edt(() -> brokenHolder[0] = WINDOW.addAiMessage(""));
+        Thread.sleep(300);
+        edt(() -> brokenHolder[0].appendThinking("只吐了思考，正文还没到就断流了。\n"));
+        Thread.sleep(300);
+        expect(uiHasLabelContaining("思考中"), "断流前思考区处于展开的思考中态");
+        edt(() -> brokenHolder[0].finish()); // 等价于 Main 的 finally 分支，正文为空
+        Thread.sleep(300);
+        expect(uiHasLabelContaining("已思考") && uiHasLabelContaining("秒"),
+                "断流后 finish() 兜底把思考区收成已思考一行（不会永停思考中）");
+        expect(!uiHasLabelContaining("思考中"), "收尾后不再显示思考中");
+        Message brokenMessage = store.getActive()
+                .getMessages().get(store.getActive().getMessages().size() - 1);
+        expect("".equals(brokenMessage.text()) && brokenMessage.thinking() != null
+                        && brokenMessage.thinking().contains("正文还没到就断流"),
+                "空正文 + 思考独立落库");
 
 
         System.out.println("STREAM_OK");
@@ -1047,7 +1034,7 @@ public class Shot {
         return found[0];
     }
 
-    /** 按组件名点击（工具卡头部 tool-header / 思考块头部 think-header 的折叠切换）：
+    /** 按组件名点击（工具卡头部 tool-header / 独立思考区头部 thinking-header 的折叠切换）：
      *  合成 mouseClicked 派发给第一个可见的同名组件，与真实点击同一事件入口 */
     private static void uiClickNamed(String name) {
         List<Component> all = new ArrayList<>();

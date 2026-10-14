@@ -21,12 +21,13 @@ import javax.swing.SwingUtilities;
  * （{@code AiStream.appendThinking}）。思考增量直接追加进本面板的文档，正文的 Markdown
  * 解析路径完全不感知思考——前后拼接 think 标签、与正文混杂、思考/正文乱序到达三个问题
  * 一起消掉（正文通道先到也不影响，各自攒各自的缓冲）。
- * 版式与内联思考块（MarkdownRenderer.ThinkRow，旧格式兼容路径）共用同一套常量：
+ * 版式常量与正文渲染器（MarkdownRenderer）共用，增量写入也复用它的 appendThinkText：
  * 淡紫圆角底 + 可点头部（自绘三角）+ 次要色斜体正文，超长封顶内部滚动。
- * 折叠语义与 P1-7 一致：未闭合展开（看着吐字）、闭合自动收起成"已思考 N 秒"一行，
- * 用户点过头就以用户为准不再随流式翻转。折叠态高度是定值常量，不进测量缓存键
- * （缓存只存展开高度，同 MarkdownPane 的处理）。
- * 与 MarkdownPane 同款窗口化契约：解析/测量数据常驻，滚动容器与文本组件只在物化时建。
+ * 折叠语义：未闭合展开（看着吐字）、闭合自动收起成"已思考 N 秒"一行，
+ * 用户点过头就以用户为准不再随流式翻转。折叠态高度是定值常量。
+ * 测高不进 MeasureCache：流式思考每帧文本都不同，缓存命中率恒为 0，写进去只会挤掉
+ * 正文/工具结果的有效条目（全局 LRU 4096 条）。
+ * 与 MarkdownPane 同款窗口化契约：文本常驻，滚动容器与文本组件只在物化时建。
  */
 final class ThinkingPane extends Ui.RoundPanel {
 
@@ -107,16 +108,10 @@ final class ThinkingPane extends Ui.RoundPanel {
         }
         int inner = MeasureCache.bucketWidth(Math.max(40, width)
                 - MarkdownRenderer.THINK_PAD_LEFT - MarkdownRenderer.THINK_PAD_RIGHT);
-        // 缓存永远存展开高度：字号取负当独立键位（与正文/工具结果测量互不驱逐）
-        int[] cached = MeasureCache.get(text, -base.getSize(), inner, false);
-        int textHeight;
-        if (cached != null) {
-            textHeight = cached[0];
-        } else {
-            textHeight = MarkdownRenderer.thinkTextHeight(text, base, inner)
-                    + MarkdownRenderer.THINK_PAD_TOP + MarkdownRenderer.THINK_PAD_BOTTOM;
-            MeasureCache.put(text, -base.getSize(), inner, false, new int[]{textHeight});
-        }
+        // 不进 MeasureCache：流式思考每帧文本都不同，键就是整段文本 → 命中率恒为 0，
+        // 写进去只会挤掉正文/工具结果的有效条目（全局 LRU 4096 条）。直接同步测量。
+        int textHeight = MarkdownRenderer.thinkTextHeight(text, base, inner)
+                + MarkdownRenderer.THINK_PAD_TOP + MarkdownRenderer.THINK_PAD_BOTTOM;
         return MarkdownRenderer.THINK_HEADER_HEIGHT + Math.min(textHeight, MarkdownRenderer.THINK_TEXT_HEIGHT_CAP) + 2;
     }
 
