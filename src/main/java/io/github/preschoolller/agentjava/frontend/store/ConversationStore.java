@@ -213,6 +213,20 @@ public class ConversationStore {
         return updated;
     }
 
+    /** 流式输出结束的落库：正文与独立思考一起写回（按消息对象同一性查找），返回替换后的新记录 */
+    public Message updateMessageContent(String id, Message target, String text, String thinking) {
+        Conversation conversation = findById(id);
+        if (conversation == null) {
+            return null;
+        }
+        Message updated = conversation.updateMessageContent(target, text, thinking);
+        if (updated != null) {
+            saveAndSyncSession(conversation);
+            fireChanged();
+        }
+        return updated;
+    }
+
     /** 追加一条工具调用消息（"运行中"占位，agent 循环每次调工具时先调这个），返回消息记录 */
     public Message appendToolCall(String id, String toolName, String argsSummary, String callId) {
         Conversation conversation = findById(id);
@@ -324,6 +338,8 @@ public class ConversationStore {
                 item.put("args", message.toolArgs());
                 item.put("status", message.toolStatus());
                 item.put("callId", message.callId());
+            } else if (message.hasThinking()) {
+                item.put("thinking", message.thinking()); // 独立思考独立键落盘，没有不写键（旧格式兼容）
             }
             messages.add(item);
         }
@@ -411,7 +427,9 @@ public class ConversationStore {
                                 num(messageMap.get("time")), str(messageMap.get("name")),
                                 str(messageMap.get("args")), status, str(messageMap.get("callId")))
                         : new Message(str(messageMap.get("role")), str(messageMap.get("text")),
-                                num(messageMap.get("time"))));
+                                num(messageMap.get("time")), null, null, null, null,
+                                // 缺键（旧文件）= null，有键才读
+                                messageMap.containsKey("thinking") ? str(messageMap.get("thinking")) : null));
             }
         } catch (IOException | RuntimeException exception) {
             System.err.println("读取单会话历史出错，该会话按无消息加载: " + id + " " + exception.getMessage());

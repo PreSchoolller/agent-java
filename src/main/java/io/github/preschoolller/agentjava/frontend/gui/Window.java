@@ -112,6 +112,8 @@ public class Window extends JFrame {
     /** 卡片内角色行、时间行、间距和内边距合计占掉的高度，用于由文本高度推算卡片高度 */
     private static final int CARD_FRAME_HEIGHT_AI = 72;
     private static final int CARD_FRAME_HEIGHT_USER = 52;
+    /** 独立思考区与正文的间距（fillCard 的 aiBody 包装层同款，卡片高度计算要一致） */
+    private static final int THINK_GAP = 6;
     /** 用户气泡宽度范围：在面板宽度的 2/3 以内，最窄 320、最宽 560 */
     private static final int USER_CARD_MIN_WIDTH = 320;
     private static final int USER_CARD_MAX_WIDTH = 560;
@@ -212,10 +214,17 @@ public class Window extends JFrame {
         /** 追加一段增量文本；内部按 ~120ms 节流重渲染，无需自己攒批 */
         void appendChunk(String delta);
 
+        /** 追加一段思考增量：进卡片上与正文独立的思考区（同一张卡片，独立组件独立字段），
+         *  有增量直接追加即可；与正文各攒各的缓冲，先后到达互不干扰，正文里不用再拼思考标签 */
+        void appendThinking(String delta);
+
+        /** 显式宣告思考结束：思考区收起成"已思考 N 秒"。不调也行——第一段正文增量到达时自动收起 */
+        void finishThinking();
+
         /** 整体替换当前内容并立即渲染（流式中途修正用；一次性后端直接 addAiMessage(全文) 即可） */
         void setText(String value);
 
-        /** 结束流式：渲染剩余内容并把最终文本写回会话仓库 */
+        /** 结束流式：渲染剩余内容，最终正文与独立思考分别写回会话仓库 */
         void finish();
     }
 
@@ -243,6 +252,8 @@ public class Window extends JFrame {
         final boolean user;
         final boolean tool;
         final MarkdownPane markdown;
+        /** AI 卡的独立思考区（正文上方独立组件，解析测量数据常驻）；用户/工具卡为 null */
+        ThinkingPane thinking;
         Message message;
         /** 物化后才存在的组件；drainCard 时置 null */
         JComponent content;
@@ -987,7 +998,7 @@ public class Window extends JFrame {
             // 同步卡面消息：卡片此刻没物化也没关系，fillCard 重建头部时读的就是这份
             Message m = card.message;
             card.message = new Message(m.role(), m.text(), m.time(), m.toolName(),
-                    args.toString(), m.toolStatus(), m.callId());
+                    args.toString(), m.toolStatus(), m.callId(), m.thinking());
             if (!conversationId.equals(displayedConvId) || !card.materialized || card.toolArgsLabel == null) {
                 return;
             }
@@ -1185,9 +1196,12 @@ public class Window extends JFrame {
         boolean user = Conversation.ROLE_USER.equals(message.role());
         boolean tool = message.isToolCall();
         MarkdownPane markdown = null;
+        ThinkingPane thinking = null;
         if (!user && !tool) {
             markdown = new MarkdownPane(AppSettings.get().getContentFontSize());
             markdown.setContent(message.text()); // 只解析+测量，行组件等物化时才建
+            thinking = new ThinkingPane(AppSettings.get().getContentFontSize());
+            thinking.setContent(message.thinking()); // 独立思考独立字段；旧格式思考还嵌在正文里，这里为空
         }
 
         Ui.RoundPanel card = Ui.card(user ? Ui.USER_CARD_BG : Ui.CARD_BG);
@@ -1199,14 +1213,17 @@ public class Window extends JFrame {
         waterfallPanel.add(card, rowConstraints(user));
         waterfallRowCount++;
         MessageCard messageCard = new MessageCard(card, user, tool, message, markdown);
+        messageCard.thinking = thinking;
         if (markdown != null) {
-            // 思考块折叠切换（P1-7）后高度变了：重测所在卡片
-            markdown.setOnHeightChange(() -> {
+            // 思考块折叠切换（P1-7）后高度变了：重测所在卡片；独立思考区增量/开合同样走这条
+            Runnable refit = () -> {
                 int index = messageCards.indexOf(messageCard);
                 if (index >= 0) {
                     fitCardHeight(index);
                 }
-            });
+            };
+            markdown.setOnHeightChange(refit);
+            thinking.setOnHeightChange(refit);
         }
         attachHoverMenu(messageCard);
         messageCards.add(messageCard);
@@ -1240,7 +1257,13 @@ public class Window extends JFrame {
             content = textPane;
         } else {
             messageCard.markdown.materialize();
-            content = messageCard.markdown;
+            messageCard.thinking.materialize();
+            // 正文上方挂独立思考区：同一张卡片、独立组件；没思考内容时它自己不显示也不占高
+            JPanel aiBody = new JPanel(new BorderLayout(0, THINK_GAP));
+            aiBody.setOpaque(false);
+            aiBody.add(messageCard.thinking, BorderLayout.NORTH);
+            aiBody.add(messageCard.markdown, BorderLayout.CENTER);
+            content = aiBody;
         }
         messageCard.content = content;
 
@@ -1399,6 +1422,7 @@ public class Window extends JFrame {
         messageCard.card.removeAll();
         if (messageCard.markdown != null) {
             messageCard.markdown.dematerialize();
+            messageCard.thinking.dematerialize(); // 数据留在面板里，滚动容器随组件丢弃
         }
         messageCard.content = null;
         messageCard.toolArgsLabel = null;
@@ -1871,7 +1895,8 @@ public class Window extends JFrame {
         } else {
             int textHeight = messageCard.user
                     ? measureTextHeight(messageCard.message.text(), AppSettings.get().getContentFontSize(), textWidth)
-                    : messageCard.markdown.preferredHeightAt(textWidth);
+                    : messageCard.markdown.preferredHeightAt(textWidth)
+                            + thinkingHeight(messageCard, textWidth);
             int minHeight = messageCard.user ? CARD_MIN_HEIGHT_USER : CARD_MIN_HEIGHT_AI;
             int frameHeight = messageCard.user ? CARD_FRAME_HEIGHT_USER : CARD_FRAME_HEIGHT_AI;
             height = Math.max(minHeight, textHeight + frameHeight);
@@ -1885,6 +1910,15 @@ public class Window extends JFrame {
         }
         messageCard.card.setMaximumSize(null);
         waterfallPanel.revalidate();
+    }
+
+    /** 独立思考区给卡片贡献的高度：区块本体 + 与正文的间距；无思考内容 = 0（与显示同一套测量） */
+    private static int thinkingHeight(MessageCard card, int textWidth) {
+        if (card.thinking == null) {
+            return 0;
+        }
+        int block = card.thinking.blockHeightAt(textWidth);
+        return block > 0 ? block + THINK_GAP : 0;
     }
 
     private void fitAllCardHeights() {
@@ -1964,10 +1998,14 @@ public class Window extends JFrame {
         private final StringBuilder pending = new StringBuilder();
         private final Timer flushTimer = new Timer(120, e -> flush());
         private boolean finished;
-        /** 思考阶段计时（P1-7"已思考 N 秒"）：当前第几个思考块 / 本块开始时间 / 各块时长（秒） */
-        private int thinkBlockIndex = -1;
-        private long thinkStartedNanos = -1;
-        private final Map<Integer, Double> thinkDurations = new HashMap<>();
+        /** 独立思考缓冲：全文 + 脏标记 + 闭合状态。计时不再扫描正文里的思考标记——
+         *  两个事件点就够：第一段思考增量到达（起点）、思考闭合（终点） */
+        private final StringBuilder thinking = new StringBuilder();
+        private boolean thinkingDirty;
+        /** 没开始思考前视为已结束：空思考区整块隐藏，隐式收尾也不误触发 */
+        private boolean thinkingClosed = true;
+        private long thinkingStartNanos = -1;
+        private Double thinkingSeconds;
 
         private AiStreamImpl(String conversationId, Message message, MessageCard card) {
             this.conversationId = conversationId;
@@ -1990,8 +2028,7 @@ public class Window extends JFrame {
         @Override
         public void rebind(MessageCard newCard) {
             this.card = newCard;
-            pushThinkDurations(); // 后台期间攒下的时长补到新卡片
-            flush(); // 把切走期间攒的增量一次性画上
+            flush(); // 把切走期间攒的正文/思考增量一次性画上（思考整段重灌进新卡片的思考区）
         }
 
         @Override
@@ -1999,7 +2036,7 @@ public class Window extends JFrame {
             if (finished || delta == null || delta.isEmpty()) {
                 return;
             }
-            trackThinkMarkers(delta);
+            closeThinking(); // 正文开始到达 = 思考结束的隐式信号（后端没调 finishThinking 也能收起）
             full.append(delta);
             pending.append(delta);
             if (!flushTimer.isRunning()) {
@@ -2007,29 +2044,42 @@ public class Window extends JFrame {
             }
         }
 
-        /** 思考阶段计时：<think>/</think> 标记可能独立成块（Main 逐段发）也可能嵌在文本里
-         *  （Shot 样例），逐字符扫增量；多个思考块按序号各记各的 */
-        private void trackThinkMarkers(String delta) {
-            for (int i = 0; i < delta.length(); i++) {
-                if (delta.startsWith("<think>", i)) {
-                    thinkBlockIndex++;
-                    thinkStartedNanos = System.nanoTime();
-                    i += 6;
-                } else if (delta.startsWith("</think>", i)) {
-                    if (thinkStartedNanos > 0) {
-                        thinkDurations.merge(thinkBlockIndex,
-                                (System.nanoTime() - thinkStartedNanos) / 1_000_000_000.0, Double::sum);
-                        thinkStartedNanos = -1;
-                    }
-                    i += 7;
-                }
+        @Override
+        public void appendThinking(String delta) {
+            if (finished || delta == null || delta.isEmpty()) {
+                return;
+            }
+            if (thinkingStartNanos < 0) {
+                thinkingStartNanos = System.nanoTime(); // 第一段思考增量 = 计时起点，同时展开思考区
+                thinkingClosed = false;
+            }
+            thinking.append(delta);
+            thinkingDirty = true;
+            if (!flushTimer.isRunning()) {
+                flushTimer.start();
             }
         }
 
-        /** 已计得的思考时长推给卡片（pane 存下后重解析的行组件才带得上） */
-        private void pushThinkDurations() {
-            if (card != null && card.markdown != null && !thinkDurations.isEmpty()) {
-                card.markdown.setThinkDurations(thinkDurations);
+        @Override
+        public void finishThinking() {
+            if (finished) {
+                return;
+            }
+            closeThinking();
+        }
+
+        /** 收起思考区并定格时长（折叠头部变"已思考 N 秒"）；有改动就排一次节流渲染 */
+        private void closeThinking() {
+            if (thinkingClosed) {
+                return;
+            }
+            thinkingClosed = true;
+            if (thinkingStartNanos > 0) {
+                thinkingSeconds = (System.nanoTime() - thinkingStartNanos) / 1_000_000_000.0;
+            }
+            thinkingDirty = true;
+            if (!flushTimer.isRunning()) {
+                flushTimer.start();
             }
         }
 
@@ -2054,9 +2104,12 @@ public class Window extends JFrame {
             finished = true;
             flushTimer.stop();
             liveStreams.remove(this);
+            closeThinking(); // 思考未显式收尾的，到这里一并定格
             flush();
             System.out.println("渲染收尾：" + System.currentTimeMillis());
-            Message updated = store.updateMessageText(conversationId, message, full.toString());
+            String thinkingText = thinking.length() == 0 ? null : thinking.toString();
+            Message updated = store.updateMessageContent(conversationId, message,
+                    full.toString(), thinkingText); // 正文与独立思考分别落库
             System.out.println("入库收尾：" + System.currentTimeMillis());
             if (updated != null && card != null) {
                 card.message = updated; // 仓库记录已换成新对象，卡片同步持有（分叉按同一性定位）
@@ -2065,17 +2118,22 @@ public class Window extends JFrame {
 
         /** 把缓冲内容渲染到卡片并按新高度重排；会话已切走、卡片不在显示中或还没挂上时静默丢弃 */
         private void flush() {
-            if (pending.length() == 0 || card == null) {
+            if (card == null || (!thinkingDirty && pending.length() == 0)) {
                 return;
             }
+            boolean bodyDirty = pending.length() > 0;
+            thinkingDirty = false;
             pending.setLength(0);
             int index = messageCards.indexOf(card);
             if (!conversationId.equals(displayedConvId) || index < 0) {
                 return;
             }
             boolean follow = isNearBottom(); // 高度马上要变，先记录用户是否本来就在底部
-            pushThinkDurations();
-            card.markdown.setContent(full.toString());
+            // 思考增量直接进独立思考区（内部走追加快路径，不打断阅读）；正文脏了才重排 Markdown
+            card.thinking.apply(thinking.toString(), thinkingClosed, thinkingSeconds);
+            if (bodyDirty) {
+                card.markdown.setContent(full.toString());
+            }
             fitCardHeight(index);
             if (follow) {
                 scrollToBottom();

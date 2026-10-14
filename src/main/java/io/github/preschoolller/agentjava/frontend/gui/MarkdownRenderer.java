@@ -492,11 +492,12 @@ public final class MarkdownRenderer {
         }
     }
 
-    private static final int THINK_HEADER_HEIGHT = 24;    private static final int THINK_PAD_TOP = 6;
-    private static final int THINK_PAD_LEFT = 12;
-    private static final int THINK_PAD_RIGHT = 12;
-    private static final int THINK_PAD_BOTTOM = 8;
-    private static final int THINK_TEXT_HEIGHT_CAP = 260;
+    // 常量包内可见：独立思考区（ThinkingPane）与内联思考块（ThinkRow，旧格式兼容）共用一套版式
+    static final int THINK_HEADER_HEIGHT = 24;    static final int THINK_PAD_TOP = 6;
+    static final int THINK_PAD_LEFT = 12;
+    static final int THINK_PAD_RIGHT = 12;
+    static final int THINK_PAD_BOTTOM = 8;
+    static final int THINK_TEXT_HEIGHT_CAP = 260;
     /** 折叠态思考行的定值高度（与展开测量的收尾公式对齐）。
      *  折叠不进 MeasureCache：缓存永远存展开高度，折叠差值由 MarkdownPane 按行修正——
      *  键加折叠维度会让同一文本的两份状态互踢（P1-7 计划里预警的坑） */
@@ -591,11 +592,57 @@ public final class MarkdownRenderer {
         }
     }
 
-    private static String formatThinkSeconds(double seconds) {
+    static String formatThinkSeconds(double seconds) {
         if (seconds >= 10) {
             return Math.round(seconds) + " 秒";
         }
         return String.format(Locale.ROOT, "%.1f 秒", seconds);
+    }
+
+    /**
+     * 独立思考区（ThinkingPane）的追加写入：整段次要色斜体。增量安全——分段符就是文本里的 \n，
+     * 本方法不额外插分隔；段落属性只给"本次真正新起的段"设（range 起点是文首或紧跟 \n），
+     * 跨次追加的续段不重设——同一个文本无论一次写入还是拆多次追加，文档状态完全一致，
+     * 显示与测量才不会打架。字体族/字号显式写进字符属性（踩坑 #12：缺失时回退默认而不是组件字体）。
+     */
+    static void appendThinkText(javax.swing.text.StyledDocument doc, String text, Font base) {
+        Font italic = base.deriveFont(Font.ITALIC);
+        SimpleAttributeSet attrs = new SimpleAttributeSet();
+        StyleConstants.setFontFamily(attrs, italic.getFamily());
+        StyleConstants.setFontSize(attrs, italic.getSize());
+        StyleConstants.setItalic(attrs, true);
+        StyleConstants.setForeground(attrs, Ui.TEXT_SECONDARY);
+        String[] paragraphs = text.split("\n", -1);
+        try {
+            for (int i = 0; i < paragraphs.length; i++) {
+                if (i > 0) {
+                    doc.insertString(doc.getLength(), "\n", null);
+                }
+                boolean newParagraph = doc.getLength() == 0
+                        || doc.getText(doc.getLength() - 1, 1).equals("\n");
+                int start = doc.getLength();
+                if (!paragraphs[i].isEmpty()) {
+                    doc.insertString(doc.getLength(), paragraphs[i], attrs);
+                }
+                if (newParagraph) {
+                    SimpleAttributeSet para = new SimpleAttributeSet();
+                    StyleConstants.setSpaceAbove(para, start == 0 ? 0 : 3);
+                    doc.setParagraphAttributes(start, doc.getLength() - start, para, false);
+                }
+            }
+        } catch (javax.swing.text.BadLocationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 独立思考区的文本高度测量：克隆 JTextPane（踩坑 #2），与 appendThinkText 同一份写入路径 */
+    static int thinkTextHeight(String text, Font base, int innerWidth) {
+        JTextPane measurer = new JTextPane();
+        measurer.setFont(base);
+        appendThinkText(measurer.getStyledDocument(), text, base);
+        View view = measurer.getUI().getRootView(measurer);
+        view.setSize(Math.max(40, innerWidth), Integer.MAX_VALUE);
+        return (int) Math.ceil(view.getPreferredSpan(View.VERTICAL));
     }
 
     private static final int RULE_HEIGHT = 13;

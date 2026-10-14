@@ -479,24 +479,49 @@ public class Shot {
         Thread.sleep(300);
         expect(!uiHasShowingText("收起"), "搜索条收起");
 
-        // —— 截图 7：流式输出（appendChunk 节流渲染 + 高度自适应 + 自动滚底） ——
-        // 开头带思考段：流式中展开看得到增长，闭合后自动收起并显示计得时长（P1-7）
-        String streamed = "<think>\n先拆解一下问题再作答。\n</think>\n\n### 流式输出\n\n这是**逐段**追加的回复，"
+        // —— 截图 7：流式输出（appendChunk/appendThinking 双通道节流渲染 + 独立思考区 + 自动滚底） ——
+        // 思考走独立通道：流式中独立思考区展开增长，收尾后收起显示时长；正文全程无思考标记拼接
+        String streamedBody = "### 流式输出\n\n这是**逐段**追加的回复，"
                 + "每 120ms 渲染一次，`高度`自适应。\n\n```java\nint x = 42;\n```\n";
         Window.AiStream[] streamHolder = new Window.AiStream[1];
         edt(() -> streamHolder[0] = WINDOW.addAiMessage(""));
         Thread.sleep(500);
-        edt(() -> streamHolder[0].appendChunk("<think>\n先拆解一下问题再作答。\n"));
+        edt(() -> streamHolder[0].appendThinking("先拆解一下问题再作答。\n思考区与正文各走各的缓冲。\n"));
         Thread.sleep(300);
-        edt(() -> streamHolder[0].appendChunk("</think>\n\n### 流式输出\n\n这是**逐段**追加的回复，"));
+        expect(uiHasTextPaneContaining("先拆解一下问题再作答"), "思考增量直接进独立思考区，思考中展开可见");
+        // 乱序容忍：思考没收尾正文先到，思考还能继续追加，两边互不干扰
+        edt(() -> streamHolder[0].appendChunk("### 流式输出\n\n这是**逐段**追加的回复，"));
+        edt(() -> streamHolder[0].appendThinking("正文先到，思考继续追加。\n"));
         Thread.sleep(300);
+        edt(() -> streamHolder[0].finishThinking());
+        Thread.sleep(300);
+        expect(uiHasLabelContaining("已思考") && uiHasLabelContaining("秒"), "思考收尾收起为一行并显示时长");
+        edt(() -> uiClickNamed("thinking-header"));
+        Thread.sleep(300);
+        expect(uiHasTextPaneContaining("先拆解一下问题再作答"), "点头部展开已收起的思考独立区");
+        edt(() -> uiClickNamed("thinking-header"));
+        Thread.sleep(300);
+        expect(!uiHasTextPaneContaining("先拆解一下问题再作答"), "再点收回");
         edt(() -> streamHolder[0].appendChunk("每 120ms 渲染一次，`高度`自适应。\n\n```java\nint x = 42;\n```\n"));
         Thread.sleep(600);
         capture(args[0] + "-7-streaming.png");
-        expect(uiHasLabelContaining("已思考") && uiHasLabelContaining("秒"), "思考块闭合后收起并显示时长");
         edt(() -> streamHolder[0].finish());
-        expect(streamed.equals(store.getActive()
-                .getMessages().get(store.getActive().getMessages().size() - 1).text()), "流式落库");
+        Message streamedMessage = store.getActive()
+                .getMessages().get(store.getActive().getMessages().size() - 1);
+        expect(streamedBody.equals(streamedMessage.text()), "正文落库干净（无思考标记拼接）");
+        expect(streamedMessage.thinking() != null
+                        && streamedMessage.thinking().contains("先拆解一下问题再作答")
+                        && streamedMessage.thinking().contains("正文先到，思考继续追加"),
+                "思考独立落库（含乱序后到的那一段）");
+        expect(!streamedMessage.text().contains("拆解"), "正文字段不含思考文本（混杂问题消除）");
+        Message reloadedStreamed = new ConversationStore(dir.resolve("shot.json"))
+                .getActive().getMessages().get(store.getActive().getMessages().size() - 1);
+        expect(reloadedStreamed.thinking() != null
+                        && reloadedStreamed.thinking().contains("先拆解")
+                        && streamedBody.equals(reloadedStreamed.text()),
+                "正文与思考落盘往返");
+
+
         System.out.println("STREAM_OK");
 
         // —— agent 工具调用卡（契约：addToolCall(名, 参数摘要) → appendArgs(增量) 流式显示 → finish(结果, 是否成功, 完整参数)） ——

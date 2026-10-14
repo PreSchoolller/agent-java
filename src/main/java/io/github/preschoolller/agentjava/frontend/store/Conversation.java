@@ -181,7 +181,21 @@ public class Conversation {
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) == target) {
                 Message updated = new Message(target.role(), result, target.time(),
-                        target.toolName(), arguments, success ? "ok" : "error", target.callId());
+                        target.toolName(), arguments, success ? "ok" : "error", target.callId(),
+                        target.thinking());
+                messages.set(i, updated);
+                touch();
+                return updated;
+            }
+        }
+        return null;
+    }
+
+    /** 流式结束：正文与独立思考一起替换（按消息对象同一性查找），返回替换后的新记录；没找到返回 null */
+    public Message updateMessageContent(Message target, String text, String thinking) {
+        for (int i = 0; i < messages.size(); i++) {
+            if (messages.get(i) == target) {
+                Message updated = target.withContent(text, thinking);
                 messages.set(i, updated);
                 touch();
                 return updated;

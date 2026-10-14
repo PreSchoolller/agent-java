@@ -140,11 +140,11 @@ public class Main {
                 BaseEvent event;
                 while (!cancelled.get() && !((event = events.take()) instanceof PoisonEvent)) {
                     if (event instanceof ReasoningDeltaStartEvent) {
-                        appendAiMessage("<think>", stream, cancelled);
+                        // 思考走前端卡片上的独立思考区，开始信号不必再拼进正文
                     } else if (event instanceof ReasoningDeltaEvent deltaEvent) {
-                        appendAiMessage(deltaEvent.delta(), stream, cancelled);
+                        appendThinkingChunk(deltaEvent.delta(), stream, cancelled);
                     } else if (event instanceof ReasoningDeltaDoneEvent) {
-                        appendAiMessage("</think>", stream, cancelled);
+                        finishThinkingQuietly(stream, cancelled);
                     } else if (event instanceof ResponseDeltaStartEvent) {
                         appendAiMessage("", stream, cancelled);
                     } else if (event instanceof ResponseDeltaEvent deltaEvent) {
@@ -275,6 +275,22 @@ public class Main {
         SwingUtilities.invokeLater(() -> stream.appendChunk(chunk));
     }
 
+    /** 思考增量进前端独立思考区：EDT 投递 + 停止截流，与 appendAiMessage 同款模板 */
+    private static void appendThinkingChunk(String delta, Window.AiStream stream, AtomicBoolean cancelled) {
+        if (cancelled.get()) {
+            return;
+        }
+        SwingUtilities.invokeLater(() -> stream.appendThinking(delta));
+    }
+
+    /** ReasoningDeltaDone 通知前端收尾：思考区收起为"已思考 N 秒"（不调也行，正文增量会隐式收尾） */
+    private static void finishThinkingQuietly(Window.AiStream stream, AtomicBoolean cancelled) {
+        if (cancelled.get()) {
+            return;
+        }
+        SwingUtilities.invokeLater(stream::finishThinking);
+    }
+
     private static void addToolCall(Window window, String conversationId, String name, String callId, Map<String, Window.ToolCallHandle> callIdHandleMap) {
         try {
             SwingUtilities.invokeAndWait(() -> {
@@ -341,7 +357,7 @@ public class Main {
                 continue; // 停止后零增量的空占位卡等
             }
             if (Conversation.ROLE_AI.equals(message.role())) {
-                text = stripThink(text);
+                text = stripThink(text); // 旧记录思考内嵌在正文里的兼容清理；新记录思考走独立字段
                 if (text.isBlank()) {
                     continue; // 整条都是思考内容被剥光
                 }
