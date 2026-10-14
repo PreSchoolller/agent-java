@@ -7,11 +7,11 @@ import io.github.preschoolller.agentjava.frontend.store.Profile;
 public class ProviderFactory {
 
     public static Provider createResponseProvider() {
-        return new OpenAiResponseProvider();
+        return OpenAiResponseProvider.getInstance();
     }
 
     public static Provider createChatCompletionProvider() {
-        return new OpenAiChatCompletionProvider();
+        return OpenAiChatCompletionProvider.getInstance();
     }
 
     public static Provider createProvider() {

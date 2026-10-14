@@ -18,7 +18,7 @@ public class ThreadPoolFactory {
         @Override
         public Thread newThread(@NotNull Runnable r) {
             Thread thread = new Thread(r);
-            thread.setDaemon(false);
+            thread.setDaemon(true);
             thread.setName("toolcall-pool-1-thread-" + count.incrementAndGet());
             return thread;
         }

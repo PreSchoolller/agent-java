@@ -70,7 +70,15 @@ public class OpenAiChatCompletionProvider implements Provider {
             ReasoningEffortEnum.ON, ReasoningEffort.HIGH,
             ReasoningEffortEnum.OFF, ReasoningEffort.NONE);
 
-    OpenAiChatCompletionProvider() {
+    private static final class InstanceHolder {
+        private static final OpenAiChatCompletionProvider instance = new OpenAiChatCompletionProvider();
+    }
+
+    public static OpenAiChatCompletionProvider getInstance() {
+        return InstanceHolder.instance;
+    }
+
+    private OpenAiChatCompletionProvider() {
         httpClient = OkHttpClient.builder().build();
         headers = Headers
                 .builder()
@@ -156,7 +164,6 @@ public class OpenAiChatCompletionProvider implements Provider {
         ChatCompletionCreateParams.Builder builder = ChatCompletionCreateParams.builder();
         builder.model(promptParams.getModel())
                 .reasoningEffort(RE_MAP.get(promptParams.getRe()))
-                .model(promptParams.getModel())
                 .streamOptions(ChatCompletionStreamOptions.builder()
                         .includeUsage(true)
                         .build())
@@ -212,6 +219,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                 exception.printStackTrace();
                 errors.add(new ErrorMessageEvent("Unexpected stream error: " + exception.getMessage()));
             } finally {
+                putIntoBQ(new ReasoningDeltaDoneEvent("", sb.toString().trim().strip()), blockingQueue);
                 try {
                     for (ErrorMessageEvent error : errors) {
                         blockingQueue.put(error);
@@ -242,24 +250,22 @@ public class OpenAiChatCompletionProvider implements Provider {
                               ChatCompletionChunk chatCompletionChunk, Map<Integer, ToolCall> indexToolCall, StringBuilder sb) {
         Stream<ChatCompletionChunk.Choice.Delta> deltaStream = chatCompletionChunk.choices().stream()
                 .map(ChatCompletionChunk.Choice::delta);
-        System.out.println(chatCompletionChunk);
         deltaStream.forEach(delta -> {
-            if (delta.content().isPresent()) {
-                putIntoBQ(new ReasoningDeltaDoneEvent("", sb.toString().trim().strip()), blockingQueue);
+            if (delta.content().isPresent() && !delta.content().get().isEmpty()) {
                 putIntoBQ(new ResponseDeltaEvent(chatCompletionChunk.id(), delta.content().get()), blockingQueue);
             }
             JsonValue reasoningContent = delta._additionalProperties().get("reasoning_content");
             JsonValue reasoning = delta._additionalProperties().get("reasoning");
             if (reasoningContent != null || reasoning != null) {
-                if (sb.isEmpty()) {
-                    putIntoBQ(new ReasoningDeltaStartEvent(""), blockingQueue);
-                }
                 String reasoningDelta = "";
                 if (reasoningContent != null) {
                     reasoningDelta += (String) reasoningContent.asString().orElse("");
                 }
                 if (reasoning != null) {
                     reasoningDelta += (String) reasoning.asString().orElse("");
+                }
+                if (sb.isEmpty() && !reasoningDelta.isEmpty()) {
+                    putIntoBQ(new ReasoningDeltaStartEvent(""), blockingQueue);
                 }
                 sb.append(reasoningDelta);
                 putIntoBQ(new ReasoningDeltaEvent(chatCompletionChunk.id(), reasoningDelta), blockingQueue);

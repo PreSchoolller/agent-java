@@ -2,7 +2,6 @@ package io.github.preschoolller.agentjava.backend.tool;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 
 import java.io.IOException;
@@ -11,7 +10,11 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
+import static io.github.preschoolller.agentjava.backend.provider.common.Constants.MAPPER;
+
 public class ToolRead implements Tool {
+
+    private static final String PATH = "path";
 
     private static volatile ToolRead instance;
 
@@ -48,20 +51,20 @@ public class ToolRead implements Tool {
     public Map<String, Object> schema() {
         return Map.of(
                 "type", "object",
-                "properties", Map.of("path", Map.of("type", "string", "description",
+                "properties", Map.of(PATH, Map.of("type", "string", "description",
                         "文件路径，相对路径以当前工作区为基准")),
-                "required", List.of("path")
+                "required", List.of(PATH)
         );
     }
 
     @Override
     public String execute(String arguments, String workspace) {
         try {
-            JsonNode jsonNode = new ObjectMapper().readTree(arguments);
+            JsonNode jsonNode = MAPPER.readTree(arguments);
             if (jsonNode == null) {
                 return "json parse error: wrong schema";
             }
-            String path = jsonNode.path("path").asText();
+            String path = jsonNode.path(PATH).asText();
             if (path == null || path.isBlank()) {
                 return "json parse error: wrong path";
             }

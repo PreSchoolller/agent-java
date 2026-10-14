@@ -1,5 +1,7 @@
 package io.github.preschoolller.agentjava.backend.provider.common;
 
-public class Constants {
+import com.fasterxml.jackson.databind.ObjectMapper;
 
+public class Constants {
+    public static final ObjectMapper MAPPER = new ObjectMapper();
 }

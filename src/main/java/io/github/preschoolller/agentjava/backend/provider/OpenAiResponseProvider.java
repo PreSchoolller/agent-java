@@ -82,7 +82,15 @@ public class OpenAiResponseProvider implements Provider {
             ReasoningEffortEnum.ON, ReasoningEffort.HIGH,
             ReasoningEffortEnum.OFF, ReasoningEffort.NONE);
 
-    OpenAiResponseProvider() {
+    private static final class InstanceHolder {
+        private static final OpenAiResponseProvider instance = new OpenAiResponseProvider();
+    }
+
+    public static OpenAiResponseProvider getInstance() {
+        return InstanceHolder.instance;
+    }
+
+    private OpenAiResponseProvider() {
         httpClient = OkHttpClient.builder().build();
         headers = Headers
                 .builder()

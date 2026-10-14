@@ -1,18 +1,20 @@
 package io.github.preschoolller.agentjava.backend.tool;
 
-import com.fasterxml.jackson.core.JsonPointer;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 
 import java.util.List;
 import java.util.Map;
 
+import static io.github.preschoolller.agentjava.backend.provider.common.Constants.MAPPER;
 import static io.github.preschoolller.agentjava.backend.tool.ToolManager.BAD_TOOL;
 
 public class ToolChain implements Tool {
+
+    private static final String TOOL_CHAIN = "tool_chain";
+    private static final String TOOL_NAME = "tool_name";
+    private static final String ARGUMENTS = "arguments";
 
     private static volatile ToolChain instance;
 
@@ -44,48 +46,47 @@ public class ToolChain implements Tool {
 
     @Override
     public boolean readOnly() {
-        return true; // 只读文件，无副作用：编辑模式下不用确认
+        return false; // 只读文件，无副作用：编辑模式下不用确认
     }
 
     @Override
     public Map<String, Object> schema() {
         return Map.of(
                 "type", "object",
-                "properties", Map.of("tool_chain", List.of(
+                "properties", Map.of(TOOL_CHAIN, List.of(
                         Map.of("type", "object",
                                 "description", "工具调用及其参数",
-                                "properties", Map.of("tool_name", Map.of("type", "string", "description", "工具名称"),
-                                        "arguments", Map.of("type", "string", "description", "工具参数")
+                                "properties", Map.of(TOOL_NAME, Map.of("type", "string", "description", "工具名称"),
+                                        ARGUMENTS, Map.of("type", "string", "description", "工具参数")
                                 )
                         ))
                 ),
-                "required", List.of("tool_chain")
+                "required", List.of(TOOL_CHAIN, TOOL_NAME, ARGUMENTS)
         );
     }
 
     @Override
     public String execute(String arguments, String workspace) {
         try {
-            JsonNode jsonNode = new ObjectMapper().readTree(arguments);
+            JsonNode jsonNode = MAPPER.readTree(arguments);
             if (jsonNode == null) {
                 return "json parse error: wrong schema";
             }
-            JsonNode chain = jsonNode.path("chain");
+            JsonNode chain = jsonNode.path(TOOL_CHAIN);
             if (chain.isArray()) {
                 StringBuilder result = new StringBuilder();
-                ArrayNode jsonNodes = chain.withArray(JsonPointer.compile(""));
-                for (JsonNode node : jsonNodes) {
-                    String toolName = node.path("tool_name").asText();
+                for (JsonNode node : chain) {
+                    String toolName = node.path(TOOL_NAME).asText();
                     Tool tool = null;
                     if ((tool = ToolManager.findByName(toolName)) == BAD_TOOL) {
                         return "invalid tool name : " + toolName;
                     }
-                    String str = tool.execute(node.path("arguments").asText(), workspace);
+                    String str = tool.execute(node.path(ARGUMENTS).asText(), workspace);
                     result.append("tool :").append(toolName).append(" result:").append(str);
                 }
                 return result.toString();
             }
-            return "chain is valid, performing tool chain";
+            return "chain is invalid, skipping tool chain";
         } catch (JsonProcessingException e) {
             return "json parse error: " + e.getMessage();
         }

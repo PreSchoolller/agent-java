@@ -47,7 +47,9 @@ public class ToolManager {
     /** 只接受已注册的 Tool（buildParams 遍历 tools 时用）；BAD_TOOL.schema() 是 null，别拿占位工具进来 */
     public static FunctionTool getFunctionTool(Tool tool) {
         HashMap<String, JsonValue> parameters = new HashMap<>();
-        tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
+        if (tool.schema() != null) {
+            tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
+        }
         FunctionTool functionTool = FunctionTool
                 .builder()
                 .name(tool.name())
@@ -61,7 +63,9 @@ public class ToolManager {
     /** 只接受已注册的 Tool（buildParams 遍历 tools 时用）；BAD_TOOL.schema() 是 null，别拿占位工具进来 */
     public static ChatCompletionFunctionTool getChatCompletionFunctionTool(Tool tool) {
         HashMap<String, JsonValue> parameters = new HashMap<>();
-        tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
+        if (tool.schema() != null) {
+            tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
+        }
         return ChatCompletionFunctionTool
                 .builder()
                 .function(FunctionDefinition.builder()
@@ -88,12 +92,9 @@ public class ToolManager {
 
     /** 执行一次工具调用：workspace 是会话绑定的工作区目录，透传给工具做相对路径解析 */
     public static String execute(ToolCall toolCall, String workspace) {
-        for (Tool tool : tools) {
-            if (!tool.name().equals(toolCall.getTool().name())) {
-                continue;
-            }
-            return tool.execute(toolCall.getArguments(), workspace);
+        if (toolCall == null || toolCall.getTool() == null || toolCall.getTool() instanceof BadTool) {
+            return BAD_TOOL.execute("", workspace);
         }
-        return BAD_TOOL.execute(toolCall.getArguments(), workspace);
+        return toolCall.getTool().execute(toolCall.getArguments(), workspace);
     }
 }
