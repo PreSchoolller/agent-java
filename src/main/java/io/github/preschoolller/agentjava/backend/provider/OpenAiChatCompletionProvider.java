@@ -223,6 +223,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                 exception.printStackTrace();
                 errors.add(new ErrorMessageEvent("Unexpected stream error: " + exception.getMessage()));
             } finally {
+                Logger.info("--------------streaming end--------------");
                 putIntoBQ(new ReasoningDeltaDoneEvent("", sb.toString().trim().strip()), blockingQueue);
                 try {
                     for (ErrorMessageEvent error : errors) {

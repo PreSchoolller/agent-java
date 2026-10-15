@@ -197,6 +197,9 @@ public class Main {
                 throw new RuntimeException(e);
             } finally {
                 SwingUtilities.invokeLater(() -> stream.finish()); // 停止也走 finish：已生成部分照常保留并落库
+                if (cancelled.get() && shouldStopBackend != null) {
+                    shouldStopBackend.set(true);
+                }
                 for (String callId : callIdHandleMap.keySet()) {
                     if (doneCalls.contains(callId)) {
                         continue;
