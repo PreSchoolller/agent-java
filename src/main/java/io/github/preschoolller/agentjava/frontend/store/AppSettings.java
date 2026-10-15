@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * 应用设置（单例）：持久化到 ~/.agentjava/settings.properties。
@@ -38,6 +39,9 @@ public final class AppSettings {
     private String uiTheme = "light";
     /** 关闭按钮最小化到托盘（全局 UI 偏好，默认关闭=直接退出） */
     private boolean minimizeToTray;
+    /** TinyLog日志等级，修改需重启生效 */
+    private String logLevel = "info";
+    private static final Set<String> allowLevels = Set.of("trace", "debug", "info", "warn", "error");
     /** 主窗口尺寸/位置与侧栏分隔条位置（全局 UI 偏好；坐标 -1 = 首次启动居中）。
      *  最大化期间的 bounds 不记录，还原后仍是用户习惯的窗口大小 */
     private int windowWidth = 1280;
@@ -212,6 +216,10 @@ public final class AppSettings {
         return uiTheme;
     }
 
+    public String getLogLevel() {
+        return logLevel;
+    }
+
     /** 仅接受 "light"/"dark"，其他值忽略 */
     public void setUiTheme(String uiTheme) {
         if ("light".equals(uiTheme) || "dark".equals(uiTheme) || "system".equals(uiTheme)) {
@@ -365,6 +373,7 @@ public final class AppSettings {
         properties.setProperty("windowX", String.valueOf(windowX));
         properties.setProperty("windowY", String.valueOf(windowY));
         properties.setProperty("sidebarDivider", String.valueOf(sidebarDivider));
+        properties.setProperty("logLevel", String.valueOf(logLevel));
         try {
             Files.createDirectories(file.getParent());
             try (OutputStream out = Files.newOutputStream(file)) {
@@ -396,6 +405,10 @@ public final class AppSettings {
         sidebarDivider = parseInt(properties.getProperty("sidebarDivider"), sidebarDivider);
         setUiTheme(properties.getProperty("uiTheme"));
         minimizeToTray = Boolean.parseBoolean(properties.getProperty("minimizeToTray", "false"));
+        logLevel = properties.getProperty("logLevel");
+        if (logLevel == null || !allowLevels.contains(logLevel)) {
+            logLevel = "info";
+        }
         String names = properties.getProperty("profileNames");
         if (names == null) {
             loadLegacyFlat(properties); // v1 之前的平面键格式

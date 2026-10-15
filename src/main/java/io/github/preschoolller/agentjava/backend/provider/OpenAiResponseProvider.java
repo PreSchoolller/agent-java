@@ -58,6 +58,7 @@ import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.jetbrains.annotations.NotNull;
+import org.tinylog.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -65,6 +66,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 public class OpenAiResponseProvider implements Provider {
@@ -219,7 +221,7 @@ public class OpenAiResponseProvider implements Provider {
 
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
-        System.out.println("有人调用？？？------------------");
+        Logger.info("--------------streaming start--------------");
         ResponseService service;
         synchronized (this) {
             service = responseService;
@@ -228,10 +230,12 @@ public class OpenAiResponseProvider implements Provider {
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue,
                 promptParams.getApprovalGate(), promptParams.getAgentMode(), promptParams.getWorkspace());
+        AtomicBoolean shouldStop = new AtomicBoolean(false);
         ThreadPoolFactory.getResponseExecutor().execute(() -> {
             List<ErrorMessageEvent> errors = new ArrayList<>();
             try (StreamResponse<ResponseStreamEvent> response = service.createStreaming(responseCreateParams)) {
                 response.stream()
+                        .takeWhile(responseStreamEvent -> !shouldStop.get())
                         .forEach(responseStreamEvent -> responseStreamEvent.accept(visitor));
             } catch (OpenAIServiceException exception) {
                 String errorMessage = "Stream exception found. Code: " + exception.code().orElse("")
@@ -256,7 +260,7 @@ public class OpenAiResponseProvider implements Provider {
             }
         });
 
-        return new ProviderStreamingResponse(blockingQueue);
+        return new ProviderStreamingResponse(blockingQueue, shouldStop);
     }
 
     public static String getReasoningContent(Response response) {

@@ -45,6 +45,7 @@ import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import org.tinylog.Logger;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -53,6 +54,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 public class OpenAiChatCompletionProvider implements Provider {
@@ -191,7 +193,7 @@ public class OpenAiChatCompletionProvider implements Provider {
 
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
-        System.out.println("有人调用？？？------------------");
+        Logger.info("--------------streaming start--------------");
         ChatCompletionService service;
         synchronized (this) {
             service = chatCompletionService;
@@ -200,10 +202,12 @@ public class OpenAiChatCompletionProvider implements Provider {
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         Map<Integer, ToolCall> indexToolCall = new HashMap<>();
         StringBuilder sb = new StringBuilder();
+        AtomicBoolean shouldStop = new AtomicBoolean(false);
         ThreadPoolFactory.getResponseExecutor().execute(() -> {
             List<ErrorMessageEvent> errors = new ArrayList<>();
             try (StreamResponse<ChatCompletionChunk> response = service.createStreaming(chatCompletionCreateParams)) {
                 response.stream()
+                        .takeWhile(chatCompletionChunk -> !shouldStop.get())
                         .forEach(chatCompletionChunk ->
                                 visit(blockingQueue, promptParams.getApprovalGate(),
                                         promptParams.getAgentMode(), promptParams.getWorkspace(),
@@ -232,7 +236,7 @@ public class OpenAiChatCompletionProvider implements Provider {
             }
         });
 
-        return new ProviderStreamingResponse(blockingQueue);
+        return new ProviderStreamingResponse(blockingQueue, shouldStop);
     }
 
     public static String getReasoningContent(ChatCompletion chatCompletion) {
@@ -248,6 +252,7 @@ public class OpenAiChatCompletionProvider implements Provider {
     private static void visit(BlockingQueue<BaseEvent> blockingQueue,
                               ToolApprovalGate approvalGate, AgentMode agentMode, String workspace,
                               ChatCompletionChunk chatCompletionChunk, Map<Integer, ToolCall> indexToolCall, StringBuilder sb) {
+        Logger.trace(chatCompletionChunk);
         Stream<ChatCompletionChunk.Choice.Delta> deltaStream = chatCompletionChunk.choices().stream()
                 .map(ChatCompletionChunk.Choice::delta);
         deltaStream.forEach(delta -> {

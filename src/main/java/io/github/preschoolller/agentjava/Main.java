@@ -22,11 +22,16 @@ import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseD
 import io.github.preschoolller.agentjava.backend.provider.common.event.ErrorMessageEvent;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.frontend.gui.Window;
+import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.Message;
+import org.tinylog.configuration.Configuration;
 
 import javax.swing.SwingUtilities;
+import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -56,6 +61,8 @@ public class Main {
     private static final long TOOL_EXECUTE_TIMEOUT_SECONDS = 60;
 
     public static void main(String[] args) {
+        Configuration.set("level", AppSettings.get().getLogLevel());
+        
         SwingUtilities.invokeLater(() -> {
             Window window = new Window("Agent");
             // 尺寸/位置/分隔条由 Window 从 AppSettings 恢复（无记录回落居中），关闭行为 Window 自己接管
@@ -121,6 +128,7 @@ public class Main {
         long roundStartNanos = System.nanoTime(); // 本轮耗时（含 HTTP 建流），胶囊上展示用
         CompletableFuture.runAsync(() -> {
             BlockingQueue<BaseEvent> events = null;
+            AtomicBoolean shouldStopBackend = null;
             List<CompletableFuture<Void>> toolCalls = new ArrayList<>();
             Map<String, Window.ToolCallHandle> callIdHandleMap = new HashMap<>();
             Map<String, String> callIdByItemId = new HashMap<>();
@@ -137,6 +145,7 @@ public class Main {
                 }
                 ProviderStreamingResponse providerStreamingResponse = provider.sendPromptStreaming(paramsBuilder.build());
                 events = providerStreamingResponse.blockingQueue();
+                shouldStopBackend = providerStreamingResponse.shouldStop();
                 BaseEvent event;
                 while (!cancelled.get() && !((event = events.take()) instanceof PoisonEvent)) {
                     if (event instanceof ReasoningDeltaStartEvent) {
@@ -202,6 +211,9 @@ public class Main {
                 // 审批阶段由点击/停止结束，执行阶段有超时兜底，这里不会永久挂起
                 toolCalls.forEach(CompletableFuture::join);
                 if (cancelled.get()) {
+                    if (shouldStopBackend != null) {
+                        shouldStopBackend.set(true);
+                    }
                     drainUntilPoison(events);
                 }
                 if (!cancelled.get() && !toolCalls.isEmpty()) {
@@ -335,10 +347,10 @@ public class Main {
         if (workspace != null && !workspace.isBlank()) {
             return workspace;
         }
-        java.nio.file.Path dir = io.github.preschoolller.agentjava.frontend.store.AppSettings.defaultWorkspace();
+        Path dir = AppSettings.defaultWorkspace();
         try {
-            java.nio.file.Files.createDirectories(dir);
-        } catch (java.io.IOException e) {
+            Files.createDirectories(dir);
+        } catch (IOException e) {
             System.err.println("创建默认工作区失败: " + e.getMessage());
         }
         return dir.toString();
