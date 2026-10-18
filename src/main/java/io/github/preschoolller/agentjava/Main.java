@@ -214,9 +214,6 @@ public class Main {
                 // 审批阶段由点击/停止结束，执行阶段有超时兜底，这里不会永久挂起
                 toolCalls.forEach(CompletableFuture::join);
                 if (cancelled.get()) {
-                    if (shouldStopBackend != null) {
-                        shouldStopBackend.set(true);
-                    }
                     drainUntilPoison(events);
                 }
                 if (!cancelled.get() && !toolCalls.isEmpty()) {
