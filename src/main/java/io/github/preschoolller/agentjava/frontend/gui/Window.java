@@ -122,6 +122,10 @@ public class Window extends JFrame {
     /** 工具调用卡的头部高度（角色标+工具名+参数+状态一行）与结果区高度帽（超出内部滚动） */
     private static final int TOOL_HEADER_HEIGHT = 26;
     private static final int TOOL_RESULT_CAP = 320;
+    /** 展开态参数区（"参数"小标题 + 全文文本）：标题行高与文本高度帽（超出内部滚动），
+     *  无参数不挂。帽与收到 fitCardHeight 的展开公式同一常量，测量/显示一致 */
+    private static final int ARGS_CAPTION_HEIGHT = 16;
+    private static final int ARGS_TEXT_CAP = 160;
     /** 展开态结果区下方的复制行（复制参数/复制结果）高度 */
     private static final int TOOL_COPY_ROW_HEIGHT = 28;
     /** 结果文本区的显示字号（Monospaced，与折叠/展开高度测量共用） */
@@ -1330,12 +1334,38 @@ public class Window extends JFrame {
     }
 
     /** 工具调用卡内容：一行头部（折叠箭头 + "工具"角色标 + 工具名 + 参数摘要 + 状态徽标），默认收成
-     *  一行（P1-4）；点头部展开结果区，展开时结果文本下挂"复制参数/复制结果"。待确认态的
-     *  "允许/拒绝"按钮挂在头部，折叠不影响审批 */
+     *  一行（P1-4）；点头部展开结果区，展开态挂参数全文区（超长封顶滚动），结果文本下挂
+     *  "复制参数/复制结果"。待确认态的"允许/拒绝"按钮挂在头部，折叠不影响审批 */
     private JComponent buildToolContent(MessageCard messageCard) {
         Message message = messageCard.message;
         boolean expanded = expandedToolCalls.contains(toolKey(message));
-        JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        // 头部三段式：WEST 箭头+角色标+工具名 / CENTER 参数摘要 / EAST 状态徽标+审批按钮。
+        // 原来一行 FlowLayout 从左排到底，参数摘要长的时候窗口一窄，徽标和"允许/拒绝"就被
+        // 推出行外裁掉，点不到只能拉宽窗口。BorderLayout 的 EAST/WEST 按各自首选宽定位、
+        // 永不裁剪，被盖住也是后 add 的 EAST 盖在上面（z-order 顶）——按钮永远完整可见可点，
+        // 空间不足先让位的是中间的参数摘要（CENTER 区域宽度= 卡宽-两端首选宽）。
+        JPanel leftGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        leftGroup.setOpaque(false);
+        // 折叠箭头自绘（Ui.Chevron）：▸▶ 在微软雅黑里缺字形渲染成方框（踩坑 #5，字符探针实测）
+        Ui.Chevron chevron = new Ui.Chevron(expanded);
+        chevron.setForeground(Ui.TEXT_SECONDARY);
+        leftGroup.add(chevron);
+        JLabel roleLabel = new JLabel("工具");
+        roleLabel.setFont(new Font("微软雅黑", Font.BOLD, 13));
+        roleLabel.setForeground(Ui.ACCENT);
+        leftGroup.add(roleLabel);
+        JLabel nameLabel = new JLabel(message.toolName());
+        nameLabel.setFont(new Font("Monospaced", Font.BOLD, 13));
+        nameLabel.setForeground(Ui.TEXT);
+        leftGroup.add(nameLabel);
+        // 参数标签恒建（哪怕此刻还没有参数）：参数流式到达时原地改文本，不用重建头部。
+        // 在 CENTER 里被裁剪也别截花：左对齐让可见部分始终从参数开头读起
+        JLabel argsLabel = new JLabel(toolArgsSummary(message.toolArgs()));
+        argsLabel.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        argsLabel.setForeground(Ui.TEXT_SECONDARY);
+        argsLabel.setHorizontalAlignment(SwingConstants.LEFT);
+        messageCard.toolArgsLabel = argsLabel;
+        JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setOpaque(false);
         header.setName("tool-header"); // Shot 回归定位（点头部折叠/展开）
         header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
@@ -1348,24 +1378,8 @@ public class Window extends JFrame {
                 rebuildCard(messageCard);
             }
         });
-        // 折叠箭头自绘（Ui.Chevron）：▸▶ 在微软雅黑里缺字形渲染成方框（踩坑 #5，字符探针实测）
-        Ui.Chevron chevron = new Ui.Chevron(expanded);
-        chevron.setForeground(Ui.TEXT_SECONDARY);
-        header.add(chevron);
-        JLabel roleLabel = new JLabel("工具");
-        roleLabel.setFont(new Font("微软雅黑", Font.BOLD, 13));
-        roleLabel.setForeground(Ui.ACCENT);
-        header.add(roleLabel);
-        JLabel nameLabel = new JLabel(message.toolName());
-        nameLabel.setFont(new Font("Monospaced", Font.BOLD, 13));
-        nameLabel.setForeground(Ui.TEXT);
-        header.add(nameLabel);
-        // 参数标签恒建（哪怕此刻还没有参数）：参数流式到达时原地改文本，不用重建头部
-        JLabel argsLabel = new JLabel(toolArgsSummary(message.toolArgs()));
-        argsLabel.setFont(new Font("Monospaced", Font.PLAIN, 12));
-        argsLabel.setForeground(Ui.TEXT_SECONDARY);
-        header.add(argsLabel);
-        messageCard.toolArgsLabel = argsLabel;
+        header.add(leftGroup, BorderLayout.WEST);
+        header.add(argsLabel, BorderLayout.CENTER);
         boolean running = "running".equals(message.toolStatus());
         boolean error = "error".equals(message.toolStatus());
         boolean interrupted = "interrupted".equals(message.toolStatus()); // 崩溃残留（P0-5），灰态
@@ -1377,18 +1391,59 @@ public class Window extends JFrame {
         statusLabel.setFont(new Font("微软雅黑", Font.PLAIN, 11));
         statusLabel.setForeground(pending ? Ui.WARNING : running ? Ui.ACCENT
                 : error ? Ui.DANGER : Ui.TEXT_SECONDARY);
-        header.add(statusLabel);
+        // EAST 段最后 add：极窄两端重叠时按钮画在上层、命中测试也归它，保证可点
+        JPanel rightGroup = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        rightGroup.setOpaque(false);
+        rightGroup.add(statusLabel);
         if (pending) {
-            header.add(createApprovalButton(messageCard, "允许", true));
-            header.add(createApprovalButton(messageCard, "拒绝", false));
+            rightGroup.add(createApprovalButton(messageCard, "允许", true));
+            rightGroup.add(createApprovalButton(messageCard, "拒绝", false));
         }
+        header.add(rightGroup, BorderLayout.EAST);
 
         JPanel content = new JPanel(new BorderLayout(0, 6));
         content.setOpaque(false);
         content.add(header, BorderLayout.NORTH);
         if (expanded) {
+            // 与 fitCardHeight 同源的正文宽度（工具卡通栏 GetGridBag：卡宽 - 侧衬）；首布局前
+            // waterfall 还没宽度，给个常规值兜底——之后 resize 会按新宽度重测重排
+            int panelWidth = waterfallPanel.getWidth();
+            int textWidth = Math.max(0, (panelWidth > 0 ? panelWidth : 400) - CARD_SIDE_INSETS);
+            JPanel middle = new JPanel(new BorderLayout(0, 6));
+            middle.setOpaque(false);
+            // 参数全文区（计划外）：摘要一行放不下完整 JSON，展开看全部；空参数不挂
+            String argsText = message.toolArgs();
+            if (argsText != null && !argsText.isBlank()) {
+                JLabel argsCaption = new JLabel("参数");
+                argsCaption.setFont(new Font("微软雅黑", Font.BOLD, 11));
+                argsCaption.setForeground(Ui.TEXT_SECONDARY);
+                JTextArea argsArea = Ui.displayTextArea();
+                argsArea.setFont(new Font("Monospaced", Font.PLAIN, TOOL_RESULT_FONT_SIZE));
+                // 没设过前景色的文本组件默认黑字，深色主题下必须显式给（见踩坑 #19）
+                argsArea.setForeground(Ui.TEXT);
+                argsArea.setText(argsText);
+                argsArea.setLineWrap(true);
+                argsArea.setWrapStyleWord(false);
+                JScrollPane argsScroll = new JScrollPane(argsArea,
+                        JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                        JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+                argsScroll.setBorder(BorderFactory.createEmptyBorder());
+                argsScroll.setOpaque(false);
+                argsScroll.getViewport().setOpaque(false);
+                argsScroll.setViewportBorder(BorderFactory.createEmptyBorder());
+                argsScroll.getVerticalScrollBar().setUnitIncrement(16);
+                Ui.styleScrollPane(argsScroll);
+                // 高度帽与展开高度公式同一常量（ARGS_TEXT_CAP），实际显示差异由按需滚动条兜住
+                argsScroll.setPreferredSize(new Dimension(0, Math.min(
+                        measureToolResultHeight(argsText, textWidth), ARGS_TEXT_CAP)));
+                JPanel argsBlock = new JPanel(new BorderLayout(0, 4));
+                argsBlock.setOpaque(false);
+                argsBlock.add(argsCaption, BorderLayout.NORTH);
+                argsBlock.add(argsScroll, BorderLayout.CENTER);
+                middle.add(argsBlock, BorderLayout.NORTH);
+            }
             JTextArea result = Ui.displayTextArea();
-            result.setFont(new Font("Monospaced", Font.PLAIN, 12));
+            result.setFont(new Font("Monospaced", Font.PLAIN, TOOL_RESULT_FONT_SIZE));
             // 没设过前景色的文本组件默认黑字，深色主题下必须显式给（见踩坑 #19）
             result.setForeground(Ui.TEXT);
             result.setText(message.text());
@@ -1403,13 +1458,14 @@ public class Window extends JFrame {
             scroll.setViewportBorder(BorderFactory.createEmptyBorder());
             scroll.getVerticalScrollBar().setUnitIncrement(16);
             Ui.styleScrollPane(scroll);
-            content.add(scroll, BorderLayout.CENTER);
+            middle.add(scroll, BorderLayout.CENTER);
 
             JPanel copyRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
             copyRow.setOpaque(false);
             copyRow.add(createCopyButton("复制参数", () -> message.toolArgs() == null ? "" : message.toolArgs()));
             copyRow.add(createCopyButton("复制结果", () -> message.text() == null ? "" : message.text()));
-            content.add(copyRow, BorderLayout.SOUTH);
+            middle.add(copyRow, BorderLayout.SOUTH);
+            content.add(middle, BorderLayout.CENTER);
         }
         return content;
     }
@@ -1927,10 +1983,18 @@ public class Window extends JFrame {
         int height;
         if (messageCard.tool) {
             if (expandedToolCalls.contains(toolKey(messageCard.message))) {
-                // 展开：头部 + 结果文本（超长封顶，卡片内滚动）+ 复制行；
-                // 框架 = 上下内衬 20 + 时间行 ~18 + 内容竖缝 12 + 余量（比 AI 卡小：没有角色标签行）
-                int textHeight = Math.min(measureToolResultHeight(messageCard.message.text(), textWidth)
-                        + TOOL_HEADER_HEIGHT, TOOL_RESULT_CAP) + TOOL_COPY_ROW_HEIGHT;
+                // 展开：头部 + 结果文本（超长封顶，卡片内滚动）+ 参数全文区（有参数才挂，
+                // 超长封顶内部滚动）+ 复制行；框架 = 上下内衬 20 + 时间行 ~18 + 内容竖缝 12 + 余量
+                // （比 AI 卡小：没有角色标签行）
+                int resultHeight = Math.min(measureToolResultHeight(messageCard.message.text(), textWidth)
+                        + TOOL_HEADER_HEIGHT, TOOL_RESULT_CAP);
+                int argsHeight = 0;
+                String argsText = messageCard.message.toolArgs();
+                if (argsText != null && !argsText.isBlank()) {
+                    argsHeight = Math.min(measureToolResultHeight(argsText, textWidth), ARGS_TEXT_CAP)
+                            + ARGS_CAPTION_HEIGHT;
+                }
+                int textHeight = resultHeight + argsHeight + TOOL_COPY_ROW_HEIGHT;
                 height = Math.max(CARD_MIN_HEIGHT_AI, textHeight + TOOL_FRAME_EXPANDED);
             } else {
                 height = TOOL_COLLAPSED_HEIGHT; // 单行：一行头部，不挂时间行（时间展开后可见）

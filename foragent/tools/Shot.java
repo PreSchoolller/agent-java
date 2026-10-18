@@ -50,6 +50,7 @@ import java.util.Properties;
  * Markdown 解析断言（MD_PARSE_OK）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
  * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗与工作区显示条断言（WORKSPACE_OK）+
+ * 窄窗口工具审批/摘要不能裁掉一个按钮、展开能看见参数全文（NARROW_OK）+
  * 二十二张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
@@ -606,6 +607,54 @@ public class Shot {
                 && "error".equals(store.getActive().getMessages().get(toolBase + 3).toolStatus()),
                 "允许/拒绝终态落库");
         System.out.println("APPROVAL_OK");
+
+        // —— 窄窗口回归（计划外）：参数摘要很长时头部 EAST 钉住的"允许/拒绝"不能被挤出行外裁掉
+        // （原一行 FlowLayout 把参数摘要排到按钮前面，窗口一窄按钮就出卡外，点不到只能拉宽）；
+        // 点头部展开还能看到参数全文，而不是 80 字截断的摘要 ——
+        int[] narrowOldSize = new int[2];
+        edt(() -> {
+            narrowOldSize[0] = WINDOW.getWidth();
+            narrowOldSize[1] = WINDOW.getHeight();
+        });
+        String longArgs = "{\"path\": \"workspace/very/long/directory/name/tool-args/overflow/summary/cut.json\", "
+                + "\"mode\": \"overwrite\"}";
+        Window.ToolCallHandle[] narrowHolder = new Window.ToolCallHandle[1];
+        java.util.concurrent.CompletableFuture<Boolean>[] narrowDecision = new java.util.concurrent.CompletableFuture[1];
+        edt(() -> {
+            narrowHolder[0] = WINDOW.addToolCall("write_file", longArgs, "call_narrow");
+            narrowDecision[0] = new java.util.concurrent.CompletableFuture<>();
+            narrowHolder[0].requestApproval(narrowDecision[0]);
+        });
+        Thread.sleep(300);
+        edt(() -> WINDOW.setSize(760, narrowOldSize[1])); // 缩到 760 宽：老布局下按钮已被裁出卡外
+        Thread.sleep(600); // 等 resize 触发的 fitAllCardHeights 重排
+        expect(buttonFullyVisible("允许"), "窄窗口下允许按钮完整可见（未被裁出行外）");
+        // 展开参数全文：点卡片树里最后一个 tool-header（DFS 顺序末位 = 最新的待确认卡）
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            JPanel target = null;
+            for (Component component : all) {
+                if (component instanceof JPanel jPanel && "tool-header".equals(jPanel.getName())) {
+                    target = jPanel;
+                }
+            }
+            if (target == null) {
+                throw new AssertionError("没找到工具卡头部");
+            }
+            target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_CLICKED,
+                    System.currentTimeMillis(), 0, 5, 5, 1, false));
+        });
+        Thread.sleep(400);
+        expect(uiHasTextAreaStartingWith("{\"path\": \"workspace/very/long"), "展开显示参数全文");
+        edt(() -> uiClick("允许")); // 点击落到按钮上 future 才会被写——顺带证明窄窗口下可点
+        Thread.sleep(300);
+        expect(Boolean.TRUE.equals(narrowDecision[0].getNow(null)), "窄窗口下允许按钮仍可点击");
+        edt(() -> narrowHolder[0].finish("写入完成", true, longArgs)); // 收尾：不留待确认标注
+        edt(() -> WINDOW.setSize(narrowOldSize[0], narrowOldSize[1])); // 还原尺寸（防抖落盘存回原值）
+        Thread.sleep(600);
+        System.out.println("NARROW_OK");
+
         // 工具卡演示把主区切到了新会话，切回 Markdown 样例会话供后面 8 号悬停菜单截图用
         edt(() -> WINDOW.getStore().switchTo(c3.getId()));
         Thread.sleep(800);
@@ -1081,6 +1130,25 @@ public class Shot {
             }
         }
         throw new AssertionError("没找到可点击组件: " + name);
+    }
+
+    /** 显示中的按钮（全等文本）是否完整落在主窗范围内（窄窗口审批按钮被裁的回归断言用） */
+    private static boolean buttonFullyVisible(String text) throws Exception {
+        boolean[] ok = new boolean[1];
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.JButton button
+                        && text.equals(button.getText()) && button.isShowing()) {
+                    java.awt.Rectangle buttonBounds = new java.awt.Rectangle(
+                            button.getLocationOnScreen(), button.getSize());
+                    ok[0] = WINDOW.getBounds().contains(buttonBounds);
+                    return;
+                }
+            }
+        });
+        return ok[0];
     }
 
     /** 读系统剪贴板文本（用户消息复制断言用）；不可读或非文本返回 null */
