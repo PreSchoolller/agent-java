@@ -209,6 +209,11 @@ public class Window extends JFrame {
     private MessageCard flashedCard;
     private Timer searchFlashTimer;
 
+    /** 主区顶部的工作区显示条：展示当前会话的工作区路径（未绑定的显示默认工作区，标注"默认"），
+     *  旁边挂"复制"按钮。路径与复制源随会话切换刷新（refreshWorkspaceBar） */
+    private JLabel workspacePathLabel;
+    private String displayedWorkspacePath;
+
     /** AI 回复的流式句柄：addAiMessage 返回。所有方法须在 EDT 上调用。 */
     public interface AiStream {
         /** 追加一段增量文本；内部按 ~120ms 节流重渲染，无需自己攒批 */
@@ -1162,6 +1167,7 @@ public class Window extends JFrame {
         rebindLiveStreams(conversation.getId()); // 切回还在生成的会话：把进行中的句柄挂回新卡片（要在物化前，待确认态才画得出来）
         updateMaterialization(); // 长会话只物化视口附近；短会话在这里全量补齐
         setTitle("Agent - " + displayTitle(conversation));
+        refreshWorkspaceBar(); // 工作区条跟随显示的会话（未绑定的显示默认工作区）
         waterfallPanel.revalidate();
         waterfallPanel.repaint();
         refreshGeneratingUi(); // 输入区状态跟随目标会话：切到生成中的会话要置灰并出停止按钮
@@ -1704,9 +1710,46 @@ public class Window extends JFrame {
         // change 事件在 viewPosition 更新之后触发，getViewRect 才是准的
         waterfallScroll.getViewport().addChangeListener(e -> updateMaterialization());
         innerPanel.add(waterfallScroll, BorderLayout.CENTER);
+        // 上边栏堆叠：工作区显示条（常驻）在上、会话内搜索条（默认隐藏）在下。
+        // BorderLayout.NORTH 只挂得住一个组件，用空壳容器叠两层（都设底色，踩坑 #19）
         searchBar = buildSearchBar();
         searchBar.setVisible(false);
-        innerPanel.add(searchBar, BorderLayout.NORTH);
+        JPanel northStack = new JPanel(new BorderLayout(0, 0));
+        northStack.setOpaque(false);
+        northStack.add(buildWorkspaceBar(), BorderLayout.NORTH);
+        northStack.add(searchBar, BorderLayout.SOUTH);
+        innerPanel.add(northStack, BorderLayout.NORTH);
+    }
+
+    /** 主区顶部的工作区显示条：一行"工作区 + 路径 + 复制路径"（计划外，工作区已知"没有显示入口"的后续）。
+     *  路径用 Monospaced 与工具卡参数同款体感；左右留白对齐瀑布流（SIDE_MARGIN 同源）。
+     *  不设宽度相关的首选值，不踩踩坑 #3 的正反馈 */
+    private JComponent buildWorkspaceBar() {
+        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        bar.setBackground(Ui.BG);
+        bar.setBorder(BorderFactory.createEmptyBorder(0, SIDE_MARGIN, 6, SIDE_MARGIN));
+        JLabel caption = new JLabel("工作区");
+        caption.setFont(new Font("微软雅黑", Font.PLAIN, 12));
+        caption.setForeground(Ui.TEXT_SECONDARY);
+        workspacePathLabel = new JLabel("");
+        workspacePathLabel.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        workspacePathLabel.setForeground(Ui.TEXT);
+        bar.add(caption);
+        bar.add(workspacePathLabel);
+        bar.add(createCopyButton("复制路径", () -> displayedWorkspacePath == null ? "" : displayedWorkspacePath));
+        return bar;
+    }
+
+    /** 工作区条随会话切换刷新：会话绑定了工作区显示绑定值；没绑过的显示默认工作区并标注
+     *  "（默认）"——默认值不落到会话上，跟随 AppSettings.defaultWorkspace 变化。
+     *  纯聊天会话也照常显示（工作区对它无意义是无害的冗余，不值得特判） */
+    private void refreshWorkspaceBar() {
+        String bound = store.getActive().getWorkspace();
+        boolean isDefault = bound == null || bound.isBlank();
+        String path = isDefault ? AppSettings.defaultWorkspace().toString() : bound;
+        displayedWorkspacePath = path;
+        workspacePathLabel.setText(path + (isDefault ? "（默认）" : ""));
+        workspacePathLabel.setToolTipText(path); // 完整路径挂 tooltip，被截断也有地方看全
     }
 
     /** 会话内搜索（Ctrl+F）：搜索条挂在主区顶部，默认隐藏 */

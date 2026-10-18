@@ -49,7 +49,7 @@ import java.util.Properties;
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、
  * Markdown 解析断言（MD_PARSE_OK）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
- * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗断言（WORKSPACE_OK）+
+ * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗与工作区显示条断言（WORKSPACE_OK）+
  * 二十二张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
@@ -365,6 +365,8 @@ public class Shot {
             expect(WINDOW.getSelectedEffort() != null, "输入区默认思考强度非空");
             expect(WINDOW.getSelectedMode() != null, "输入区默认权限模式非空");
         });
+        // 工作区显示条（计划外）：回归用会话都没绑工作区，条上显示默认工作区并标注"（默认）"
+        expect(uiHasText(AppSettings.defaultWorkspace().toString() + "（默认）"), "工作区条显示默认工作区");
         capture(args[0] + "-1-expanded.png");
 
         // —— 截图 1b：分隔条拖到 360px（模拟手动拖宽侧栏） ——
@@ -808,6 +810,20 @@ public class Shot {
         Thread.sleep(600);
         expect(WINDOW.getStore().getConversations().size() == conversationsBefore + 1, "确定后新建会话");
         expect(WINDOW.getStore().getActive().getWorkspace() == null, "默认工作区不落到会话");
+        expect(uiHasText(AppSettings.defaultWorkspace().toString() + "（默认）"), "新建默认会话后工作区条仍显示默认");
+
+        // —— 工作区显示条跟会话（计划外）：弹窗改绑选定目录 → 条跟随显示绑定值；"复制路径"拷纯路径 ——
+        Files.createDirectories(Path.of(wsPath)); // 目录先在着，确定时不触发"是否创建"确认弹窗
+        SwingUtilities.invokeLater(() -> uiClickAnyWindow("＋ 新对话"));
+        Thread.sleep(800);
+        edt(() -> uiTypeWorkspacePath(wsPath));
+        edt(() -> uiClickAnyWindow("开始对话"));
+        Thread.sleep(600);
+        expect(wsPath.equals(WINDOW.getStore().getActive().getWorkspace()), "弹窗选定的工作区落到会话");
+        expect(uiHasText(wsPath), "工作区条显示绑定的工作区");
+        edt(() -> uiClick("复制路径"));
+        Thread.sleep(300);
+        expect(wsPath.equals(clipboardText()), "复制路径拷纯路径（不带\"（默认）\"）");
         System.out.println("WORKSPACE_OK");
 
         edt(() -> WINDOW.dispose());
@@ -918,6 +934,24 @@ public class Shot {
             }
         }
         throw new AssertionError("没找到可点击的按钮: " + text);
+    }
+
+    /** 把弹窗（非主窗）里显示中的输入框设为该值（工作区弹窗路径框断言用；只跳主窗防误命中） */
+    private static void uiTypeWorkspacePath(String text) {
+        for (java.awt.Window window : java.awt.Window.getWindows()) {
+            if (window == WINDOW) {
+                continue;
+            }
+            List<Component> all = new ArrayList<>();
+            collectComponents(window, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.JTextField field && field.isShowing()) {
+                    field.setText(text);
+                    return;
+                }
+            }
+        }
+        throw new AssertionError("没找到工作区路径输入框");
     }
 
     /** 全部顶层窗口里是否有显示该全等文本的按钮/标签（工作区弹窗断言用，同 uiHasText 但跨窗口） */
