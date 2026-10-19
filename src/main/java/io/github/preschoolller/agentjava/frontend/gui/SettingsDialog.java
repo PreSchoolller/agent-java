@@ -17,16 +17,25 @@ import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.Scrollable;
 import javax.swing.SpinnerNumberModel;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
+import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Frame;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.Toolkit;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,8 +44,12 @@ import java.util.function.Function;
 
 /**
  * 设置面板（模态对话框）：编辑 AppSettings 并持久化。
- * 按"后端接口 / 对话体验"分组，白色圆角卡片承载，与主界面同一套风格。
- * "后端接口"卡片第一行是配置方案管理（下拉切换 + 新建/重命名/删除）：面板里的一切改动
+ * 顶部标签页分两页（胶囊切页，当前页主题色实心）：
+ * 「通用」= 全局对话体验（主题/正文字号/关闭按钮）；
+ * 「模型服务」= 配置方案的全部参数（方案管理/后端地址/Key/API 类型/模型/温度/最大 Tokens/系统提示词）。
+ * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
+ * 随方案在模型服务页编辑。
+ * "模型服务"页首行是配置方案管理（下拉切换 + 新建/重命名/删除）：面板里的一切改动
  * （含方案增删改名）都落在深拷贝的工作副本上，点"保存"才整体提交；切换下拉或取消即放弃。
  * 保存后 applyProfiles（落盘 + fireChanged），后端可以在 AppSettings 的监听里感知配置变化；
  * 主窗口通过 isSaved() 判断是否需要按新设置（如正文字号）重建界面。
@@ -72,6 +85,14 @@ public class SettingsDialog extends JDialog {
     private final JSpinner fontSizeSpinner;
     private final JTextArea systemPromptArea = new JTextArea(6, 24);
     private boolean saved;
+
+    /** 标签页 id：通用（全局对话体验）/ 模型服务（配置方案参数）；默认页=模型服务（原首屏内容） */
+    private static final String TAB_GENERAL = "general";
+    private static final String TAB_PROFILE = "profile";
+    private String currentTab = TAB_PROFILE;
+    private JPanel tabsPanel;
+    private JPanel pagesPanel;
+    private CardLayout pageLayout;
 
     public SettingsDialog(Frame owner) {
         this(owner, true);
@@ -129,57 +150,23 @@ public class SettingsDialog extends JDialog {
         JPanel root = new JPanel(new BorderLayout());
         root.setBackground(Ui.BG);
 
-        JPanel groups = new JPanel();
-        groups.setLayout(new BoxLayout(groups, BoxLayout.Y_AXIS));
-        groups.setBackground(Ui.BG);
-        groups.setBorder(BorderFactory.createEmptyBorder(18, 18, 4, 18));
+        // 顶部标签页条：两组胶囊切页。选中=主题色实心+白字，未选中=透底+次要字（悬停浅底），
+        // 配色现场读镜像，与 Ui.button 同一约定
+        tabsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 8));
+        tabsPanel.setBackground(Ui.BG);
+        tabsPanel.setBorder(BorderFactory.createEmptyBorder(0, 18, 4, 18));
+        tabsPanel.add(new TabButton("通用", TAB_GENERAL));
+        tabsPanel.add(new TabButton("模型服务", TAB_PROFILE));
 
-        groups.add(sectionLabel("后端接口"));
-        groups.add(Box.createVerticalStrut(8));
-
-        JPanel backendCard = Ui.card(Ui.CARD_BG);
-        backendCard.setLayout(new GridBagLayout());
-        int row = 0;
-        row = addRow(backendCard, row, "配置方案", profileRow());
-        row = addRow(backendCard, row, "后端地址", backendUrlField);
-        row = addRow(backendCard, row, "Key", keyField);
-        row = addRow(backendCard, row, "API 类型", apiTypeCombo);
-        row = addRow(backendCard, row, "模型", modelRow());
-        row = addRow(backendCard, row, "温度", temperatureSpinner);
-        addRow(backendCard, row, "最大 Tokens", maxTokensSpinner);
-        groups.add(backendCard);
-
-        groups.add(Box.createVerticalStrut(16));
-        groups.add(sectionLabel("对话体验"));
-        groups.add(Box.createVerticalStrut(8));
-
-        JPanel chatCard = Ui.card(Ui.CARD_BG);
-        chatCard.setLayout(new GridBagLayout());
-        int chatRow = 0;
-        chatRow = addRow(chatCard, chatRow, "主题", themeCombo);
-        chatRow = addRow(chatCard, chatRow, "正文字号", fontSizeSpinner);
-        chatRow = addRow(chatCard, chatRow, "关闭按钮", trayCheckBox);
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(6, 14, 6, 14);
-        gbc.anchor = GridBagConstraints.WEST;
-        gbc.gridx = 0;
-        gbc.gridy = chatRow;
-        gbc.weightx = 0;
-        gbc.fill = GridBagConstraints.NONE;
-        chatCard.add(fieldLabel("系统提示词"), gbc);
-        gbc.gridx = 1;
-        gbc.weightx = 1;
-        gbc.weighty = 1;
-        gbc.fill = GridBagConstraints.BOTH;
-        JScrollPane promptScroll = new JScrollPane(systemPromptArea);
-        promptScroll.setBorder(Ui.inputBorder(Ui.BORDER_STRONG));
-        // JScrollPane 自己的背景会从圆角边框的内衬里露出来（浅色下是白看不出，深色下一圈白边）
-        promptScroll.setBackground(Ui.INPUT_BG);
-        promptScroll.getViewport().setBackground(Ui.INPUT_BG);
-        Ui.styleScrollPane(promptScroll);
-        chatCard.add(promptScroll, gbc);
-        groups.add(chatCard);
-        groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
+        // 两页内容（CardLayout 切换）：每页各自套滚动容器——原先是两卡同屏共用一份
+        // groupsScroll（装不下出滚动条的挤压重排修法），分页后短页不再继承长页的滚动空间。
+        // 页高取两者较大者：切换标签时对话框尺寸不变，行也不被挤压重排
+        pageLayout = new CardLayout();
+        pagesPanel = new JPanel(pageLayout);
+        pagesPanel.setOpaque(false);
+        pagesPanel.add(wrapPage(buildGeneralPage()), TAB_GENERAL);
+        pagesPanel.add(wrapPage(buildProfilePage()), TAB_PROFILE);
+        pageLayout.show(pagesPanel, currentTab);
 
         JButton saveButton = Ui.primaryButton("保存");
         JButton cancelButton = Ui.button("取消");
@@ -192,26 +179,196 @@ public class SettingsDialog extends JDialog {
         buttons.add(cancelButton);
         buttons.add(saveButton);
 
-        // 内容套滚动容器：装得下就全展示，装不下出竖向滚动条——GridBag 永远不缺高度，
-        // 任何行都不会被挤压重排（主题下拉被拉高、正文字号被压扁的根源），以后再加行
-        // 内容变长自动滚动。滚动面板和视口一起设底色，透明轨道不露默认灰（踩坑 #19）
-        JScrollPane groupsScroll = new JScrollPane(groups);
-        groupsScroll.setBorder(BorderFactory.createEmptyBorder());
-        groupsScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        groupsScroll.setBackground(Ui.BG);
-        groupsScroll.getViewport().setBackground(Ui.BG);
-        Ui.styleScrollPane(groupsScroll);
-        groupsScroll.getVerticalScrollBar().setUnitIncrement(16);
-        root.add(groupsScroll, BorderLayout.CENTER);
+        root.add(tabsPanel, BorderLayout.NORTH);
+        root.add(pagesPanel, BorderLayout.CENTER);
         root.add(buttons, BorderLayout.SOUTH);
         setContentPane(root);
 
-        // 高度跟随内容首选：pack 拿全量（保底 700），小屏按屏高九成截断——超出部分由上面的
-        // 滚动容器接管，行高永远按首选渲染
+        // 高度跟随内容首选：pack 拿全量（两页的较高者，保底 700 换页不跳尺寸），小屏按屏高九成
+        // 截断——超出部分由各页的滚动容器接管，行高永远按首选渲染
         pack();
         int screenHeight = Toolkit.getDefaultToolkit().getScreenSize().height;
         setSize(560, Math.min(Math.max(getHeight(), 700), screenHeight * 9 / 10));
         setLocationRelativeTo(owner);
+    }
+
+    /** 通用页：全局对话体验（主题/正文字号/关闭按钮托盘） */
+    private JPanel buildGeneralPage() {
+        JPanel groups = new JPanel();
+        groups.setLayout(new BoxLayout(groups, BoxLayout.Y_AXIS));
+        groups.setBackground(Ui.BG);
+        groups.setBorder(BorderFactory.createEmptyBorder(6, 18, 4, 18));
+
+        JPanel chatCard = Ui.card(Ui.CARD_BG);
+        chatCard.setLayout(new GridBagLayout());
+        int chatRow = 0;
+        chatRow = addRow(chatCard, chatRow, "主题", themeCombo);
+        chatRow = addRow(chatCard, chatRow, "正文字号", fontSizeSpinner);
+        addRow(chatCard, chatRow, "关闭按钮", trayCheckBox);
+        // 系统提示词是每套配置方案自己的值（落 Profile），随方案在模型服务页编辑
+        groups.add(chatCard);
+        groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
+        return groups;
+    }
+
+    /** 模型服务页：配置方案管理 + 一套方案的全部参数（含系统提示词，随方案存取） */
+    private JPanel buildProfilePage() {
+        JPanel groups = new JPanel();
+        groups.setLayout(new BoxLayout(groups, BoxLayout.Y_AXIS));
+        groups.setBackground(Ui.BG);
+        groups.setBorder(BorderFactory.createEmptyBorder(6, 18, 4, 18));
+
+        JPanel backendCard = Ui.card(Ui.CARD_BG);
+        backendCard.setLayout(new GridBagLayout());
+        int row = 0;
+        row = addRow(backendCard, row, "配置方案", profileRow());
+        row = addRow(backendCard, row, "后端地址", backendUrlField);
+        row = addRow(backendCard, row, "Key", keyField);
+        row = addRow(backendCard, row, "API 类型", apiTypeCombo);
+        row = addRow(backendCard, row, "模型", modelRow());
+        row = addRow(backendCard, row, "温度", temperatureSpinner);
+        row = addRow(backendCard, row, "最大 Tokens", maxTokensSpinner);
+        // 系统提示词占满卡片剩余高：多行文本区装在满高滚动容器里（原对话体验卡的排法平移过来）
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(6, 14, 6, 14);
+        gbc.anchor = GridBagConstraints.WEST;
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        backendCard.add(fieldLabel("系统提示词"), gbc);
+        gbc.gridx = 1;
+        gbc.weightx = 1;
+        gbc.weighty = 1;
+        gbc.fill = GridBagConstraints.BOTH;
+        JScrollPane promptScroll = new JScrollPane(systemPromptArea);
+        promptScroll.setBorder(Ui.inputBorder(Ui.BORDER_STRONG));
+        // JScrollPane 自己的背景会从圆角边框的内衬里露出来（浅色下是白看不出，深色下一圈白边）
+        promptScroll.setBackground(Ui.INPUT_BG);
+        promptScroll.getViewport().setBackground(Ui.INPUT_BG);
+        Ui.styleScrollPane(promptScroll);
+        backendCard.add(promptScroll, gbc);
+
+        groups.add(backendCard);
+        groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
+        return groups;
+    }
+
+    /** 单页套滚动容器（原 groupsScroll 同款）：装不下出竖向滚动条、行永不挤压重排；
+     *  滚动面板和视口一起设底色，透明轨道不露默认灰（踩坑 #19） */
+    private JScrollPane wrapPage(JPanel page) {
+        JScrollPane scroll = new JScrollPane(new TrackablePage(page));
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBackground(Ui.BG);
+        scroll.getViewport().setBackground(Ui.BG);
+        Ui.styleScrollPane(scroll);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        return scroll;
+    }
+
+    /**
+     * 页面外层：宽度始终跟随视口（横向永不裁）。原先视图按自己的首选宽（约 532）
+     * 保持横宽，视口 484 时右缘直接被裁 ~48px——字段右端、"删除"按钮被硬切；
+     * 跟随后多余宽度由卡片里的 GridBag 压缩到加权列上：自动换行的文本区按视口
+     * 宽重排，下拉/输入框填充可用宽，不再出现"内容画到视口外"。
+     * 高度不跟随：页面超高照常出竖向滚动条（横向滚动条策略 NEVER 也不可见）。
+     */
+    private static final class TrackablePage extends JPanel implements Scrollable {
+        private final JComponent content;
+
+        TrackablePage(JComponent content) {
+            super(new BorderLayout());
+            this.content = content;
+            add(content, BorderLayout.CENTER);
+        }
+
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle rect, int orientation, int direction) {
+            return 16;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle rect, int orientation, int direction) {
+            return rect.height;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false; // 高度不跟随：超高出竖向滚动条
+        }
+    }
+
+    /** 切换标签页：CardLayout 换页 + 两枚胶囊重画（选中态在 paint 里现场比对 currentTab） */
+    private void switchTab(String tabId) {
+        if (currentTab.equals(tabId)) {
+            return;
+        }
+        currentTab = tabId;
+        pageLayout.show(pagesPanel, tabId);
+        tabsPanel.repaint();
+    }
+
+    /**
+     * 顶部标签页按钮：选中主题色实心胶囊+白字（悬停加深），未选中透底+次要字+悬停浅底。
+     * paint 现场读 Ui 镜像配色（本对话框每次打开新建，不涉及换主题重建的路径）
+     */
+    private final class TabButton extends JButton {
+        private final String tabId;
+        private boolean hover;
+
+        TabButton(String text, String tabId) {
+            super(text);
+            this.tabId = tabId;
+            setContentAreaFilled(false);
+            setFocusPainted(false);
+            setBorder(BorderFactory.createEmptyBorder());
+            setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+            setFont(new Font("微软雅黑", Font.BOLD, 12));
+            addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseEntered(MouseEvent e) {
+                    hover = true;
+                    repaint();
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    hover = false;
+                    repaint();
+                }
+            });
+            addActionListener(e -> switchTab(tabId));
+            // 胶囊宽度随字长：文字宽 + 左右 24 内衬（不写死，两个页名字长度不等）
+            setPreferredSize(new Dimension(getFontMetrics(getFont()).stringWidth(text) + 24, 28));
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            boolean selected = tabId.equals(currentTab);
+            if (selected) {
+                g2.setColor(hover ? Ui.ACCENT_PRESSED : Ui.ACCENT);
+                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 16, 16);
+            } else if (hover) {
+                g2.setColor(Ui.BUTTON_HOVER_BG);
+                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 16, 16);
+            }
+            g2.dispose();
+            setForeground(selected ? Color.WHITE : Ui.TEXT_SECONDARY);
+            super.paintComponent(g);
+        }
     }
 
     public boolean isSaved() {
@@ -304,13 +461,34 @@ public class SettingsDialog extends JDialog {
         return Ui.confirmDialog(this, title, message, "确定", false);
     }
 
-    /** 方案行：下拉 + 新建/重命名/删除 */
-    private JPanel profileRow() {        JPanel rowPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+    /**
+     * 方案行：下拉在上、新建/重命名/删除在下（两行式）。
+     * 一行式（下拉 150 + 三枚按钮 198 ≈ 356）超出 GridBag 压缩后的列宽：本对话框在
+     * WSLg 下窗口装饰吞掉左右各 38px，视口只有 484，卡片被压到 448、列宽 308，
+     * 而 FlowLayout 永不换行（踩坑 #23）会把"删除"按钮裁掉一半。分两行后行首选宽
+     * = max(下拉 150, 按钮 198) = 198，任何宽度的窗口都稳；下拉占满整行随窗口伸缩。
+     */
+    private JPanel profileRow() {
+        JPanel rowPanel = new JPanel(new GridBagLayout());
         rowPanel.setOpaque(false);
-        rowPanel.add(profileCombo);
-        rowPanel.add(profileAddButton);
-        rowPanel.add(profileRenameButton);
-        rowPanel.add(profileDeleteButton);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL; // 下拉占满行宽：宽窗更易读，窄窗收缩
+        rowPanel.add(profileCombo, gbc);
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        buttons.setOpaque(false);
+        buttons.add(profileAddButton);
+        buttons.add(profileRenameButton);
+        buttons.add(profileDeleteButton);
+        gbc.gridy = 1;
+        gbc.insets = new Insets(4, 0, 0, 0);
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.anchor = GridBagConstraints.WEST; // 按钮按自然宽度靠左，不随拉伸变宽
+        rowPanel.add(buttons, gbc);
 
         profileCombo.addActionListener(e -> {
             if (suppressProfileSwitch) {
@@ -458,14 +636,6 @@ public class SettingsDialog extends JDialog {
         settings.applyProfiles(working, selectedName); // 内部落盘 + fireChanged
         saved = true;
         dispose();
-    }
-
-    private JLabel sectionLabel(String text) {
-        JLabel label = new JLabel(text);
-        label.setFont(new Font("微软雅黑", Font.BOLD, 13));
-        label.setForeground(Ui.TEXT);
-        label.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        return label;
     }
 
     private JLabel fieldLabel(String text) {

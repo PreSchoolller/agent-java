@@ -48,12 +48,13 @@ import java.util.Properties;
  * 按需加载断言（LAZY_OK：新建 store 不读会话文件、元数据保存不重写会话文件、触达消息才读）、
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、
  * Markdown 解析断言（MD_PARSE_OK）、
+ * 设置面板分页切换断言（默认页/双向往返 + 5b 号通用页截图）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
  * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗与工作区显示条断言（WORKSPACE_OK）+
  * 窄窗口工具审批/摘要不能裁掉一个按钮、展开能看见参数全文（NARROW_OK）+
  * 输入框高度自适应增高/触帽内部滚动/清空回落（INPUT_OK）+
  * 二十三张截图
- * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
+ * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置(5b通用页),6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
  * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索,20工作区弹窗,21输入增高}.png（SHOT_OK）。 * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
@@ -418,8 +419,21 @@ public class Shot {
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
-            dialog.dispose();
         });
+
+        // —— 设置面板分页断言（计划外）：默认页=模型服务；两枚胶囊来回切，各自页内控件在/不在。
+        //  用 uiHasShowingTextAnyWindow：CardLayout 隐藏页的组件仍在容器树里，不带显隐过滤会误报 ——
+        expect(uiHasShowingTextAnyWindow("配置方案") && uiHasShowingTextAnyWindow("API 类型"), "默认页=模型服务页");
+        expect(!uiHasShowingTextAnyWindow("正文字号"), "模型服务页不含全局项");
+        edt(() -> uiClickAnyWindow("通用"));
+        Thread.sleep(400);
+        expect(uiHasShowingTextAnyWindow("正文字号") && uiHasShowingTextAnyWindow("主题"), "切到通用页（全局项在）");
+        expect(!uiHasShowingTextAnyWindow("配置方案"), "通用页不含配置方案控件");
+        captureDialog(args[0] + "-5b-settings-general.png", "设置");
+        edt(() -> uiClickAnyWindow("模型服务"));
+        Thread.sleep(400);
+        expect(uiHasShowingTextAnyWindow("配置方案"), "切回模型服务页");
+        edt(() -> dialogHolder[0].dispose());
 
         // —— 截图 6：Markdown 渲染（标题/行内样式/代码块/列表/引用/分隔线/表格） ——
         // 切会话会自动滚到底，先滚回顶部让卡片开头的标题入镜
@@ -1149,6 +1163,32 @@ public class Shot {
             }
         }
         throw new AssertionError("没找到可点击组件: " + name);
+    }
+
+    /** 全部顶层窗口里是否有"显示中"的全等文本标签/按钮（设置分页断言用：CardLayout 隐藏页
+     *  的组件仍在树里，uiHasTextAnyWindow 不看显隐会把非当前页也报成"在"） */
+    private static boolean uiHasShowingTextAnyWindow(String text) throws Exception {
+        boolean[] found = new boolean[1];
+        edt(() -> {
+            for (java.awt.Window window : java.awt.Window.getWindows()) {
+                List<Component> all = new ArrayList<>();
+                collectComponents(window, all);
+                for (Component component : all) {
+                    if (component.isShowing()) {
+                        if (component instanceof javax.swing.AbstractButton button
+                                && text.equals(button.getText())) {
+                            found[0] = true;
+                            return;
+                        }
+                        if (component instanceof javax.swing.JLabel label && text.equals(label.getText())) {
+                            found[0] = true;
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        return found[0];
     }
 
     /** 显示中的按钮（全等文本）是否完整落在主窗范围内（窄窗口审批按钮被裁的回归断言用） */
