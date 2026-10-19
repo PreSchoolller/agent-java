@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
+import static io.github.preschoolller.agentjava.frontend.store.JsonKit.parse;
+
 /**
  * 应用设置（单例）：持久化到 ~/.agentjava/settings.properties。
  * 结构：若干套命名配置方案（Profile，后端请求参数）+ 当前方案名 + 全局 UI 偏好（正文字号）。
@@ -180,6 +182,19 @@ public final class AppSettings {
 
     public List<String> getModels() {
         return getActiveProfile().getModels();
+    }
+
+    /** 活动方案里按名字找模型元数据（输入区"默认推理等级"带出用）；找不到返回 null */
+    public ModelMeta getModelMeta(String model) {
+        if (model == null) {
+            return null;
+        }
+        for (ModelMeta meta : getActiveProfile().getModelMetas()) {
+            if (meta.getName().equals(model)) {
+                return meta;
+            }
+        }
+        return null;
     }
 
     public String getModel() {
@@ -359,7 +374,17 @@ public final class AppSettings {
             properties.setProperty(prefix + "backendUrl", profile.getBackendUrl());
             properties.setProperty(prefix + "key", profile.getKey());
             properties.setProperty(prefix + "model", profile.getModel());
-            properties.setProperty(prefix + "models", String.join(",", profile.getModels()));
+            // 模型目录（含元数据）整块序列化；逗号列在 JSON 里不影响属性值边界（properties 值不截断）
+            StringBuilder metasJson = new StringBuilder("[");
+            List<ModelMeta> metas = profile.getModelMetas();
+            for (int i = 0; i < metas.size(); i++) {
+                if (i > 0) {
+                    metasJson.append(',');
+                }
+                metasJson.append(JsonKit.write(metas.get(i).toJson()));
+            }
+            metasJson.append(']');
+            properties.setProperty(prefix + "modelsMeta", metasJson.toString());
             properties.setProperty(prefix + "apiType", profile.getApiType());
             properties.setProperty(prefix + "temperature", String.valueOf(profile.getTemperature()));
             properties.setProperty(prefix + "maxTokens", String.valueOf(profile.getMaxTokens()));
@@ -436,11 +461,27 @@ public final class AppSettings {
         profile.setBackendUrl(properties.getProperty(prefix + "backendUrl", profile.getBackendUrl()));
         profile.setKey(properties.getProperty(prefix + "key", profile.getKey()));
         profile.setModel(properties.getProperty(prefix + "model", profile.getModel()));
-        // models 缺省（老文件）时用 model 单值兜底成单元素列表；setModels 内部保证 model ∈ models
-        String models = properties.getProperty(prefix + "models");
-        profile.setModels(models != null && !models.isBlank()
-                ? Arrays.stream(models.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList()
-                : List.of(profile.getModel()));
+        // 模型目录：新键 modelsMeta 整块 JSON；缺键（老文件）用旧逗号 models 键兜底，再缺用默认项单元素
+        String modelsMeta = properties.getProperty(prefix + "modelsMeta");
+        if (modelsMeta != null && !modelsMeta.isBlank()) {
+            List<ModelMeta> metas = new ArrayList<>();
+            for (Object item : (List<?>) JsonKit.parse(modelsMeta)) {
+                // 名字空白（手工编辑坏条目）直接丢弃，目录里留空名只会让下拉出空白项
+                ModelMeta meta = ModelMeta.fromJson((Map<String, Object>) item);
+                if (meta.getName() != null && !meta.getName().isBlank()) {
+                    metas.add(meta);
+                }
+            }
+            if (metas.isEmpty()) {
+                metas.add(new ModelMeta(profile.getModel()));
+            }
+            profile.setModelMetas(metas);
+        } else {
+            String models = properties.getProperty(prefix + "models");
+            profile.setModels(models != null && !models.isBlank()
+                    ? Arrays.stream(models.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList()
+                    : List.of(profile.getModel()));
+        }
         // apiType 缺省（老文件）时保持字段默认 response；非法值在 setApiType 里回落
         profile.setApiType(properties.getProperty(prefix + "apiType", profile.getApiType()));
         profile.setTemperature(parseDouble(properties.getProperty(prefix + "temperature"), profile.getTemperature()));
@@ -471,9 +512,11 @@ public final class AppSettings {
         return trimmed.isEmpty() || trimmed.contains(",") ? null : trimmed;
     }
 
+    /** 数值键解析：缺键/非法值都落 fallback（properties 缺键返回 null，Double.parseDouble 炸 NPE，
+     *  手写/半新设置文件不能因为少一个键就起不来） */
     private static double parseDouble(String value, double fallback) {
         try {
-            return Double.parseDouble(value);
+            return value == null ? fallback : Double.parseDouble(value.strip());
         } catch (NumberFormatException e) {
             return fallback;
         }
@@ -481,7 +524,7 @@ public final class AppSettings {
 
     private static int parseInt(String value, int fallback) {
         try {
-            return Integer.parseInt(value);
+            return value == null ? fallback : Integer.parseInt(value.strip());
         } catch (NumberFormatException e) {
             return fallback;
         }

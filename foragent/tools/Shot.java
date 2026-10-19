@@ -9,6 +9,7 @@ import io.github.preschoolller.agentjava.frontend.store.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 import io.github.preschoolller.agentjava.frontend.store.JsonKit;
 import io.github.preschoolller.agentjava.frontend.store.Message;
+import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
 
 import javax.imageio.ImageIO;
 import javax.swing.JCheckBox;
@@ -54,7 +55,7 @@ import java.util.Properties;
  * 窄窗口工具审批/摘要不能裁掉一个按钮、展开能看见参数全文（NARROW_OK）+
  * 输入框高度自适应增高/触帽内部滚动/清空回落（INPUT_OK）+
  * 二十三张截图
- * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置(5b通用页),6markdown,7流式,8悬停菜单,
+ * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置(5b通用页/5c目录展开),6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
  * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索,20工作区弹窗,21输入增高}.png（SHOT_OK）。 * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
@@ -242,6 +243,15 @@ public class Shot {
         expect(testSettings.getActiveProfile().getModel().equals("model-c"), "默认项不在列表里落到第一个");
         testSettings.getActiveProfile().setModels(List.of("model-a", "model-b"));
         testSettings.getActiveProfile().setModel("model-b");
+        // 模型目录元数据（计划外）：名字/上下文/最大输出/推理等级/输入能力整块落盘往返
+        ModelMeta richA = new ModelMeta("model-a");
+        richA.setCtxWindow("256K");
+        richA.setMaxOutput("32K");
+        richA.setReasoning("HIGH");
+        richA.setText(true);
+        ModelMeta richB = new ModelMeta("model-b");
+        richB.setImage(true);
+        testSettings.getActiveProfile().setModelMetas(List.of(richA, richB));
         testSettings.addProfile("写作", testSettings.getActiveProfile());
         testSettings.setActiveProfileName("写作");
         testSettings.getActiveProfile().setTemperature(0.3);
@@ -255,6 +265,14 @@ public class Shot {
         expect("model-b".equals(reloaded.getProfile("默认").getModel()), "首个方案参数往返");
         expect(reloaded.getProfile("写作").getModels().equals(List.of("model-a", "model-b")), "模型列表往返");
         expect(reloaded.getProfile("写作").getModel().equals("model-b"), "默认模型往返");
+        ModelMeta savedA = reloaded.getProfile("写作").getModelMetas().get(0);
+        expect("model-a".equals(savedA.getName()) && "256K".equals(savedA.getCtxWindow())
+                && "32K".equals(savedA.getMaxOutput()) && "HIGH".equals(savedA.getReasoning())
+                && savedA.isText() && !savedA.isImage(), "模型元数据往返");
+        expect(reloaded.getProfile("写作").getModelMetas().get(1).isImage(), "模型图片能力往返");
+        expect("HIGH".equals(testSettings.getModelMeta("model-a").normalizedReasoning())
+                && testSettings.getModelMeta("不存在") == null
+                && testSettings.getModelMeta(null) == null, "模型元数据查找与非法推理等级回落");
         // API 类型（计划外，后端待支持）：写值往返；未设置的方案与旧文件缺键都是默认 response
         expect("chatcompletion".equals(reloaded.getProfile("写作").getApiType()), "API 类型往返");
         expect("response".equals(reloaded.getProfile("默认").getApiType()), "未设置方案默认 response");
@@ -282,6 +300,19 @@ public class Shot {
         expect(migrated.getContentFontSize() == 18, "全局字号保留");
         // models 键缺失（旧文件）时用 model 单值兜底成单元素列表
         expect(migrated.getActiveProfile().getModels().equals(List.of("legacy-model")), "旧格式模型列表兜底");
+        // modelsMeta 缺键但 models 逗号键在（上一版格式）回落：名字照收，元数据落默认值
+        Path legacyModels = dir.resolve("legacy-models.properties");
+        Properties legacyModelsProps = new Properties();
+        legacyModelsProps.setProperty("profileNames", "默认");
+        legacyModelsProps.setProperty("activeProfile", "默认");
+        legacyModelsProps.setProperty("profile.默认.model", "old-a");
+        legacyModelsProps.setProperty("profile.默认.models", "old-a,old-b");
+        try (OutputStream out = Files.newOutputStream(legacyModels)) {
+            legacyModelsProps.store(out, "");
+        }
+        AppSettings legacyMigrated = AppSettings.at(legacyModels);
+        expect(legacyMigrated.getModels().equals(List.of("old-a", "old-b")), "旧逗号键模型列表回落");
+        expect(!legacyMigrated.getModelMeta("old-b").isImage(), "缺元数据条目参数落默认值");
         // apiType 键缺失（旧文件）时落默认 response
         expect("response".equals(migrated.getActiveProfile().getApiType()), "旧格式 API 类型默认");
         // 主题偏好：默认浅色、非法值忽略、跟随系统档、落盘往返
@@ -403,12 +434,18 @@ public class Shot {
         capture(args[0] + "-4-collapsed.png");
 
         // —— 截图 5：设置面板 ——
-        // 模型列表先钉成两项（内存改动不落盘，同 127 行主题同款）：模型删除按钮"打开即可用"
-        // 的回归断言依赖确定形状——曾经 modelRow 里写死 setEnabled(false) 把初始加载算好的
-        // 可用态按灭，打开面板必灰、切一次方案才恢复
-        List<String> oldModels = AppSettings.get().getActiveProfile().getModels();
+        // 模型目录先钉成两条（内存改动不落盘，同 127 行主题同款）：行删除钮"打开即可用"
+        //（目录>1 的规则接替原模型列表删除钮）与展开参数区断言依赖确定形状——
+        // 曾经 modelRow 写死 setEnabled(false) 把初始可用态按灭（踩坑 #25），Shot 钉死
+        List<ModelMeta> oldMetas = AppSettings.get().getActiveProfile().getModelMetas();
         String oldModel = AppSettings.get().getActiveProfile().getModel();
-        AppSettings.get().getActiveProfile().setModels(List.of("model-a", "model-b"));
+        ModelMeta shotA = new ModelMeta("model-a");
+        shotA.setCtxWindow("256K");
+        shotA.setMaxOutput("32K");
+        shotA.setReasoning("HIGH");
+        ModelMeta shotB = new ModelMeta("model-b");
+        shotB.setImage(true);
+        AppSettings.get().getActiveProfile().setModelMetas(List.of(shotA, shotB));
         AppSettings.get().getActiveProfile().setModel("model-a");
         SettingsDialog[] dialogHolder = new SettingsDialog[1];
         edt(() -> {
@@ -418,8 +455,8 @@ public class Shot {
         });
         Thread.sleep(600);
         boolean[] modelDeleteEnabled = new boolean[1];
-        edt(() -> modelDeleteEnabled[0] = dialogHolder[0].isModelDeleteEnabled());
-        expect(modelDeleteEnabled[0], "打开设置模型删除按钮即可用（模型列表两项）");
+        edt(() -> modelDeleteEnabled[0] = dialogHolder[0].isModelRowDeleteEnabled(0));
+        expect(modelDeleteEnabled[0], "打开设置行删除钮即可用（目录两条）");
         edt(() -> {
             SettingsDialog dialog = dialogHolder[0];
             BufferedImage image = new BufferedImage(dialog.getWidth(), dialog.getHeight(), BufferedImage.TYPE_INT_RGB);
@@ -443,9 +480,26 @@ public class Shot {
         edt(() -> uiClickAnyWindow("模型服务"));
         Thread.sleep(400);
         expect(uiHasShowingTextAnyWindow("配置方案"), "切回模型服务页");
+        // 展开首条：参数区出现（收起态只有名字行）——目录的参数行随"展开/收起"钮切换
+        edt(() -> uiClickAnyWindow("展开"));
+        Thread.sleep(300);
+        expect(uiHasShowingTextAnyWindow("上下文") && uiHasShowingTextAnyWindow("最大输出"),
+                "展开后上下文/最大输出在");
+        expect(uiHasShowingTextAnyWindow("推理等级") && uiHasShowingTextAnyWindow("文本")
+                && uiHasShowingTextAnyWindow("图片"), "展开后推理等级/输入能力在");
+        edt(() -> {
+            SettingsDialog dialog = dialogHolder[0];
+            BufferedImage image = new BufferedImage(dialog.getWidth(), dialog.getHeight(), BufferedImage.TYPE_INT_RGB);
+            dialog.printAll(image.createGraphics());
+            try {
+                ImageIO.write(image, "png", new File(args[0] + "-5c-settings-catalog.png"));
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
         edt(() -> dialogHolder[0].dispose());
-        // 还原模型列表（改动只在内存，给后续深色/托盘段留原样）
-        AppSettings.get().getActiveProfile().setModels(oldModels);
+        // 还原模型目录（改动只在内存，给后续深色/托盘段留原样）
+        AppSettings.get().getActiveProfile().setModelMetas(oldMetas);
         AppSettings.get().getActiveProfile().setModel(oldModel);
 
         // —— 截图 6：Markdown 渲染（标题/行内样式/代码块/列表/引用/分隔线/表格） ——

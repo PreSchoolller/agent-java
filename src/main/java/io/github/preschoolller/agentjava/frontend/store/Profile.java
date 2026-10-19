@@ -17,8 +17,8 @@ public class Profile {
     private String backendUrl = "http://127.0.0.1:8080/chat";
     private String key = "123456789";
     private String model = "default";
-    /** 可选模型列表，model 是其中的默认项（输入区下拉的选项来源） */
-    private List<String> models = new ArrayList<>(List.of("default"));
+    /** 可选模型目录（带元数据），model 是其中的默认项（输入区下拉的选项来源） */
+    private List<ModelMeta> models = new ArrayList<>(List.of(new ModelMeta("default")));
     private String apiType = API_RESPONSE;
     private double temperature = 0.7;
     private int maxTokens = 2048;
@@ -33,7 +33,10 @@ public class Profile {
         copy.backendUrl = backendUrl;
         copy.key = key;
         copy.model = model;
-        copy.models = new ArrayList<>(models);
+        copy.models = new ArrayList<>();
+        for (ModelMeta meta : models) {
+            copy.models.add(meta.copy());
+        }
         copy.apiType = apiType;
         copy.temperature = temperature;
         copy.maxTokens = maxTokens;
@@ -71,18 +74,61 @@ public class Profile {
     }
 
     public List<String> getModels() {
-        return new ArrayList<>(models);
+        List<String> names = new ArrayList<>();
+        for (ModelMeta meta : models) {
+            names.add(meta.getName());
+        }
+        return names;
     }
 
-    /** 更新可选模型列表；默认项不在新列表里时落到第一个，列表空则保持原样 */
+    /** 更新可选模型列表（默认元数据）：老调用方/旧落盘文件用；默认项不在新列表里落到第一个 */
     public void setModels(List<String> models) {
         if (models == null || models.isEmpty()) {
             return;
         }
-        this.models = new ArrayList<>(models);
-        if (!this.models.contains(model)) {
-            model = this.models.get(0);
+        List<ModelMeta> metas = new ArrayList<>();
+        for (String name : models) {
+            metas.add(new ModelMeta(name));
         }
+        applyModelMetas(metas);
+    }
+
+    /** 模型目录（含元数据）的深拷贝读口 */
+    public List<ModelMeta> getModelMetas() {
+        List<ModelMeta> copy = new ArrayList<>();
+        for (ModelMeta meta : models) {
+            copy.add(meta.copy());
+        }
+        return copy;
+    }
+
+    /** 更新模型目录：默认项不在新目录里落到第一个，目录空则保持原样 */
+    public void setModelMetas(List<ModelMeta> metas) {
+        if (metas == null || metas.isEmpty()) {
+            return;
+        }
+        applyModelMetas(new ArrayList<>(metas.stream().map(ModelMeta::copy).toList()));
+    }
+
+    /** 目录替换的共有尾部：塞进不可见拷贝 + 默认项兜底（setModels/setModelMetas 同一规则） */
+    private void applyModelMetas(List<ModelMeta> metas) {
+        models = metas;
+        if (!containsModel(model)) {
+            model = models.get(0).getName();
+        }
+    }
+
+    /** 名字（strip）在目录里？默认项校验/重命名冲突都看它 */
+    public boolean containsModel(String name) {
+        if (name == null) {
+            return false;
+        }
+        for (ModelMeta meta : models) {
+            if (name.equals(meta.getName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void setModel(String model) {

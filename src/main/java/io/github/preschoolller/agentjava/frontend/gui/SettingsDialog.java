@@ -1,6 +1,7 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
 
 import javax.swing.BorderFactory;
@@ -34,9 +35,12 @@ import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.Toolkit;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,7 +50,8 @@ import java.util.function.Function;
  * 设置面板（模态对话框）：编辑 AppSettings 并持久化。
  * 顶部标签页分两页（胶囊切页，当前页主题色实心）：
  * 「通用」= 全局对话体验（主题/正文字号/关闭按钮）；
- * 「模型服务」= 配置方案的全部参数（方案管理/后端地址/Key/API 类型/模型/温度/最大 Tokens/系统提示词）。
+ * 「模型服务」= 配置方案的全部参数（方案管理/后端地址/Key/API 类型/默认模型/温度/最大 Tokens/系统提示词
+ * + 模型目录：每个模型一条可展开行，编辑名字/上下文窗口/最大输出/默认推理等级/输入能力，落 Profile.modelsMeta）。
  * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
  * 随方案在模型服务页编辑。
  * "模型服务"页首行是配置方案管理（下拉切换 + 新建/重命名/删除）：面板里的一切改动
@@ -76,10 +81,16 @@ public class SettingsDialog extends JDialog {
     private final JTextField keyField = new JTextField();
     /** 后端 API 类型（协议分派由后端实现，当前仅 response 生效） */
     private final JComboBox<String> apiTypeCombo = new JComboBox<>(Profile.API_TYPES.toArray(new String[0]));
-    /** 模型编辑：只读下拉（选中项=输入区默认模型）+ 添加/删除按钮 */
+    /** 默认模型下拉（选中项=输入区默认模型）；选项由模型目录条目名填充 */
     private final JComboBox<String> modelCombo = new JComboBox<>();
     private final JButton modelAddButton = Ui.button("添加");
-    private final JButton modelDeleteButton = Ui.button("删除");
+    /** 模型目录工作副本：条目 UI 直接编辑这里的元数据，保存时整体写回方案（面板公共约定） */
+    private List<ModelMeta> modelCatalog = new ArrayList<>();
+    private JPanel catalogPanel;
+    /** 每个条目的展开态（按元数据对象跟踪；目录重建不丢状态，换方案清空重来） */
+    private final Map<ModelMeta, Boolean> expandedStates = new IdentityHashMap<>();
+    /** 当前行删除按钮（随目录重建刷新；Shot 断言初始可用态用） */
+    private final List<JButton> rowDeleteButtons = new ArrayList<>();
     private final JSpinner temperatureSpinner;
     private final JSpinner maxTokensSpinner;
     private final JSpinner fontSizeSpinner;
@@ -225,7 +236,10 @@ public class SettingsDialog extends JDialog {
         row = addRow(backendCard, row, "后端地址", backendUrlField);
         row = addRow(backendCard, row, "Key", keyField);
         row = addRow(backendCard, row, "API 类型", apiTypeCombo);
-        row = addRow(backendCard, row, "模型", modelRow());
+        row = addRow(backendCard, row, "默认模型", defaultModelRow());
+        // 模型目录独立一行：条目自带展开参数区（上下文窗口/最大输出/推理等级/输入能力），
+        // 目录长出竖向滚动由页级容器接管
+        row = addRow(backendCard, row, "模型目录", catalogBlock());
         row = addRow(backendCard, row, "温度", temperatureSpinner);
         row = addRow(backendCard, row, "最大 Tokens", maxTokensSpinner);
         // 系统提示词占满卡片剩余高：多行文本区装在满高滚动容器里（原对话体验卡的排法平移过来）
@@ -375,40 +389,276 @@ public class SettingsDialog extends JDialog {
         return saved;
     }
 
-    /** 回归取值口（Shot）：模型删除按钮当前可用态——打开面板即应等于"已加载列表项数 > 1" */
-    public boolean isModelDeleteEnabled() {
-        return modelDeleteButton.isEnabled();
+    /** 回归取值口（Shot）：行删除按钮当前可用态——打开面板即应等于"目录条数 > 1" */
+    public boolean isModelRowDeleteEnabled(int index) {
+        if (index < 0 || index >= rowDeleteButtons.size()) {
+            return false;
+        }
+        return rowDeleteButtons.get(index).isEnabled();
     }
 
-    /**
-     * 模型行：只读下拉 + 添加/删除。下拉选中项保存时写回 Profile.model（输入区默认模型）；
-     * 添加走主题弹窗，确定后新名字入列并自动展开下拉（看得见的"加上了"，选中项不变）。
-     */
-    private JPanel modelRow() {
+    /** 默认模型下拉（输入区默认项，原 combo 语义不变）。选项由模型目录条目名填充 */
+    private JComponent defaultModelRow() {
         Ui.styleComboBox(modelCombo);
         modelCombo.setPreferredSize(new Dimension(160, 30));
-        modelCombo.setToolTipText("输入区默认模型");
-        modelAddButton.setPreferredSize(new Dimension(52, 30));
-        modelAddButton.setToolTipText("添加模型");
-        modelDeleteButton.setPreferredSize(new Dimension(52, 30));
-        modelDeleteButton.setToolTipText("删除选中的模型");
-        // 可用态的唯一写者是 syncModelButtons（列表多于一项时可用），这里不设初值——
-        // 构造顺序是先 loadSelectedProfile（算好可用态）再 buildProfilePage，在这里写死
-        // false 会把初始加载算好的状态按灭：打开面板必灰、切一次方案才点亮（历史坑，
-        // 由 Shot 回归断言钉死）
+        modelCombo.setToolTipText("输入区默认模型（模型目录里的一个）");
+        return modelCombo;
+    }
 
+    /** 模型目录块：竖排条目 + 末尾"添加"行；结构变化（增删/展开切换）走整体重建 */
+    private JPanel catalogBlock() {
+        catalogPanel = new JPanel();
+        catalogPanel.setLayout(new BoxLayout(catalogPanel, BoxLayout.Y_AXIS));
+        catalogPanel.setOpaque(false);
+        modelAddButton.setPreferredSize(new Dimension(72, 28));
+        modelAddButton.setToolTipText("添加模型（入列即展开参数区）");
         modelAddButton.addActionListener(e -> addModel());
-        modelDeleteButton.addActionListener(e -> deleteModel());
+        rebuildCatalogPanel();
+        return catalogPanel;
+    }
 
-        JPanel rowPanel = new JPanel(new BorderLayout(6, 0));
-        rowPanel.setOpaque(false);
-        rowPanel.add(modelCombo, BorderLayout.CENTER);
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        buttons.setOpaque(false);
-        buttons.add(modelAddButton);
-        buttons.add(modelDeleteButton);
-        rowPanel.add(buttons, BorderLayout.EAST);
-        return rowPanel;
+    /** 目录整体重建：条目按工作副本顺序生成；行删除钮">1 可删"只在这里算（踩坑 #25 同款：
+     *  状态只留一个写者，不再有第二处会改删除钮可用态） */
+    private void rebuildCatalogPanel() {
+        if (catalogPanel == null) {
+            // 构造期顺序：loadSelectedProfile 先于目录 UI 建（catalogBlock）——此时数据副本
+            // 已就位，目录 UI 由 catalogBlock 建块时再重建一次；直接 return 避免 NPE
+            return;
+        }
+        rowDeleteButtons.clear();
+        catalogPanel.removeAll();
+        for (ModelMeta meta : modelCatalog) {
+            catalogPanel.add(buildModelEntryPanel(meta));
+        }
+        JPanel addRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 2));
+        addRow.setOpaque(false);
+        addRow.add(modelAddButton);
+        catalogPanel.add(addRow);
+        catalogPanel.revalidate();
+        catalogPanel.repaint();
+    }
+
+    /** 单条模型条目：收起=名字 + 展开/删除；展开=参数区（上下文/最大输出/推理等级/输入能力） */
+    private JPanel buildModelEntryPanel(ModelMeta meta) {
+        boolean expanded = Boolean.TRUE.equals(expandedStates.get(meta));
+
+        // 名字编辑：失焦提交（空名/重名回滚），提交后默认模型下拉跟随刷新
+        JTextField nameField = new JTextField(meta.getName());
+        Ui.styleInput(nameField);
+        nameField.setPreferredSize(new Dimension(140, 28));
+        nameField.setToolTipText("模型名（发给后端的 model 参数）");
+        nameField.addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusLost(FocusEvent event) {
+                String value = nameField.getText().strip();
+                if (value.isEmpty() || value.equals(meta.getName()) || modelNameExists(value)) {
+                    nameField.setText(meta.getName()); // 空名/重名回滚（重名会让默认下拉出现两个同名项）
+                    return;
+                }
+                boolean wasDefault = oldNameMatchesDefault(meta.getName());
+                meta.setName(value);
+                refreshDefaultModelCombo(wasDefault ? value : (String) modelCombo.getSelectedItem());
+            }
+        });
+
+        JButton expandButton = Ui.button(expanded ? "收起" : "展开");
+        expandButton.setPreferredSize(new Dimension(56, 24));
+        expandButton.setToolTipText(expanded ? "收起参数区" : "展开参数区");
+        expandButton.addActionListener(e -> {
+            expandedStates.put(meta, !expanded);
+            rebuildCatalogPanel();
+        });
+
+        JButton deleteButton = Ui.button("删除");
+        deleteButton.setPreferredSize(new Dimension(56, 24));
+        deleteButton.setToolTipText("删除该模型");
+        deleteButton.setEnabled(modelCatalog.size() > 1);
+        rowDeleteButtons.add(deleteButton);
+        deleteButton.addActionListener(e -> deleteModelEntry(meta));
+
+        JPanel panel = Ui.panel(10, Ui.INPUT_BG, null);
+        panel.setLayout(new GridBagLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
+
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(2, 4, 2, 4);
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(nameField, gbc);
+        JPanel headerButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        headerButtons.setOpaque(false);
+        headerButtons.add(expandButton);
+        headerButtons.add(deleteButton);
+        gbc.gridx = 1;
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.anchor = GridBagConstraints.EAST;
+        panel.add(headerButtons, gbc);
+
+        if (expanded) {
+            // 参数区：上下文窗口/最大输出（自由文本，失焦落条目）、默认推理等级（下拉即改）、
+            // 输入能力（勾选即改）；元数据即工作副本，保存时整体写回方案
+            JTextField ctxField = new JTextField(meta.getCtxWindow());
+            Ui.styleInput(ctxField);
+            ctxField.setToolTipText("上下文窗口，如 256K 或 128000；留空=未设置（存档，消费方接入后生效）");
+            ctxField.addFocusListener(new FocusAdapter() {
+                @Override
+                public void focusLost(FocusEvent event) {
+                    meta.setCtxWindow(ctxField.getText().strip());
+                }
+            });
+            JTextField maxOutField = new JTextField(meta.getMaxOutput());
+            Ui.styleInput(maxOutField);
+            maxOutField.setToolTipText("最大输出 token 数，如 32K；留空=未设置（存档，消费方接入后生效）");
+            maxOutField.addFocusListener(new FocusAdapter() {
+                @Override
+                public void focusLost(FocusEvent event) {
+                    meta.setMaxOutput(maxOutField.getText().strip());
+                }
+            });
+            JComboBox<String> reasoningCombo = new JComboBox<>(
+                    new String[]{"跟随对话", "关闭", "低", "中", "高", "超高"});
+            reasoningCombo.setSelectedIndex(reasoningIndexOf(meta.getReasoning()));
+            reasoningCombo.setToolTipText("选中该模型时输入区思考强度自动带出");
+            reasoningCombo.addActionListener(e -> meta.setReasoning(
+                    reasoningCombo.getSelectedIndex() == 0 ? "" : REASONING_NAMES[reasoningCombo.getSelectedIndex() - 1]));
+            JCheckBox textBox = new JCheckBox("文本", meta.isText());
+            Ui.styleCheckBox(textBox);
+            textBox.addActionListener(e -> meta.setText(textBox.isSelected()));
+            JCheckBox imageBox = new JCheckBox("图片", meta.isImage());
+            Ui.styleCheckBox(imageBox);
+            imageBox.addActionListener(e -> meta.setImage(imageBox.isSelected()));
+
+            // 参数区独占一行（gridwidth 跨列），内部纵向叠三行各自独立 GridBag：
+            // 同一个 GridBag 里排语义不同的三行时列宽取各行 max、权重跨行耦合
+            //（"最大输出"输入框被勾选行撑爆只剩 1 字），各行独立预算才互不挤
+            JPanel params = new JPanel();
+            params.setOpaque(false);
+            params.setLayout(new BoxLayout(params, BoxLayout.Y_AXIS));
+
+            JPanel windowRow = new JPanel(new GridBagLayout());
+            windowRow.setOpaque(false);
+            GridBagConstraints pgbc = new GridBagConstraints();
+            pgbc.insets = new Insets(3, 0, 0, 8);
+            pgbc.anchor = GridBagConstraints.WEST;
+            pgbc.gridx = 0;
+            pgbc.gridy = 0;
+            pgbc.weightx = 0;
+            pgbc.fill = GridBagConstraints.NONE;
+            windowRow.add(catalogLabel("上下文"), pgbc);
+            pgbc.gridx = 1;
+            pgbc.weightx = 1;
+            pgbc.fill = GridBagConstraints.HORIZONTAL;
+            windowRow.add(ctxField, pgbc);
+            pgbc.gridx = 2;
+            pgbc.weightx = 0;
+            pgbc.fill = GridBagConstraints.NONE;
+            windowRow.add(catalogLabel("最大输出"), pgbc);
+            pgbc.gridx = 3;
+            pgbc.weightx = 1;
+            pgbc.fill = GridBagConstraints.HORIZONTAL;
+            windowRow.add(maxOutField, pgbc);
+            params.add(windowRow);
+
+            JPanel reasoningRow = new JPanel(new GridBagLayout());
+            reasoningRow.setOpaque(false);
+            pgbc.gridx = 0;
+            pgbc.weightx = 0;
+            pgbc.fill = GridBagConstraints.NONE;
+            reasoningRow.add(catalogLabel("推理等级"), pgbc);
+            pgbc.gridx = 1;
+            pgbc.insets = new Insets(3, 0, 0, 0);
+            reasoningRow.add(reasoningCombo, pgbc);
+            // 尾部吸重列：多余宽全给 glue，行内容靠左（否则 GridBag 把余宽平摊，三行起始 x 漂移）
+            pgbc.gridx = 2;
+            pgbc.weightx = 1;
+            reasoningRow.add(Box.createHorizontalGlue(), pgbc);
+            params.add(reasoningRow);
+
+            JPanel capabilityRow = new JPanel(new GridBagLayout());
+            capabilityRow.setOpaque(false);
+            pgbc.anchor = GridBagConstraints.WEST;
+            pgbc.gridx = 0;
+            pgbc.weightx = 0;
+            pgbc.fill = GridBagConstraints.NONE;
+            // 输入能力独占一行：勾选框行（文本+图片≈188px）在窄预算下 FlowLayout 子项
+            // 永不收缩会顶出右缘被裁（图片勾选框"断言在但看不见"，踩坑 #23）
+            capabilityRow.add(catalogLabel("输入能力"), pgbc);
+            pgbc.gridx = 1;
+            capabilityRow.add(textBox, pgbc);
+            pgbc.gridx = 2;
+            capabilityRow.add(imageBox, pgbc);
+            pgbc.gridx = 3;
+            pgbc.weightx = 1;
+            capabilityRow.add(Box.createHorizontalGlue(), pgbc);
+            params.add(capabilityRow);
+
+            gbc.gridx = 0;
+            gbc.gridy = 1;
+            gbc.gridwidth = GridBagConstraints.REMAINDER;
+            gbc.weightx = 1;
+            gbc.fill = GridBagConstraints.HORIZONTAL;
+            panel.add(params, gbc);
+        }
+        return panel;
+    }
+
+    /** 目录参数区的窄标签（fieldLabel 84px 固定宽对 4 字标签太肥，参数区两列放不下） */
+    private JLabel catalogLabel(String text) {
+        JLabel label = new JLabel(text);
+        label.setFont(Ui.FONT_PLAIN);
+        label.setForeground(Ui.TEXT);
+        label.setPreferredSize(new Dimension(56, 20));
+        return label;
+    }
+
+    /** 推理等级枚举名 → 下拉序号（"跟随对话"=0）；没设/非法 → 0 */
+    private int reasoningIndexOf(String reasoning) {
+        for (int i = 0; i < REASONING_NAMES.length; i++) {
+            if (REASONING_NAMES[i].equals(reasoning)) {
+                return i + 1;
+            }
+        }
+        return 0;
+    }
+
+    /** ReasoningEffortEnum 枚举名与设置面板下拉一一对应（0 序号="跟随对话"=不下发推理等级） */
+    private static final String[] REASONING_NAMES = {"NO", "LOW", "MEDIUM", "HIGH", "ULTRA"};
+
+    /** 旧名是否就是默认模型（重命名提交后默认下拉跟着换名） */
+    private boolean oldNameMatchesDefault(String oldName) {
+        return oldName.equals(modelCombo.getSelectedItem());
+    }
+
+    /** 条目名重名检查（strip 比较；空串交给空名回滚分支） */
+    private boolean modelNameExists(String name) {
+        String target = name.strip();
+        for (ModelMeta meta : modelCatalog) {
+            if (meta.getName() != null && meta.getName().strip().equals(target)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 默认模型下拉重建（唯一写者）。preferred=期望选中名；不在目录里落到第一个 */
+    private void refreshDefaultModelCombo(String preferred) {
+        modelCombo.removeAllItems();
+        for (ModelMeta meta : modelCatalog) {
+            String name = meta.getName();
+            if (name != null && !name.isBlank()) {
+                modelCombo.addItem(name);
+            }
+        }
+        String target = preferred != null && modelNameExists(preferred)
+                ? preferred
+                : modelCatalog.isEmpty() ? null : modelCatalog.get(0).getName();
+        modelCombo.setSelectedItem(target);
+        if (modelCombo.getSelectedItem() == null && modelCombo.getItemCount() > 0) {
+            modelCombo.setSelectedIndex(0);
+        }
     }
 
     private void addModel() {
@@ -417,42 +667,26 @@ public class SettingsDialog extends JDialog {
                     if (value.isEmpty()) {
                         return "模型名不能为空";
                     }
-                    return indexOfModel(value) >= 0 ? "该模型已存在" : null;
+                    return modelNameExists(value) ? "该模型已存在" : null;
                 });
         if (name == null) {
             return;
         }
-        modelCombo.addItem(name);
-        modelCombo.repaint();
-        // 自动展开下拉：新名字就在列表里，选中项仍保持默认模型不变
-        modelCombo.showPopup();
-        syncModelButtons();
+        ModelMeta meta = new ModelMeta(name);
+        modelCatalog.add(meta);
+        expandedStates.put(meta, true); // 新条目直接展开参数区（看得见"加上了"，选中项不变）
+        refreshDefaultModelCombo((String) modelCombo.getSelectedItem());
+        rebuildCatalogPanel();
     }
 
-    private void deleteModel() {
-        Object item = modelCombo.getSelectedItem();
-        if (item == null || modelCombo.getItemCount() <= 1) {
-            return; // 按钮置灰是常态，这里是双保险
+    private void deleteModelEntry(ModelMeta meta) {
+        if (modelCatalog.size() <= 1) {
+            return; // 行删除钮置灰是常态，这里是双保险
         }
-        modelCombo.removeItem(item);
-        if (modelCombo.getSelectedItem() == null && modelCombo.getItemCount() > 0) {
-            modelCombo.setSelectedIndex(0); // 删的是默认项时，显示落到第一个
-        }
-        syncModelButtons();
-    }
-
-    private int indexOfModel(String text) {
-        for (int i = 0; i < modelCombo.getItemCount(); i++) {
-            if (text.equals(modelCombo.getItemAt(i))) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    /** 删除按钮只在列表多于一项时可用（"至少保留一个模型"用置灰表达，比弹窗直观） */
-    private void syncModelButtons() {
-        modelDeleteButton.setEnabled(modelCombo.getItemCount() > 1);
+        modelCatalog.remove(meta);
+        expandedStates.remove(meta);
+        refreshDefaultModelCombo((String) modelCombo.getSelectedItem());
+        rebuildCatalogPanel();
     }
 
     /**
@@ -536,15 +770,10 @@ public class SettingsDialog extends JDialog {
         backendUrlField.setText(profile.getBackendUrl());
         keyField.setText(profile.getKey());
         apiTypeCombo.setSelectedItem(profile.getApiType());
-        modelCombo.removeAllItems();
-        for (String model : profile.getModels()) {
-            modelCombo.addItem(model);
-        }
-        modelCombo.setSelectedItem(profile.getModel());
-        if (modelCombo.getSelectedItem() == null && modelCombo.getItemCount() > 0) {
-            modelCombo.setSelectedIndex(0);
-        }
-        syncModelButtons();
+        modelCatalog = profile.getModelMetas(); // 工作副本：条目直接编辑元数据，保存时整体写回
+        expandedStates.clear(); // 换方案目录从收起态开始
+        rebuildCatalogPanel();  // 目录重建（行删除钮可用态只在这里算）
+        refreshDefaultModelCombo(profile.getModel());
         temperatureSpinner.setValue(profile.getTemperature());
         maxTokensSpinner.setValue(profile.getMaxTokens());
         systemPromptArea.setText(profile.getSystemPrompt());
@@ -621,16 +850,18 @@ public class SettingsDialog extends JDialog {
         profile.setBackendUrl(backendUrlField.getText().strip());
         profile.setKey(keyField.getText().strip());
         profile.setApiType((String) apiTypeCombo.getSelectedItem());
-        List<String> models = new ArrayList<>();
-        for (int i = 0; i < modelCombo.getItemCount(); i++) {
-            String item = modelCombo.getItemAt(i);
-            if (item != null && !item.isBlank()) {
-                models.add(item.strip());
+        // 模型目录从条目工作副本收集（名字空白行忽略——重命名中间态兜底）；默认项不在目录里
+        // 落到第一个（Profile 统一兜底），上下文/最大输出/推理等级/输入能力随元数据一起落盘
+        List<ModelMeta> metas = new ArrayList<>();
+        for (ModelMeta meta : modelCatalog) {
+            if (meta.getName() != null && !meta.getName().isBlank()) {
+                metas.add(meta.copy());
             }
         }
-        profile.setModels(models);
+        profile.setModelMetas(metas);
         String selected = (String) modelCombo.getSelectedItem();
-        profile.setModel(selected != null && !selected.isBlank() ? selected.strip() : models.get(0));
+        profile.setModel(selected != null && !selected.isBlank() && profile.containsModel(selected.strip())
+                ? selected.strip() : profile.getModel());
         profile.setTemperature(((Number) temperatureSpinner.getValue()).doubleValue());
         profile.setMaxTokens(((Number) maxTokensSpinner.getValue()).intValue());
         profile.setSystemPrompt(systemPromptArea.getText());

@@ -6,6 +6,7 @@ import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 import io.github.preschoolller.agentjava.frontend.store.Message;
+import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
 
 import javax.swing.BorderFactory;
 import javax.swing.AbstractAction;
@@ -2391,6 +2392,10 @@ public class Window extends JFrame {
         effortCombo.setToolTipText("思考强度");
         Ui.styleComboBox(modelCombo);
         Ui.styleComboBox(effortCombo);
+        // 模型元数据里的"默认推理等级"接出：选中模型变化时思考强度带出该模型的默认值
+        //（元数据没设 = 跟随当前选择，不动）
+        modelCombo.addActionListener(e -> syncEffortToModelDefault());
+        syncEffortToModelDefault(); // 初值也带一次（上面 setSelectedItem 早于监听器注册）
 
         // 输入框左下角：权限模式（计划=只读 / 编辑=允许改文件 / 完全访问=不受限）
         modeCombo = new JComboBox<>(new String[]{"计划模式", "编辑模式", "完全访问", "纯聊天"});
@@ -2473,6 +2478,25 @@ public class Window extends JFrame {
     /** 输入区当前选中的思考强度 */
     public ReasoningEffortEnum getSelectedEffort() {
         return EFFORT_OPTIONS[effortCombo.getSelectedIndex()];
+    }
+
+    /**
+     * 模型目录元数据 → 思考强度下拉：该模型设了默认推理等级就带出，设了空/非法回落
+     * （normalizedReasoning 统一收口）则维持当前选择不重置——"跟随对话"。
+     * 初次构建也调用一次：模型下拉初选完成时监听器尚未注册（注册在 setSelectedItem 之后）。
+     */
+    private void syncEffortToModelDefault() {
+        ModelMeta meta = AppSettings.get().getModelMeta((String) modelCombo.getSelectedItem());
+        if (meta == null || meta.normalizedReasoning().isEmpty()) {
+            return;
+        }
+        ReasoningEffortEnum effort = ReasoningEffortEnum.valueOf(meta.normalizedReasoning());
+        for (int i = 0; i < EFFORT_OPTIONS.length; i++) {
+            if (EFFORT_OPTIONS[i] == effort) {
+                effortCombo.setSelectedIndex(i);
+                return;
+            }
+        }
     }
 
     /** 输入区当前选中的权限模式（左下角） */
