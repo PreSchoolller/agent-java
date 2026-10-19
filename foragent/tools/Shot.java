@@ -403,6 +403,13 @@ public class Shot {
         capture(args[0] + "-4-collapsed.png");
 
         // —— 截图 5：设置面板 ——
+        // 模型列表先钉成两项（内存改动不落盘，同 127 行主题同款）：模型删除按钮"打开即可用"
+        // 的回归断言依赖确定形状——曾经 modelRow 里写死 setEnabled(false) 把初始加载算好的
+        // 可用态按灭，打开面板必灰、切一次方案才恢复
+        List<String> oldModels = AppSettings.get().getActiveProfile().getModels();
+        String oldModel = AppSettings.get().getActiveProfile().getModel();
+        AppSettings.get().getActiveProfile().setModels(List.of("model-a", "model-b"));
+        AppSettings.get().getActiveProfile().setModel("model-a");
         SettingsDialog[] dialogHolder = new SettingsDialog[1];
         edt(() -> {
             SettingsDialog dialog = new SettingsDialog(WINDOW, false);
@@ -410,6 +417,9 @@ public class Shot {
             dialogHolder[0] = dialog;
         });
         Thread.sleep(600);
+        boolean[] modelDeleteEnabled = new boolean[1];
+        edt(() -> modelDeleteEnabled[0] = dialogHolder[0].isModelDeleteEnabled());
+        expect(modelDeleteEnabled[0], "打开设置模型删除按钮即可用（模型列表两项）");
         edt(() -> {
             SettingsDialog dialog = dialogHolder[0];
             BufferedImage image = new BufferedImage(dialog.getWidth(), dialog.getHeight(), BufferedImage.TYPE_INT_RGB);
@@ -434,6 +444,9 @@ public class Shot {
         Thread.sleep(400);
         expect(uiHasShowingTextAnyWindow("配置方案"), "切回模型服务页");
         edt(() -> dialogHolder[0].dispose());
+        // 还原模型列表（改动只在内存，给后续深色/托盘段留原样）
+        AppSettings.get().getActiveProfile().setModels(oldModels);
+        AppSettings.get().getActiveProfile().setModel(oldModel);
 
         // —— 截图 6：Markdown 渲染（标题/行内样式/代码块/列表/引用/分隔线/表格） ——
         // 切会话会自动滚到底，先滚回顶部让卡片开头的标题入镜

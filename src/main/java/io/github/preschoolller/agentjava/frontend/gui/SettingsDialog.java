@@ -375,6 +375,11 @@ public class SettingsDialog extends JDialog {
         return saved;
     }
 
+    /** 回归取值口（Shot）：模型删除按钮当前可用态——打开面板即应等于"已加载列表项数 > 1" */
+    public boolean isModelDeleteEnabled() {
+        return modelDeleteButton.isEnabled();
+    }
+
     /**
      * 模型行：只读下拉 + 添加/删除。下拉选中项保存时写回 Profile.model（输入区默认模型）；
      * 添加走主题弹窗，确定后新名字入列并自动展开下拉（看得见的"加上了"，选中项不变）。
@@ -387,7 +392,10 @@ public class SettingsDialog extends JDialog {
         modelAddButton.setToolTipText("添加模型");
         modelDeleteButton.setPreferredSize(new Dimension(52, 30));
         modelDeleteButton.setToolTipText("删除选中的模型");
-        modelDeleteButton.setEnabled(false);
+        // 可用态的唯一写者是 syncModelButtons（列表多于一项时可用），这里不设初值——
+        // 构造顺序是先 loadSelectedProfile（算好可用态）再 buildProfilePage，在这里写死
+        // false 会把初始加载算好的状态按灭：打开面板必灰、切一次方案才点亮（历史坑，
+        // 由 Shot 回归断言钉死）
 
         modelAddButton.addActionListener(e -> addModel());
         modelDeleteButton.addActionListener(e -> deleteModel());
