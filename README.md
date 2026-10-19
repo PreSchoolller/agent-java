@@ -43,7 +43,8 @@ mvn exec:java -Dexec.mainClass=io.github.preschoolller.agentjava.Main
   保存即热生效（后端监听变更重建 client），深浅主题跟随（可跟随系统）；API 类型可选
   response（当前实现）/ chatcompletion / messages（后端待支持）
 - 输入区：左下权限模式（计划 / 编辑 / 完全访问 / 纯聊天），右下模型与思考强度按对话选择，
-  底部胶囊显示生成状态与 token 用量/耗时，Esc 停止生成
+  底部胶囊显示生成状态与 token 用量/耗时，Esc 停止生成；输入框高度随内容增高，
+  到上限后变内部滚动（光标自动跟着打字位置走），回车发送 / Shift+回车换行
 - 托盘常驻：关闭按钮可配置为最小化到托盘，右键菜单 / 双击恢复
 - 后端：OpenAI Responses API（`backend/provider`），通过 `Provider` 接口对接，工厂创建
 

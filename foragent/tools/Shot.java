@@ -51,11 +51,11 @@ import java.util.Properties;
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
  * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗与工作区显示条断言（WORKSPACE_OK）+
  * 窄窗口工具审批/摘要不能裁掉一个按钮、展开能看见参数全文（NARROW_OK）+
- * 二十二张截图
+ * 输入框高度自适应增高/触帽内部滚动/清空回落（INPUT_OK）+
+ * 二十三张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置,6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
- * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索,20工作区弹窗}.png（SHOT_OK）。
- * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
+ * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索,20工作区弹窗,21输入增高}.png（SHOT_OK）。 * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
 
@@ -874,6 +874,25 @@ public class Shot {
         Thread.sleep(300);
         expect(wsPath.equals(clipboardText()), "复制路径拷纯路径（不带\"（默认）\"）");
         System.out.println("WORKSPACE_OK");
+
+        // —— 输入框高度自适应（计划外）：多行先增高，到上限（240）后不再长、由内部滚动接管
+        //  （长内容曾只能看见首两行，新打的字"藏在视口外"），清空回落到初始高度 ——
+        edt(() -> WINDOW.getInputTextArea().setText("第一行\n第二行\n第三行"));
+        Thread.sleep(300);
+        int grownHeight = WINDOW.getInputPreferredHeight();
+        expect(grownHeight > 48, "多行输入增高（超过原固定高 48）");
+        StringBuilder manyLines = new StringBuilder();
+        for (int i = 0; i < 20; i++) {
+            manyLines.append("第").append(i + 1).append("行\n");
+        }
+        edt(() -> WINDOW.getInputTextArea().setText(manyLines.toString()));
+        Thread.sleep(400);
+        expect(WINDOW.getInputPreferredHeight() == 240, "触帽后不再增高（内部滚动接管）");
+        capture(args[0] + "-21-input-grow.png");
+        edt(() -> WINDOW.getInputTextArea().setText(""));
+        Thread.sleep(400);
+        expect(WINDOW.getInputPreferredHeight() == 48, "清空后回落到初始高度（不只长不缩）");
+        System.out.println("INPUT_OK");
 
         edt(() -> WINDOW.dispose());
         System.out.println("SHOT_OK");

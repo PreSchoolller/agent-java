@@ -134,6 +134,14 @@ public class Window extends JFrame {
     private static final int TOOL_COLLAPSED_HEIGHT = 48;
     /** 展开工具卡的框架高度（内衬 + 时间行 + 内容竖缝），比 AI 卡的 72 小——没有角色标签行 */
     private static final int TOOL_FRAME_EXPANDED = 62;
+    /** 输入框高度自适应（计划外）：随内容先把增高，到上限后变内部滚动。min 即原固定高 48；
+     *  max 按微软雅黑 16 行高 ~25px 约容九行。上限常量也是 Shot 的断言期望值，两处同步改 */
+    private static final int INPUT_MIN_HEIGHT = 48;
+    private static final int INPUT_MAX_HEIGHT = 240;
+    /** 输入框左右内衬（border 14+10）：折行宽度换算用 */
+    private static final int INPUT_SIDE_INSETS = 24;
+    /** 自适应高度的墨迹余量：emoji 等回退字体墨迹超出行框底（= 行内渲染的 TEXT_ROW_INK_SLACK 同源问题） */
+    private static final int INPUT_INK_SLACK = 4;
     private static final DateTimeFormatter TIME_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
@@ -151,6 +159,8 @@ public class Window extends JFrame {
     /** 圆角输入区 */
     private Ui.RoundPanel inputBox;
     private JTextPane inputTextArea;
+    /** 输入区的滚动容器（高度自适应 refitInputHeight；到上限后由内部滚动接管） */
+    private JScrollPane inputScroll;
     private JButton sendButton;
     private JButton stopButton;
     /** 输入区右下角：本次对话的模型与思考强度（对话级选择，选项来自当前方案的模型列表） */
@@ -2295,7 +2305,6 @@ public class Window extends JFrame {
         // 卡片是深色圆角底，文字与光标必须显式设浅色（见踩坑 #19）
         inputTextArea.setForeground(Ui.TEXT);
         inputTextArea.setCaretColor(Ui.TEXT);
-        inputTextArea.setPreferredSize(new Dimension(0, 48));
         inputTextArea.setToolTipText("回车发送，Shift+回车换行");
         inputTextArea.addKeyListener(new KeyAdapter() {
             @Override
@@ -2307,21 +2316,25 @@ public class Window extends JFrame {
                 submitInput();
             }
         });
-        // 草稿按会话暂存：输入内容一变就写当前会话的键，切会话由 showConversation 取回
+        // 草稿按会话暂存：输入内容一变就写当前会话的键，切会话由 showConversation 取回；
+        // 同一事件顺带重算输入框高度（随内容长高/回落/触帽）
         inputTextArea.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
                 saveDraft();
+                refitInputHeight();
             }
 
             @Override
             public void removeUpdate(DocumentEvent e) {
                 saveDraft();
+                refitInputHeight();
             }
 
             @Override
             public void changedUpdate(DocumentEvent e) {
                 saveDraft();
+                refitInputHeight();
             }
 
             private void saveDraft() {
@@ -2399,8 +2412,57 @@ public class Window extends JFrame {
 
         inputBox.setLayout(new BorderLayout(6, 0));
         inputBox.setBorder(BorderFactory.createEmptyBorder(10, 14, 8, 10));
-        inputBox.add(inputTextArea, BorderLayout.CENTER);
+        // 输入文字装进裸滚动容器（不走 display 协议展示设施——input 需要光标把视口拉到光标处的
+        // 默认行为，不会像展示型组件把外层瀑布流"拽屏"，见踩坑 #20）：高度自适应 refitInputHeight，
+        // 到上限后纵向按需滚动条接管，超长打字可见（用户报"长内容看不见新增字符"的修复）
+        inputScroll = new JScrollPane(inputTextArea,
+                ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        inputScroll.setBorder(BorderFactory.createEmptyBorder());
+        inputScroll.setOpaque(false); // 滚动容器背景两处一起设，深色下边框内衬不露白（踩坑 #19）
+        inputScroll.getViewport().setOpaque(false);
+        inputScroll.setViewportBorder(BorderFactory.createEmptyBorder());
+        inputScroll.getVerticalScrollBar().setUnitIncrement(16);
+        Ui.styleScrollPane(inputScroll);
+        inputScroll.setPreferredSize(new Dimension(0, INPUT_MIN_HEIGHT));
+        inputBox.add(inputScroll, BorderLayout.CENTER);
         inputBox.add(controlsRow, BorderLayout.SOUTH);
+        // 改窗口宽度时折行位置变了，高度要按新宽度重算（老布局下长内容会算短显不全）
+        inputBox.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                refitInputHeight();
+            }
+        });
+    }
+
+    /**
+     * 输入框高度跟随内容（计划外）：多行先增高，到 INPUT_MAX_HEIGHT 后不再长——视口比正文窄,
+     * 纵向滚动条按需出场，光标打字自动把视口拉到自己位置（JTextPane + 滚动容器的默认行为）。
+     * 高度用与用户卡片同款的 measureTextHeight 测（折行宽=输入框宽-左右内衬，MeasureCache 命中
+     * 免重测），+墨迹余量防 emoji 裁底；空文本回落 INPUT_MIN_HEIGHT。在 EDT 上调用。
+     */
+    private void refitInputHeight() {
+        if (inputScroll == null) {
+            return; // initInputArea 尚未跑完（首布局的 componentResized 先到）
+        }
+        int boxWidth = inputBox.getWidth();
+        int textWidth = Math.max(0, (boxWidth > 0 ? boxWidth : 480) - INPUT_SIDE_INSETS);
+        int textHeight = measureTextHeight(inputTextArea.getText(), 16, textWidth);
+        int height = Math.max(INPUT_MIN_HEIGHT, Math.min(INPUT_MAX_HEIGHT, textHeight + INPUT_INK_SLACK));
+        inputScroll.setPreferredSize(new Dimension(0, height));
+        inputBox.revalidate();
+        inputBox.repaint();
+    }
+
+    /** 输入文字（回归工具 Shot 断言用；读改都走 setText/getText 的常规语义） */
+    public JTextPane getInputTextArea() {
+        return inputTextArea;
+    }
+
+    /** 输入区滚动容器的当前首选高（回归工具 Shot 断言自适应增高/触帽/回落用） */
+    public int getInputPreferredHeight() {
+        return inputScroll == null ? INPUT_MIN_HEIGHT : inputScroll.getPreferredSize().height;
     }
 
     /** 输入区当前选中的模型（对话级设置） */
