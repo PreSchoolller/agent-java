@@ -521,6 +521,9 @@ public class SettingsDialog extends JDialog {
             JComboBox<String> reasoningCombo = new JComboBox<>(
                     new String[]{"跟随对话", "关闭", "低", "中", "高", "超高"});
             reasoningCombo.setSelectedIndex(reasoningIndexOf(meta.getReasoning()));
+            // 主题化下拉（漏了就是 Metal 原生样式：灰边+默认箭头钮，深色下一块刺眼白）
+            Ui.styleComboBox(reasoningCombo);
+            reasoningCombo.setPreferredSize(new Dimension(96, 28));
             reasoningCombo.setToolTipText("选中该模型时输入区思考强度自动带出");
             reasoningCombo.addActionListener(e -> meta.setReasoning(
                     reasoningCombo.getSelectedIndex() == 0 ? "" : REASONING_NAMES[reasoningCombo.getSelectedIndex() - 1]));
