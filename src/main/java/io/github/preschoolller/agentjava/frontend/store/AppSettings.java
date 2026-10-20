@@ -1,5 +1,7 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
+import io.github.preschoolller.agentjava.backend.constant.Constants;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -13,8 +15,6 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
-import static io.github.preschoolller.agentjava.frontend.store.JsonKit.parse;
-
 /**
  * 应用设置（单例）：持久化到 ~/.agentjava/settings.properties。
  * 结构：若干套命名配置方案（Profile，后端请求参数）+ 当前方案名 + 全局 UI 偏好（正文字号）。
@@ -26,7 +26,7 @@ import static io.github.preschoolller.agentjava.frontend.store.JsonKit.parse;
  */
 public final class AppSettings {
 
-    private static final Path FILE = Path.of(System.getProperty("user.home"), ".agentjava", "settings.properties");
+    private static final Path FILE = Constants.APP_USER_DIR.resolve("settings.properties");
     /** 默认方案名：首次启动与旧配置迁移时创建 */
     public static final String DEFAULT_PROFILE_NAME = "默认";
 
@@ -332,7 +332,7 @@ public final class AppSettings {
      * 默认位置以后要换就改这一处（会话没绑过工作区的会跟着走）。
      */
     public static Path defaultWorkspace() {
-        return Path.of(System.getProperty("user.home"), ".agentjava", "workspace");
+        return Constants.DEFAULT_WORKSPACE_DIR;
     }
 
     /** 工作区路径规范化：去首尾空白、转绝对路径、去冗余段；空串/非法路径返回 null */

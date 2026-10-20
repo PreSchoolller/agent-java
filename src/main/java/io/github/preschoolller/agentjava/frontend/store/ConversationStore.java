@@ -1,5 +1,7 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
+import io.github.preschoolller.agentjava.backend.constant.Constants;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,7 +32,7 @@ public class ConversationStore {
     private final List<Runnable> changeListeners = new ArrayList<>();
 
     public ConversationStore() {
-        this(Path.of(System.getProperty("user.home"), ".agentjava", "history.json"));
+        this(Constants.APP_USER_DIR.resolve("history.json"));
     }
 
     public ConversationStore(Path file) {

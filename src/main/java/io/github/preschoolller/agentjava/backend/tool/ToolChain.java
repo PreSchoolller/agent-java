@@ -7,7 +7,7 @@ import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import java.util.List;
 import java.util.Map;
 
-import static io.github.preschoolller.agentjava.backend.provider.common.Constants.MAPPER;
+import static io.github.preschoolller.agentjava.backend.constant.Constants.MAPPER;
 import static io.github.preschoolller.agentjava.backend.tool.ToolManager.BAD_TOOL;
 
 /**
