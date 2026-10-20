@@ -15,8 +15,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
-import static io.github.preschoolller.agentjava.backend.constant.Constants.MAPPER;
-
 /**
  * 读文件工具
  * path: 工作区相对路径
@@ -80,7 +78,7 @@ public class ToolRead implements Tool {
     @Override
     public String execute(String arguments, String workspace, NeedAdditionalApproval approvalGate) {
         try {
-            JsonNode jsonNode = MAPPER.readTree(arguments);
+            JsonNode jsonNode = Constants.getObjectMapper().readTree(arguments);
             if (jsonNode == null) {
                 return "json parse error: wrong schema";
             }

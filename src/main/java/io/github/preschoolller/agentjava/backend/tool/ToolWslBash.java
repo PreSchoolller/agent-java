@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava.backend.tool;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import org.tinylog.Logger;
 
@@ -11,8 +12,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-
-import static io.github.preschoolller.agentjava.backend.constant.Constants.MAPPER;
 
 public class ToolWslBash implements Tool {
 
@@ -63,7 +62,7 @@ public class ToolWslBash implements Tool {
     @Override
     public String execute(String arguments, String workspace) {
         try {
-            JsonNode jsonNode = MAPPER.readTree(arguments);
+            JsonNode jsonNode = Constants.getObjectMapper().readTree(arguments);
             if (jsonNode == null) {
                 return "json parse error: wrong schema";
             }
