@@ -3,6 +3,7 @@ package io.github.preschoolller.agentjava.backend.tool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import org.tinylog.Logger;
 
 import java.io.File;
 import java.io.IOException;
@@ -41,7 +42,7 @@ public class ToolWslBash implements Tool {
 
     @Override
     public String description() {
-        return "在当前工作区执行wsl bash -c命令，能用单引号的情况尽量不用双引号，windows会截断双引号后的空格后的所有内容";
+        return "在当前工作区执行wsl bash -c命令，如果要使用引号，只能用单引号";
     }
 
     @Override
@@ -90,7 +91,7 @@ public class ToolWslBash implements Tool {
             out = out.isBlank() ? "tool use result is null" : out;
             out += timeOut;
             out += "\nexit code: " + exitCode;
-            System.out.println("bash参数：" + command + " bash 执行结果：" + out);
+            Logger.trace("bash参数：{} bash 执行结果：{}", command, out);
             return out;
         } catch (JsonProcessingException e) {
             return "json parse error: " + e.getMessage();

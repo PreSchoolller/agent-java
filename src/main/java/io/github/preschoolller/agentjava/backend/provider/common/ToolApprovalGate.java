@@ -10,5 +10,5 @@ public interface ToolApprovalGate {
 
     String DENIED_RESULT = "用户拒绝了本次工具调用，工具未执行。请不要重试同一调用，向用户说明后等待指示。";
 
-    boolean allow(ToolCall toolCall, AgentMode mode);
+    boolean allow(ToolCall toolCall, boolean additionalRequest);
 }

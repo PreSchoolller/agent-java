@@ -8,7 +8,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-public class ToolCall {
+public class ToolCall implements Runnable {
 
     private volatile Tool tool;
 
@@ -20,16 +20,24 @@ public class ToolCall {
 
     private volatile String result;
 
+    private volatile String workspace;
+
+    private volatile ToolApprovalGate approvalGate;
+
     private CompletableFuture<Status> statusFinal;
 
     /** 审批放行、进入执行阶段时完成：awaitFinal 的超时只对执行阶段计费 */
     private CompletableFuture<Void> executionStarted;
+
+    /** 审批放行、进入执行阶段时完成：awaitFinal 的超时只对执行阶段计费 */
+    private CompletableFuture<Void> extraGatesDone;
 
     public ToolCall() {
         tool = ToolManager.EMPTY_TOOL;
         status = Status.EMPTY;
         statusFinal = new CompletableFuture<>();
         executionStarted = new CompletableFuture<>();
+        extraGatesDone = new CompletableFuture<>();
     }
 
     public String getResult() {
@@ -66,9 +74,14 @@ public class ToolCall {
         }
     }
 
-    /** 审批结束（放行或拒绝）时调用：等待方从这一刻起开始对执行阶段计超时 */
-    public void markExecutionStarted() {
+    /** 初审结束（放行或拒绝）时调用 */
+    private void markExecutionStarted() {
         executionStarted.complete(null);
+    }
+
+    /** 额外审批结束（放行或拒绝）时调用：等待方从这一刻起开始对执行阶段计超时 */
+    private void markExtraGatesDone() {
+        extraGatesDone.complete(null);
     }
 
     /**
@@ -87,6 +100,13 @@ public class ToolCall {
         } catch (ExecutionException e) {
             throw new RuntimeException(e); // complete(null) 不会异常完成，防御
         }
+        if (tool.needAdditionalApproval()) {
+            try {
+                extraGatesDone.get();
+            } catch (ExecutionException e) {
+                throw new RuntimeException(e); // complete(null) 不会异常完成，防御
+            }
+        }
         try {
             return statusFinal.get(timeout, unit);
         } catch (InterruptedException e) {
@@ -104,6 +124,50 @@ public class ToolCall {
 
     public void setArguments(String arguments) {
         this.arguments = arguments;
+    }
+
+    public void setApprovalGate(ToolApprovalGate gate) {
+        this.approvalGate = gate;
+    }
+
+    public void setWorkspace(String workspace) {
+        this.workspace = workspace;
+    }
+
+    @Override
+    public void run() {
+        // 审批在池线程上做（可阻塞等用户点击）；读流线程只管转发事件，绝不停顿
+        if (approvalGate != null && !approvalGate.allow(this, false)) {
+            markExecutionStarted(); // 先解锁等待方，紧随其后的终态让它直接返回
+            markExtraGatesDone();
+            setResult(ToolApprovalGate.DENIED_RESULT);
+            setStatus(ToolCall.Status.INCOMPLETE);
+            return;
+        }
+        markExecutionStarted(); // 进入执行阶段
+        try {
+            String result;
+            if (tool.needAdditionalApproval()) {
+                result = tool.execute(arguments, workspace, (noMore) -> {
+                    if (noMore) {
+                        markExtraGatesDone(); // 进入实际执行阶段，awaitFinal 的执行超时从这里起算（审批等待不计入）
+                        return true;
+                    }
+                    return approvalGate != null && approvalGate.allow(this, true);
+                });
+                markExtraGatesDone();
+            } else {
+                result = tool.execute(arguments, workspace);
+            }
+            setResult(result);
+            setStatus(ToolCall.Status.COMPLETE);
+        } catch (Exception e) {
+            setResult("tool call error, id: " + getCallId() + " with message: " + e.getMessage());
+            setStatus(ToolCall.Status.INCOMPLETE);
+        } finally {
+            markExtraGatesDone();
+            markExecutionStarted();
+        }
     }
 
     public enum Status {

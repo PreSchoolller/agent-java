@@ -3,6 +3,8 @@ package io.github.preschoolller.agentjava.backend.tool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
+import io.github.preschoolller.agentjava.backend.tool.interfaces.NeedAdditionalApproval;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 
 import java.io.BufferedReader;
@@ -76,7 +78,7 @@ public class ToolRead implements Tool {
     }
 
     @Override
-    public String execute(String arguments, String workspace) {
+    public String execute(String arguments, String workspace, NeedAdditionalApproval approvalGate) {
         try {
             JsonNode jsonNode = MAPPER.readTree(arguments);
             if (jsonNode == null) {
@@ -94,9 +96,10 @@ public class ToolRead implements Tool {
             Path workSpaceDir = workspace == null || workspace.isBlank() ?
                     Constants.DEFAULT_WORKSPACE_DIR : Path.of(workspace);
             target = workSpaceDir.resolve(target).normalize();
-            if (!target.startsWith(workSpaceDir)) {
-                requestApproval();
+            if (!target.startsWith(workSpaceDir) && !requestApproval(approvalGate, false)) {
+                return ToolApprovalGate.DENIED_RESULT;
             }
+            requestApproval(approvalGate, true);
             StringBuilder result = new StringBuilder();
             if (Files.isDirectory(target)) {
                 result.append("requesting path is not a regular file.");
@@ -124,13 +127,25 @@ public class ToolRead implements Tool {
             return "json parse error: " + e.getMessage();
         } catch (IOException e) {
             return "file read error: " + e.getMessage();
+        } finally {
+            requestApproval(approvalGate, true);
         }
     }
 
-    /**
-     * 空方法，待设计；
-     */
-    private void requestApproval() {
+    @Override
+    public boolean needAdditionalApproval() {
+        return true;
+    }
 
+    /**
+     * noMore 为 true 停止审批门禁阻塞，外接开始超时等待工具执行完成。
+     *
+     * @return 审批是否通过，无门禁直接失败
+     */
+    private boolean requestApproval(NeedAdditionalApproval gate, boolean noMore) {
+        if (gate == null) {
+            return false;
+        }
+        return gate.requestApproval(noMore);
     }
 }

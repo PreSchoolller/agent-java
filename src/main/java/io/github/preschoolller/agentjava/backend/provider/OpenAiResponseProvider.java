@@ -406,24 +406,10 @@ public class OpenAiResponseProvider implements Provider {
                     toolCall.setArguments(functionCall.arguments());
                     toolCall.setTool(ToolManager.findByName(functionCall.name()));
                     toolCall.setCallId(functionCall.callId());
+                    toolCall.setApprovalGate(approvalGate);
+                    toolCall.setWorkspace(workspace);
                     putIntoBQ(new FunctionToolCallDoneEvent(functionCall.callId(), toolCall));
-                    ThreadPoolFactory.getToolCallExecutor().execute(() -> {
-                        // 审批在池线程上做（可阻塞等用户点击）；读流线程只管转发事件，绝不停顿
-                        if (approvalGate != null && !approvalGate.allow(toolCall, agentMode)) {
-                            toolCall.markExecutionStarted(); // 先解锁等待方，紧随其后的终态让它直接返回
-                            toolCall.setResult(ToolApprovalGate.DENIED_RESULT);
-                            toolCall.setStatus(ToolCall.Status.INCOMPLETE);
-                            return;
-                        }
-                        toolCall.markExecutionStarted(); // 进入执行阶段，awaitFinal 的执行超时从这里起算（审批等待不计入）
-                        try {
-                            toolCall.setResult(ToolManager.execute(functionCall, workspace));
-                            toolCall.setStatus(ToolCall.Status.COMPLETE);
-                        } catch (Exception e) {
-                            toolCall.setResult("tool call error, id: " + toolCall.getCallId() + " with message: " + e.getMessage());
-                            toolCall.setStatus(ToolCall.Status.INCOMPLETE);
-                        }
-                    });
+                    ThreadPoolFactory.getToolCallExecutor().execute(toolCall);
                 }
                 return null;
             }

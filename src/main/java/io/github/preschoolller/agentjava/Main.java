@@ -25,6 +25,7 @@ import io.github.preschoolller.agentjava.frontend.gui.Window;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.Message;
+import org.tinylog.Logger;
 import org.tinylog.configuration.Configuration;
 
 import javax.swing.SwingUtilities;
@@ -138,8 +139,8 @@ public class Main {
             long outputTokens = 0;
             try {
                 PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
-                        .agentMode(mode).workspace(workspace).approvalGate((toolCall, agentMode) ->
-                                requestToolApproval(toolCall, agentMode, callIdHandleMap, cancelled));
+                        .agentMode(mode).workspace(workspace).approvalGate((toolCall, additionalRequest) ->
+                                requestToolApproval(toolCall, mode, callIdHandleMap, cancelled, additionalRequest));
                 for (PromptParams.RoleMessage roleMessage : history) {
                     paramsBuilder.roleMessages(roleMessage);
                 }
@@ -248,10 +249,14 @@ public class Main {
      */
     private static boolean requestToolApproval(ToolCall toolCall, AgentMode mode,
                                                Map<String, Window.ToolCallHandle> callIdHandleMap,
-                                               AtomicBoolean cancelled) {
-        if (!mode.requiresApproval(toolCall.getTool())) {
+                                               AtomicBoolean cancelled, boolean additionalRequest) {
+        if (!mode.requiresApproval(toolCall.getTool()) && !additionalRequest) {
             return true;
         }
+        if (additionalRequest && AgentMode.FULL_ACCESS.equals(mode)) {
+            return true;
+        }
+        Logger.info("审批工具： {}， 是否额外申请：{}", toolCall.getTool().name(), additionalRequest);
         Window.ToolCallHandle handle = callIdHandleMap.get(toolCall.getCallId());
         if (handle == null || cancelled.get()) {
             return false; // 没有卡片可挂 / 已经叫停：宁可拦下也不静默执行
