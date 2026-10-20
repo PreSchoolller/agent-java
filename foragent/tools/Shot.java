@@ -43,11 +43,11 @@ import java.util.Properties;
  * <pre>
  *   mvn -q compile
  *   javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
- *   java -cp "target/classes:$(mvn -q dependency:build-classpath -Dmdep.outputFile=/dev/stdout)" \
- *       foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
+ *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
- * （3d1d03d 起前端 store 引了 backend.constant.Constants，连带 Jackson 进了类路径，
- *  裸 target/classes 会 ClassNotFoundException；上面的 dependency:build-classpath 一次解决）
+ * （3d1d03d 曾因前端 store 引 backend.constant.Constants 连带 Jackson 进类路径而临时改用
+ *  dependency:build-classpath 全拼依赖；ad68322 把 MAPPER 收进惰性 holder 后，加载 Constants
+ *  不再初始化 Jackson，已复归裸 target/classes——详见踩坑记录 #26 补注）
  * 输出：持久化往返 + 删尾/分叉/置顶/工作区落盘/主文件元数据化（PERSIST_OK）、
  * 按需加载断言（LAZY_OK：新建 store 不读会话文件、元数据保存不重写会话文件、触达消息才读）、
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、
