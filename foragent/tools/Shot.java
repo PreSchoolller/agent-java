@@ -46,7 +46,7 @@ import java.util.Properties;
  *   java -cp "target/classes:$(mvn -q dependency:build-classpath -Dmdep.outputFile=/dev/stdout)" \
  *       foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
- * （457f682 起前端 store 引了 backend.constant.Constants，连带 Jackson 进了类路径，
+ * （3d1d03d 起前端 store 引了 backend.constant.Constants，连带 Jackson 进了类路径，
  *  裸 target/classes 会 ClassNotFoundException；上面的 dependency:build-classpath 一次解决）
  * 输出：持久化往返 + 删尾/分叉/置顶/工作区落盘/主文件元数据化（PERSIST_OK）、
  * 按需加载断言（LAZY_OK：新建 store 不读会话文件、元数据保存不重写会话文件、触达消息才读）、
