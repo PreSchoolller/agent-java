@@ -74,6 +74,9 @@ public class SettingsDialog extends JDialog {
     private final JComboBox<String> themeCombo = new JComboBox<>(new String[]{"跟随系统", "浅色", "深色"});
     /** 关闭按钮最小化到托盘（系统不支持托盘时勾了也只会直接退出） */
     private final JCheckBox trayCheckBox = new JCheckBox("最小化到托盘");
+    /** 日志等级下拉：TinyLog 重启生效，选项=AppSettings.allowLevels 同名值 */
+    private final JComboBox<String> logLevelCombo =
+            new JComboBox<>(new String[]{"trace", "debug", "info", "warn", "error"});
     private final JButton profileAddButton = Ui.button("新建");
     private final JButton profileRenameButton = Ui.button("重命名");
     private final JButton profileDeleteButton = Ui.button("删除");
@@ -140,6 +143,9 @@ public class SettingsDialog extends JDialog {
         trayCheckBox.setSelected(settings.isMinimizeToTray());
         Ui.styleCheckBox(trayCheckBox);
         trayCheckBox.setToolTipText("系统不支持托盘时，关闭按钮仍会直接退出");
+        // 日志等级：TinyLog 启动时读一次（Main→Configuration.set），改了不重启不生效——
+        // 初值直接放等级名（不用中文别名），与写入值一一对应省映射
+        logLevelCombo.setSelectedItem(settings.getLogLevel());
 
         Ui.styleInput(backendUrlField);
         Ui.styleInput(keyField);
@@ -203,7 +209,7 @@ public class SettingsDialog extends JDialog {
         setLocationRelativeTo(owner);
     }
 
-    /** 通用页：全局对话体验（主题/正文字号/关闭按钮托盘） */
+    /** 通用页：全局对话体验（主题/正文字号/关闭按钮托盘/日志等级） */
     private JPanel buildGeneralPage() {
         JPanel groups = new JPanel();
         groups.setLayout(new BoxLayout(groups, BoxLayout.Y_AXIS));
@@ -216,10 +222,25 @@ public class SettingsDialog extends JDialog {
         chatRow = addRow(chatCard, chatRow, "主题", themeCombo);
         chatRow = addRow(chatCard, chatRow, "正文字号", fontSizeSpinner);
         addRow(chatCard, chatRow, "关闭按钮", trayCheckBox);
+        chatRow++;
+        addRow(chatCard, chatRow, "日志等级", buildLogLevelRow());
         // 系统提示词是每套配置方案自己的值（落 Profile），随方案在模型服务页编辑
         groups.add(chatCard);
         groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
         return groups;
+    }
+
+    /**
+     * 日志等级行：选项直接用 TinyLog 等级名（与落盘值一一对应，省中文别名映射）。
+     * TinyLog 在 Main 启动时读一次（Configuration.set("level", ...)），改了不重启不生效——
+     * 这条提示放 tooltip；不接线热更的原因：等级是日志管道的建型参数，运行期切换会中途
+     * 改变滚动行为，调试场景也需要"整段会话同一等级"来排查。
+     */
+    private JComponent buildLogLevelRow() {
+        Ui.styleComboBox(logLevelCombo);
+        logLevelCombo.setPreferredSize(new Dimension(100, 30));
+        logLevelCombo.setToolTipText("Tinylog 日志等级（改后需重启生效）");
+        return logLevelCombo;
     }
 
     /** 模型服务页：配置方案管理 + 一套方案的全部参数（含系统提示词，随方案存取） */
@@ -875,6 +896,7 @@ public class SettingsDialog extends JDialog {
             default -> "light";
         });
         settings.setMinimizeToTray(trayCheckBox.isSelected());
+        settings.setLogLevel((String) logLevelCombo.getSelectedItem());
         settings.applyProfiles(working, selectedName); // 内部落盘 + fireChanged
         saved = true;
         dispose();

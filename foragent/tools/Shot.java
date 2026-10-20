@@ -43,8 +43,11 @@ import java.util.Properties;
  * <pre>
  *   mvn -q compile
  *   javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
- *   java -cp target/classes foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
+ *   java -cp "target/classes:$(mvn -q dependency:build-classpath -Dmdep.outputFile=/dev/stdout)" \
+ *       foragent.tools.Shot D:/CodingSpace/IdeaProjects/agent-java/target/window
  * </pre>
+ * （457f682 起前端 store 引了 backend.constant.Constants，连带 Jackson 进了类路径，
+ *  裸 target/classes 会 ClassNotFoundException；上面的 dependency:build-classpath 一次解决）
  * 输出：持久化往返 + 删尾/分叉/置顶/工作区落盘/主文件元数据化（PERSIST_OK）、
  * 按需加载断言（LAZY_OK：新建 store 不读会话文件、元数据保存不重写会话文件、触达消息才读）、
  * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、
@@ -324,6 +327,13 @@ public class Shot {
         testSettings.setUiTheme("dark");
         testSettings.save();
         expect("dark".equals(AppSettings.at(settingsFile).getUiTheme()), "主题落盘往返");
+        // 日志等级：默认 info、非法值忽略、落盘往返（TinyLog 重启读一次，界面报价见 5 号块 tooltip）
+        expect("info".equals(testSettings.getLogLevel()), "日志等级默认 info");
+        testSettings.setLogLevel("恐怖");
+        expect("info".equals(testSettings.getLogLevel()), "非法日志等级忽略");
+        testSettings.setLogLevel("debug");
+        testSettings.save();
+        expect("debug".equals(AppSettings.at(settingsFile).getLogLevel()), "日志等级落盘往返");
         // resolveTheme：system 档探测后必落在两套主题之一（Windows 读注册表，失败按浅色）
         expect(java.util.Set.of("light", "dark").contains(testSettings.resolvedUiTheme()), "系统主题解析收敛");
         expect(!testSettings.isMinimizeToTray(), "托盘偏好默认关闭");
@@ -474,7 +484,8 @@ public class Shot {
         expect(!uiHasShowingTextAnyWindow("正文字号"), "模型服务页不含全局项");
         edt(() -> uiClickAnyWindow("通用"));
         Thread.sleep(400);
-        expect(uiHasShowingTextAnyWindow("正文字号") && uiHasShowingTextAnyWindow("主题"), "切到通用页（全局项在）");
+        expect(uiHasShowingTextAnyWindow("正文字号") && uiHasShowingTextAnyWindow("主题")
+                && uiHasShowingTextAnyWindow("日志等级"), "切到通用页（全局项在）");
         expect(!uiHasShowingTextAnyWindow("配置方案"), "通用页不含配置方案控件");
         captureDialog(args[0] + "-5b-settings-general.png", "设置");
         edt(() -> uiClickAnyWindow("模型服务"));

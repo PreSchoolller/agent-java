@@ -235,6 +235,13 @@ public final class AppSettings {
         return logLevel;
     }
 
+    /** 仅接受 trace/debug/info/warn/error，其他值忽略（TinyLog 重启读一次，改了不重启不生效） */
+    public void setLogLevel(String logLevel) {
+        if (logLevel != null && allowLevels.contains(logLevel)) {
+            this.logLevel = logLevel;
+        }
+    }
+
     /** 仅接受 "light"/"dark"，其他值忽略 */
     public void setUiTheme(String uiTheme) {
         if ("light".equals(uiTheme) || "dark".equals(uiTheme) || "system".equals(uiTheme)) {
