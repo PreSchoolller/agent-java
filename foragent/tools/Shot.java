@@ -54,13 +54,14 @@ import java.util.Properties;
  * Markdown 解析断言（MD_PARSE_OK）、
  * 设置面板分页切换断言（默认页/双向往返 + 5b 号通用页截图）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
- * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗与工作区显示条断言（WORKSPACE_OK）+
+ * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗 + 侧栏工作区分组与组头加号（WORKSPACE_OK，
+ * 主区工作区显示条已移除，分组头是工作区唯一可见处）+
  * 窄窗口工具审批/摘要不能裁掉一个按钮、展开能看见参数全文（NARROW_OK）+
  * 输入框高度自适应增高/触帽内部滚动/清空回落（INPUT_OK）+
- * 二十三张截图
+ * 二十四张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置(5b通用页/5c目录展开),6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
- * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索,20工作区弹窗,21输入增高}.png（SHOT_OK）。 * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
+ * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索,20工作区弹窗,20b分组加号,21输入增高}.png（SHOT_OK）。 * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
 
@@ -408,8 +409,10 @@ public class Shot {
             expect(WINDOW.getSelectedEffort() != null, "输入区默认思考强度非空");
             expect(WINDOW.getSelectedMode() != null, "输入区默认权限模式非空");
         });
-        // 工作区显示条（计划外）：回归用会话都没绑工作区，条上显示默认工作区并标注"（默认）"
-        expect(uiHasText(AppSettings.defaultWorkspace().toString() + "（默认）"), "工作区条显示默认工作区");
+        // 侧栏按工作区分组：回归用会话都没绑工作区 → 单一"默认工作区"组头；主区工作区显示条已移除
+        expect(sidebarGroupRows().stream().anyMatch(g -> "默认工作区".equals(g[0]) && g[1] == null),
+                "侧栏默认工作区分组在");
+        expect(!uiHasText("复制路径"), "主区工作区显示条已移除（复制路径钮随条消失）");
         capture(args[0] + "-1-expanded.png");
 
         // —— 截图 1b：分隔条拖到 360px（模拟手动拖宽侧栏） ——
@@ -951,9 +954,10 @@ public class Shot {
         Thread.sleep(600);
         expect(WINDOW.getStore().getConversations().size() == conversationsBefore + 1, "确定后新建会话");
         expect(WINDOW.getStore().getActive().getWorkspace() == null, "默认工作区不落到会话");
-        expect(uiHasText(AppSettings.defaultWorkspace().toString() + "（默认）"), "新建默认会话后工作区条仍显示默认");
+        expect(sidebarGroupRows().stream().anyMatch(g -> "默认工作区".equals(g[0]) && g[1] == null),
+                "新建默认会话后默认分组仍在");
 
-        // —— 工作区显示条跟会话（计划外）：弹窗改绑选定目录 → 条跟随显示绑定值；"复制路径"拷纯路径 ——
+        // —— 侧栏分组跟会话 + 组头加号（原"工作区显示条跟会话"+"复制路径"随条移除） ——
         Files.createDirectories(Path.of(wsPath)); // 目录先在着，确定时不触发"是否创建"确认弹窗
         SwingUtilities.invokeLater(() -> uiClickAnyWindow("＋ 新对话"));
         Thread.sleep(800);
@@ -961,10 +965,23 @@ public class Shot {
         edt(() -> uiClickAnyWindow("开始对话"));
         Thread.sleep(600);
         expect(wsPath.equals(WINDOW.getStore().getActive().getWorkspace()), "弹窗选定的工作区落到会话");
-        expect(uiHasText(wsPath), "工作区条显示绑定的工作区");
-        edt(() -> uiClick("复制路径"));
-        Thread.sleep(300);
-        expect(wsPath.equals(clipboardText()), "复制路径拷纯路径（不带\"（默认）\"）");
+        String wsName = Path.of(wsPath).getFileName().toString();
+        expect(sidebarGroupRows().stream().anyMatch(g -> wsName.equals(g[0]) && wsPath.equals(g[1])),
+                "绑定的工作区在侧栏有自己的分组");
+
+        // 组头加号：跳过弹窗直接新建；空会话复用语义生效（当前空对话改绑，不堆空会话）
+        int sizeBeforePlus = WINDOW.getStore().getConversations().size();
+        edt(() -> WINDOW.getSidebar().newConversationInGroup(null)); // 默认组加号：null 绑定
+        Thread.sleep(400);
+        expect(WINDOW.getStore().getConversations().size() == sizeBeforePlus
+                && WINDOW.getStore().getActive().getWorkspace() == null, "默认组加号：空会话改绑默认不新建");
+        edt(() -> WINDOW.getSidebar().newConversationInGroup(wsPath)); // 绑定组加号
+        Thread.sleep(400);
+        expect(WINDOW.getStore().getConversations().size() == sizeBeforePlus
+                && wsPath.equals(WINDOW.getStore().getActive().getWorkspace()), "绑定组加号：空会话改绑组工作区");
+        expect(sidebarGroupRows().stream().anyMatch(g -> wsName.equals(g[0]) && wsPath.equals(g[1])),
+                "加号新建后绑定分组仍在");
+        capture(args[0] + "-20b-workspace-groups.png");
         System.out.println("WORKSPACE_OK");
 
         // —— 输入框高度自适应（计划外）：多行先增高，到上限（240）后不再长、由内部滚动接管
@@ -1382,6 +1399,25 @@ public class Shot {
             }
         });
         return html[0] == null ? "" : html[0];
+    }
+
+    /** 侧栏当前全部工作区分组头按行序快照 = [显示名, 绑定值]（绑定值 null=默认组），复制侧栏行模型 */
+    private static java.util.List<String[]> sidebarGroupRows() throws Exception {
+        List<String[]>[] rows = new List[1];
+        rows[0] = new ArrayList<>();
+        edt(() -> {
+            JList<?> rawList = findConvList(WINDOW);
+            if (rawList != null) {
+                java.util.List<String[]> collected = new ArrayList<>();
+                for (int i = 0; i < rawList.getModel().getSize(); i++) {
+                    if (rawList.getModel().getElementAt(i) instanceof Sidebar.GroupRow row) {
+                        collected.add(new String[]{row.title, row.workspace});
+                    }
+                }
+                rows[0] = collected;
+            }
+        });
+        return rows[0];
     }
 
     /** 深度优先找第一个 JList（侧栏会话列表） */
