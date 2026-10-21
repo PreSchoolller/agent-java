@@ -562,8 +562,12 @@ public class Sidebar extends JPanel {
         GroupHeaderCell() {
             super(null);
             setOpaque(false);
-            name.setFont(new Font("微软雅黑", Font.BOLD, 12));
-            plus.setFont(new Font("微软雅黑", Font.BOLD, 13));
+            // 不钉死物理字体"微软雅黑"：它的回退链是空的，几何字符缺字形就成 .notdef 方框
+            // （Windows 实机截图抓过：▶ 全缺 tofu、▼ 有——WSL 的 Shot 里却都正常，字体文件
+            // 不是一份；踩坑 #5 后续补坑同款，字量不足）。
+            // 字形回退交给逻辑字体：沿用组件默认字体派生粗细与大小，缺的跨物理字体找
+            name.setFont(name.getFont().deriveFont(Font.BOLD));
+            plus.setFont(plus.getFont().deriveFont(Font.BOLD, 13f));
             add(name);
             add(plus);
         }
