@@ -82,8 +82,50 @@ public class Sidebar extends JPanel {
     private final Callbacks callbacks;
     /** 仓库变更监听：存字段是为了 detach 时能注销同一个实例 */
     private final Runnable refreshListener = this::refresh;
-    /** 行模型混装两类行：GroupRow（工作区分组头）+ Conversation（会话行） */
-    private final DefaultListModel<Object> listModel = new DefaultListModel<>();
+    /** 行模型混装两类行：GroupRow（工作区分组头）+ Conversation（会话行）。
+     *  批量重建：refresh 全清全建有 N+1 条 ListDataEvent，每条事件都会让模型监听链
+     *  （UI Handler 的选择插行 + 挂在模型上的 Accessible 监听 + repaint 调度）整体走一遍，
+     *  Windows 实机实测被放大成 1~11ms/事件且代价随行序增长（展开一次 model 段 150~220ms，
+     *  列表变短的收起刷新同一行代码只是上百 µs）。rebuild 期间抑制逐条事件、末尾补发一次
+     *  intervalAdded——监听者只见到最终快照；clear 的移除事件照常逐条（一次一发）不吞 */
+    private static final class BatchListModel<T> extends DefaultListModel<T> {
+        private boolean batching;
+
+        void beginBatch() {
+            batching = true;
+        }
+
+        void endBatch() {
+            batching = false; // 必须先复位再补发：事件自己也在抑制逻辑里（首版后置，事件被自己吞掉，JList 全空白）
+            int size = size();
+            if (size > 0) {
+                fireIntervalAdded(this, 0, size - 1);
+            }
+        }
+
+        @Override
+        protected void fireContentsChanged(Object source, int index0, int index1) {
+            if (!batching) {
+                super.fireContentsChanged(source, index0, index1);
+            }
+        }
+
+        @Override
+        protected void fireIntervalAdded(Object source, int index0, int index1) {
+            if (!batching) {
+                super.fireIntervalAdded(source, index0, index1);
+            }
+        }
+
+        @Override
+        protected void fireIntervalRemoved(Object source, int index0, int index1) {
+            if (!batching) {
+                super.fireIntervalRemoved(source, index0, index1);
+            }
+        }
+    }
+
+    private final BatchListModel<Object> listModel = new BatchListModel<>();
     private final JList<Object> convList = new JList<>(listModel);
     private final JScrollPane listScroll;
     private final JButton toggleButton = Ui.button("≡");
@@ -214,16 +256,22 @@ public class Sidebar extends JPanel {
         ordered.sort(Comparator.comparingLong(
                 (Map.Entry<String, List<Conversation>> entry) -> entry.getValue().stream()
                         .mapToLong(Conversation::getUpdatedAt).max().orElse(Long.MIN_VALUE)).reversed());
-        for (Map.Entry<String, List<Conversation>> entry : ordered) {
-            String workspace = entry.getKey();
-            listModel.addElement(new GroupRow(groupTitle(workspace), workspace, groupTooltip(workspace)));
-            // 收起的组只留组头（搜索激活时忽略收起态——结果整组藏掉等于搜索白做）
-            if (!collapsedGroups.contains(collapseKey(workspace)) || !currentQuery.isEmpty()) {
-                entry.getValue().sort(pinnedFirst);
-                for (Conversation conversation : entry.getValue()) {
-                    listModel.addElement(conversation);
+        // 批量重建：全清全建的逐条事件在慢环境实测 1~11ms/条且随行序增长，折成一发 intervalAdded
+        listModel.beginBatch();
+        try {
+            for (Map.Entry<String, List<Conversation>> entry : ordered) {
+                String workspace = entry.getKey();
+                listModel.addElement(new GroupRow(groupTitle(workspace), workspace, groupTooltip(workspace)));
+                // 收起的组只留组头（搜索激活时忽略收起态——结果整组藏掉等于搜索白做）
+                if (!collapsedGroups.contains(collapseKey(workspace)) || !currentQuery.isEmpty()) {
+                    entry.getValue().sort(pinnedFirst);
+                    for (Conversation conversation : entry.getValue()) {
+                        listModel.addElement(conversation);
+                    }
                 }
             }
+        } finally {
+            listModel.endBatch();
         }
         Conversation active = store.getActive();
         if (matches(active, currentQuery)) {
