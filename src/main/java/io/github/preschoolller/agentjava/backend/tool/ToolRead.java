@@ -29,7 +29,10 @@ public class ToolRead implements Tool {
     private static final String PATH = "path";
     private static final String OFFSET = "offset";
     private static final String LIMIT = "limit";
+    private static final String NO_TRUNCATE = "no_truncate";
     private static final int DEFAULT_LIMIT = 2000;
+    private static final int HUGE_LINE_TRUNCATE = 500;
+    private static final String TRUNCATE_INFO = "...truncated [exceeds " + HUGE_LINE_TRUNCATE + "]";
 
     private static volatile ToolRead instance;
 
@@ -54,7 +57,7 @@ public class ToolRead implements Tool {
 
     @Override
     public String description() {
-        return "读取文本文件内容（相对路径按当前工作区解析），非必要不要超出工作区，若是超出工作区则视情况需要用户审批，较为耗时";
+        return "读取文本文件内容（相对路径按当前工作区解析），非必要不要超出工作区，若是超出工作区则视情况需要用户审批，较为耗时。单行默认超过" + HUGE_LINE_TRUNCATE + "截断。";
     }
 
     @Override
@@ -68,7 +71,8 @@ public class ToolRead implements Tool {
                 "type", "object",
                 "properties", Map.of(
                         PATH, Map.of("type", "string", "description", "文件路径，相对路径以当前工作区为基准"),
-                        OFFSET, Map.of("type", "integer", "description", "起始行数，默认第一行开始"),
+                        OFFSET, Map.of("type", "integer", "description", "起始行数，默认第一行(offset = 1)开始"),
+                        NO_TRUNCATE, Map.of("type", "boolean", "description", "单行超长默认截断，传递true原样返回"),
                         LIMIT, Map.of("type", "integer", "description", "总限制行数，默认2000，最大2000")
                 ),
                 "required", List.of(PATH)
@@ -89,6 +93,7 @@ public class ToolRead implements Tool {
             int offset = Math.max(jsonNode.path(OFFSET).asInt(1), 1);
             int limit = Math.min(jsonNode.path(LIMIT).asInt(DEFAULT_LIMIT), DEFAULT_LIMIT);
             limit = limit < 0 ? DEFAULT_LIMIT : limit;
+            boolean noTruncate = jsonNode.path(NO_TRUNCATE).asBoolean(false);
 
             Path target = Path.of(path);
             Path workSpaceDir = workspace == null || workspace.isBlank() ?
@@ -112,7 +117,13 @@ public class ToolRead implements Tool {
                             cur++;
                             continue;
                         }
-                        result.append(cur).append(":").append(line).append("\n");
+                        result.append(cur).append(":");
+                        if (noTruncate || line.length() < HUGE_LINE_TRUNCATE) {
+                            result.append(line);
+                        } else {
+                            result.append(line, 0, HUGE_LINE_TRUNCATE).append(TRUNCATE_INFO);
+                        }
+                        result.append("\n");
                         cur++;
                     }
                     if (cur != excludeBoundary) {
