@@ -127,6 +127,7 @@ public class Sidebar extends JPanel {
 
     private final BatchListModel<Object> listModel = new BatchListModel<>();
     private final JList<Object> convList = new JList<>(listModel);
+    private ConversationRenderer convRenderer; // 专属行标签持有者，refresh 全量 prune
     private final JScrollPane listScroll;
     private final JButton toggleButton = Ui.button("≡");
     private final JButton newChatButton = Ui.primaryButton("＋ 新对话");
@@ -240,6 +241,7 @@ public class Sidebar extends JPanel {
         currentQuery = searchPlaceholder ? "" : searchField.getText().strip().toLowerCase();
         listModel.clear();
         List<Conversation> conversations = new ArrayList<>(store.getConversations());
+        convRenderer.pruneCellLabels(conversations); // 会话删光后专属标签随之回收
         Comparator<Conversation> pinnedFirst = Comparator
                 .comparingInt((Conversation c) -> c.isPinned() ? 0 : 1)
                 .thenComparing(Comparator.comparingLong(Conversation::getUpdatedAt).reversed());
@@ -256,15 +258,16 @@ public class Sidebar extends JPanel {
         ordered.sort(Comparator.comparingLong(
                 (Map.Entry<String, List<Conversation>> entry) -> entry.getValue().stream()
                         .mapToLong(Conversation::getUpdatedAt).max().orElse(Long.MIN_VALUE)).reversed());
-        // 批量重建：全清全建的逐条事件在慢环境实测 1~11ms/条且随行序增长，折成一发 intervalAdded
+        // 批量重建：逐条 addElement 的事件在慢环境实测 1~11ms/条且随行序增长，折成一发 intervalAdded
+        // （组内排序统一挪到加组头之前：收起态跳过排序会漏排，反正代价只有几百 ns）
         listModel.beginBatch();
         try {
             for (Map.Entry<String, List<Conversation>> entry : ordered) {
                 String workspace = entry.getKey();
+                entry.getValue().sort(pinnedFirst);
                 listModel.addElement(new GroupRow(groupTitle(workspace), workspace, groupTooltip(workspace)));
                 // 收起的组只留组头（搜索激活时忽略收起态——结果整组藏掉等于搜索白做）
                 if (!collapsedGroups.contains(collapseKey(workspace)) || !currentQuery.isEmpty()) {
-                    entry.getValue().sort(pinnedFirst);
                     for (Conversation conversation : entry.getValue()) {
                         listModel.addElement(conversation);
                     }
@@ -439,7 +442,8 @@ public class Sidebar extends JPanel {
     }
 
     private void initConversationList() {
-        convList.setCellRenderer(new ConversationRenderer());
+        convRenderer = new ConversationRenderer();
+        convList.setCellRenderer(convRenderer);
         convList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         convList.setBackground(Ui.SIDEBAR_BG);
         convList.addListSelectionListener(e -> {
@@ -657,7 +661,15 @@ public class Sidebar extends JPanel {
      *  缓存安全；文本一变（徽标/时间/高亮）缓存自然失效重算。 */
     private class ConversationRenderer implements ListCellRenderer<Object> {
         private final GroupHeaderCell headerCell = new GroupHeaderCell();
-        private final SizingLabel conversationCell = new SizingLabel();
+        /** 每个会话一个专属行标签（按身份复用）：共享标签每次全表重算都对每行换文本，
+         *  而异文 setText 会触发 BasicHTML.updateRenderer 重新解析整个 HTML 文档（实测 1~4ms/行，
+         *  真实数据行行文本不同=全表都付）；专属标签文本稳定，同文 setText 走属性相等短路，全表免解析 */
+        private final Map<Conversation, SizingLabel> cellLabels = new java.util.IdentityHashMap<>();
+
+        /** 丢掉已删除会话的标签，防无界增长（refresh 全量调用） */
+        void pruneCellLabels(List<Conversation> alive) {
+            cellLabels.keySet().retainAll(new java.util.HashSet<>(alive));
+        }
 
         @Override
         public Component getListCellRendererComponent(JList<?> list, Object value, int index,
@@ -671,8 +683,8 @@ public class Sidebar extends JPanel {
                 headerCell.setToolTipText(group.tooltip + (collapsed ? "（已收起，点击展开）" : "（点击收起）"));
                 return headerCell;
             }
-            SizingLabel label = conversationCell;
             Conversation conversation = (Conversation) value;
+            SizingLabel label = cellLabels.computeIfAbsent(conversation, c -> new SizingLabel());
             String title = conversation.getTitle() == null || conversation.getTitle().isBlank()
                     ? "新对话"
                     : conversation.getTitle();
@@ -722,10 +734,7 @@ public class Sidebar extends JPanel {
         @Override
         public Dimension getPreferredSize() {
             String key = getText();
-            if (key == null) {
-                return super.getPreferredSize();
-            }
-            Dimension cached = sizeCache.get(key);
+            Dimension cached = key == null ? null : sizeCache.get(key);
             if (cached == null) {
                 cached = super.getPreferredSize();
                 if (sizeCache.size() > 256) {
