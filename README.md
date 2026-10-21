@@ -78,7 +78,7 @@ src/main/java/io/github/preschoolller/agentjava/
 - **组件计划.md** —— 前端做了什么/还欠什么，改动要在这里登记状态；
 - **踩坑记录.md** —— Swing/工程真实踩过的 28 个坑（EDT 线程、首选宽反馈循环、z-order、
   假 exited……），改到对应模块先扫雷；
-- **tools/Shot.java** —— 回归工具：跑一遍出 24 张截图 + 持久化/解析/流式/窗口化/托盘断言，
+- **tools/Shot.java** —— 回归工具：跑一遍出 25 张截图 + 持久化/解析/流式/窗口化/托盘断言，
 
 ```bash
 javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
