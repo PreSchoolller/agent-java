@@ -37,8 +37,7 @@ mvn exec:java -Dexec.mainClass=io.github.preschoolller.agentjava.Main
   完全访问模式下不追问
 - 工作区：新建对话时可选（路径框直接输 + 「浏览…」弹系统资源管理器选目录，目录不存在可现场创建），
   不选就是默认 `~/.agentjava/workspace`；会话里工具的相对路径以工作区为基准，并在系统提示词里告知模型；
-  对话主区顶部显示当前工作区路径（未绑定过的显示默认工作区并标注“默认”），可一键复制；
-  分叉出的会话沿用源会话工作区
+  侧栏会话按工作区分组显示，组头右侧"＋"跳过弹窗直接在该工作区新建对话；分叉出的会话沿用源会话工作区
 - AI 回复 Markdown 渲染：标题/列表/引用/表格/代码块（高亮底 + 复制）/diff 增删行着色/任务勾选，`<think>` 推理块
   单独成块展示（默认收起显示已思考时长，点击展开），链接可点击跳转，流式逐段渲染（120ms 节流），可中断；
   消息文本可划词选中 Ctrl+C 复制
@@ -77,9 +76,9 @@ src/main/java/io/github/preschoolller/agentjava/
 `foragent/` 是给 AI（和人）看的前端交接文档，改前端前必读：
 
 - **组件计划.md** —— 前端做了什么/还欠什么，改动要在这里登记状态；
-- **踩坑记录.md** —— Swing/工程真实踩过的 27 个坑（EDT 线程、首选宽反馈循环、z-order、
+- **踩坑记录.md** —— Swing/工程真实踩过的 28 个坑（EDT 线程、首选宽反馈循环、z-order、
   假 exited……），改到对应模块先扫雷；
-- **tools/Shot.java** —— 回归工具：跑一遍出 15 张截图 + 持久化/解析/流式/窗口化/托盘断言，
+- **tools/Shot.java** —— 回归工具：跑一遍出 24 张截图 + 持久化/解析/流式/窗口化/托盘断言，
 
 ```bash
 javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
