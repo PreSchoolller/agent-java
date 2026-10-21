@@ -32,7 +32,7 @@ public class ToolRead implements Tool {
     private static final String NO_TRUNCATE = "no_truncate";
     private static final int DEFAULT_LIMIT = 2000;
     private static final int HUGE_LINE_TRUNCATE = 500;
-    private static final String TRUNCATE_INFO = "...truncated [exceeds " + HUGE_LINE_TRUNCATE + "]";
+    private static final String TRUNCATE_INFO_PREFIX = "...truncated " + HUGE_LINE_TRUNCATE + "/";
 
     private static volatile ToolRead instance;
 
@@ -118,10 +118,10 @@ public class ToolRead implements Tool {
                             continue;
                         }
                         result.append(cur).append(":");
-                        if (noTruncate || line.length() < HUGE_LINE_TRUNCATE) {
+                        if (noTruncate || line.length() <= HUGE_LINE_TRUNCATE) {
                             result.append(line);
                         } else {
-                            result.append(line, 0, HUGE_LINE_TRUNCATE).append(TRUNCATE_INFO);
+                            result.append(line, 0, HUGE_LINE_TRUNCATE).append(TRUNCATE_INFO_PREFIX).append(line.length());
                         }
                         result.append("\n");
                         cur++;
