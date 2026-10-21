@@ -54,14 +54,14 @@ import java.util.Properties;
  * Markdown 解析断言（MD_PARSE_OK）、
  * 设置面板分页切换断言（默认页/双向往返 + 5b 号通用页截图）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
- * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗 + 侧栏工作区分组与组头加号（WORKSPACE_OK，
+ * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗 + 侧栏工作区分组/组头加号/组头折叠（WORKSPACE_OK，
  * 主区工作区显示条已移除，分组头是工作区唯一可见处）+
  * 窄窗口工具审批/摘要不能裁掉一个按钮、展开能看见参数全文（NARROW_OK）+
  * 输入框高度自适应增高/触帽内部滚动/清空回落（INPUT_OK）+
- * 二十四张截图
+ * 二十五张截图
  * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置(5b通用页/5c目录展开),6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
- * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索,20工作区弹窗,20b分组加号,21输入增高}.png（SHOT_OK）。 * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
+ * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索,20工作区弹窗,20b分组加号,20c组头收起,21输入增高}.png（SHOT_OK）。 * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
 public class Shot {
 
@@ -981,6 +981,18 @@ public class Shot {
                 && wsPath.equals(WINDOW.getStore().getActive().getWorkspace()), "绑定组加号：空会话改绑组工作区");
         expect(sidebarGroupRows().stream().anyMatch(g -> wsName.equals(g[0]) && wsPath.equals(g[1])),
                 "加号新建后绑定分组仍在");
+
+        // —— 组头折叠/展开：点组头收起只留头行（搜索激活时忽略收起态，这里的 query 为空） ——
+        int defaultGroupConvs = (int) WINDOW.getStore().getConversations().stream()
+                .filter(c -> c.getWorkspace() == null || c.getWorkspace().isBlank()).count();
+        int rowsBeforeCollapse = sidebarRowCount();
+        edt(() -> WINDOW.getSidebar().toggleGroupCollapsed(null)); // 折叠默认组
+        Thread.sleep(400);
+        expect(sidebarRowCount() == rowsBeforeCollapse - defaultGroupConvs, "收起组：只留组头，其余随组收掉");
+        capture(args[0] + "-20c-group-collapsed.png");
+        edt(() -> WINDOW.getSidebar().toggleGroupCollapsed(null)); // 再点展开
+        Thread.sleep(400);
+        expect(sidebarRowCount() == rowsBeforeCollapse, "再点组头展开恢复");
         capture(args[0] + "-20b-workspace-groups.png");
         System.out.println("WORKSPACE_OK");
 
@@ -1418,6 +1430,16 @@ public class Shot {
             }
         });
         return rows[0];
+    }
+
+    /** 侧栏会话列表的行数（分组头+会话行混排，计数看收起/展开后的模型变化够用） */
+    private static int sidebarRowCount() throws Exception {
+        int[] count = new int[1];
+        edt(() -> {
+            JList<?> rawList = findConvList(WINDOW);
+            count[0] = rawList == null ? -1 : rawList.getModel().getSize();
+        });
+        return count[0];
     }
 
     /** 深度优先找第一个 JList（侧栏会话列表） */

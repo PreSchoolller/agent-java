@@ -111,6 +111,10 @@ public class Sidebar extends JPanel {
     /** 组头右侧"＋"的可点击区宽度（ px，相对单元格右缘） */
     private static final int PLUS_ZONE_PX = 26;
 
+    /** 收起的工作区分组（键=工作区路径，默认组用空串表示；仅会话内存活，不持久化）。
+     *  搜索激活时收起态被忽略（refresh 里放行所有命中行，结果整组藏掉等于搜索白做） */
+    private final java.util.Set<String> collapsedGroups = new java.util.LinkedHashSet<>();
+
     /** 会话条目的运行状态标注（并行 agent 循环：会话在后台生成/等审批时侧栏可见）。
      *  待确认本身就意味着这轮链还开着，渲染时优先于生成中。 */
     public enum Badge {
@@ -211,9 +215,12 @@ public class Sidebar extends JPanel {
         for (Map.Entry<String, List<Conversation>> entry : ordered) {
             String workspace = entry.getKey();
             listModel.addElement(new GroupRow(groupTitle(workspace), workspace, groupTooltip(workspace)));
-            entry.getValue().sort(pinnedFirst);
-            for (Conversation conversation : entry.getValue()) {
-                listModel.addElement(conversation);
+            // 收起的组只留组头（搜索激活时忽略收起态——结果整组藏掉等于搜索白做）
+            if (!collapsedGroups.contains(collapseKey(workspace)) || !currentQuery.isEmpty()) {
+                entry.getValue().sort(pinnedFirst);
+                for (Conversation conversation : entry.getValue()) {
+                    listModel.addElement(conversation);
+                }
             }
         }
         Conversation active = store.getActive();
@@ -245,9 +252,10 @@ public class Sidebar extends JPanel {
         return workspace == null ? "未绑定工作区的会话（跟随默认工作区设置）" : workspace;
     }
 
-    /** 仅供回归工具：跳过加号命中区直接触发"在该工作区新建"（与组头加号同一代码路径） */
+    /** 仅供回归工具：跳过加号命中区直接触发"在该工作区新建"（与组头加号同一代码路径，
+     *  含自动展开收起组的副作用） */
     public void newConversationInGroup(String workspace) {
-        callbacks.onNewConversationInWorkspace(workspace);
+        createInGroup(workspace);
     }
 
     /** 侧栏折叠时汉堡按钮上的角标：有会话在生成/待审批时点个色点提示（待确认优先）。
@@ -411,11 +419,11 @@ public class Sidebar extends JPanel {
             @Override
             public void mouseReleased(MouseEvent e) {
                 showPopupIfNeeded(e);
-                clickGroupPlus(e); // 左键松开才算点下"＋"（与系统双击/拖拽各不相干）
+                clickGroupHeader(e); // 左键松开才算点下（与系统双击/拖拽各不相干）
             }
 
-            /** 组头右缘的"＋"命中区：点一下直接在该工作区新建对话（跳过工作区弹窗） */
-            private void clickGroupPlus(MouseEvent e) {
+            /** 组头左键：右缘"＋"命中区=直接在该工作区新建，其余区域=收起/展开分组 */
+            private void clickGroupHeader(MouseEvent e) {
                 if (!SwingUtilities.isLeftMouseButton(e) || e.isPopupTrigger()) {
                     return;
                 }
@@ -428,10 +436,36 @@ public class Sidebar extends JPanel {
                 Rectangle visible = convList.getVisibleRect();
                 int visibleRight = visible.x + visible.width;
                 if (e.getPoint().x >= visibleRight - PLUS_ZONE_PX) {
-                    callbacks.onNewConversationInWorkspace(group.workspace);
+                    createInGroup(group.workspace); // 先撫平收起态：新建的会话得看得见
+                } else {
+                    toggleGroupCollapsed(group.workspace);
                 }
             }
         });
+    }
+
+    /** 侧栏内部统一的新建入口：组头"＋"与回归直达都走这里。先展开该组再触发新建——
+     *  收起的组里冒出新会话却看不见，等于按了没反应 */
+    private void createInGroup(String workspace) {
+        collapsedGroups.remove(collapseKey(workspace));
+        callbacks.onNewConversationInWorkspace(workspace);
+    }
+
+    /** 收起/展开一个工作区分组并刷列表（键=工作区路径，默认组用空串；不持久化） */
+    public void toggleGroupCollapsed(String workspace) {
+        java.util.Set<String> collapsed = collapsedGroups;
+        String key = collapseKey(workspace);
+        if (collapsed.contains(key)) {
+            collapsed.remove(key);
+        } else {
+            collapsed.add(key);
+        }
+        refresh();
+    }
+
+    /** 收起态键：与分组键同源（null=默认组），空串让集合保持非 null 元素 */
+    private static String collapseKey(String workspace) {
+        return workspace == null ? "" : workspace;
     }
 
     private void initSettingsButton() {
@@ -567,10 +601,12 @@ public class Sidebar extends JPanel {
         public Component getListCellRendererComponent(JList<?> list, Object value, int index,
                                                       boolean selected, boolean focus) {
             if (value instanceof GroupRow group) {
-                headerCell.name.setText(group.title);
-                headerCell.name.setForeground(Ui.TEXT_SECONDARY);
+                // 箭头标识收起/展开（▶=收起 ▼=展开），与名字同色同粗——点击组头切换的视觉锚点
+                boolean collapsed = collapsedGroups.contains(collapseKey(group.workspace));
+                headerCell.name.setText((collapsed ? "▶ " : "▼ ") + group.title);
+                headerCell.name.setForeground(Ui.TEXT); // 用户反馈组头不显眼：用主文本色，比次要灰重一级
                 headerCell.plus.setForeground(Ui.ACCENT); // 渲染时才读主题：换主题重建后颜色跟新
-                headerCell.setToolTipText(group.tooltip);
+                headerCell.setToolTipText(group.tooltip + (collapsed ? "（已收起，点击展开）" : "（点击收起）"));
                 return headerCell;
             }
             JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, selected, focus);
