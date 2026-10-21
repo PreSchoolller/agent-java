@@ -7,7 +7,6 @@ import io.github.preschoolller.agentjava.frontend.store.Message;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
-import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JLabel;
@@ -17,7 +16,9 @@ import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
+import javax.swing.ListCellRenderer;
 import javax.swing.ListSelectionModel;
+import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -44,6 +45,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -598,8 +600,16 @@ public class Sidebar extends JPanel {
         }
     }
 
-    private class ConversationRenderer extends DefaultListCellRenderer {
+    /** 行渲染器分两路：会话行=标题一行（命中词高亮）+ 置顶标签与更新时间小字 + 内容命中片段（可选）；
+     *  组头行=显示名居左 + 主题色"＋"贴可见区右缘（可点击区）。
+     *  不再继承 DefaultListCellRenderer：它每行吐同一个 JLabel，JList 一动模型就全表重算行高、
+     *  逐行把每行 HTML 重新 inflate 排版一遍（实测展开一个组 10~115ms、冷启动几百 ms——
+     *  "展开卡顿"的大头，工件收在下方分段诊断）。改自持 SizingLabel 按 HTML 文本缓存首选尺寸：
+     *  label 的首选宽本就按不换行单行计、与视口宽无关（行高只吃高度，溢出裁切是列表历史行为），
+     *  缓存安全；文本一变（徽标/时间/高亮）缓存自然失效重算。 */
+    private class ConversationRenderer implements ListCellRenderer<Object> {
         private final GroupHeaderCell headerCell = new GroupHeaderCell();
+        private final SizingLabel conversationCell = new SizingLabel();
 
         @Override
         public Component getListCellRendererComponent(JList<?> list, Object value, int index,
@@ -613,7 +623,7 @@ public class Sidebar extends JPanel {
                 headerCell.setToolTipText(group.tooltip + (collapsed ? "（已收起，点击展开）" : "（点击收起）"));
                 return headerCell;
             }
-            JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, selected, focus);
+            SizingLabel label = conversationCell;
             Conversation conversation = (Conversation) value;
             String title = conversation.getTitle() == null || conversation.getTitle().isBlank()
                     ? "新对话"
@@ -647,6 +657,35 @@ public class Sidebar extends JPanel {
             label.setForeground(Ui.TEXT);
             label.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
             return label;
+        }
+    }
+
+    /** 首选尺寸带缓存的标签：key=当前 HTML 文本（首选宽按不换行计与宽度无关、字体尺寸不随主题变；
+     *  换主题重建侧栏后渲染器连带缓存一起换新）。缓存设 256 条上限、触顶整表清——它只为行高
+     *  重算免重复排版，多存无益 */
+    private static final class SizingLabel extends JLabel {
+        private final Map<String, Dimension> sizeCache = new HashMap<>();
+
+        private SizingLabel() {
+            super("", SwingConstants.LEFT);
+            setOpaque(true); // 原先继承的 DefaultListCellRenderer 本就 opaque，选中底色靠它画
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            String key = getText();
+            if (key == null) {
+                return super.getPreferredSize();
+            }
+            Dimension cached = sizeCache.get(key);
+            if (cached == null) {
+                cached = super.getPreferredSize();
+                if (sizeCache.size() > 256) {
+                    sizeCache.clear();
+                }
+                sizeCache.put(key, cached);
+            }
+            return cached;
         }
     }
 
