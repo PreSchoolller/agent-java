@@ -7,13 +7,16 @@ import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import org.tinylog.Logger;
 
 import java.io.BufferedReader;
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -21,8 +24,9 @@ public class ToolBash implements Tool {
 
     private static final String COMMAND = "command";
     private static final int TIMEOUT = 60; // seconds
+    private static final int SHORT_TIMEOUT = 2; // seconds 用于检测 bash 命令超时
+    private static final int THRESHOLD = 4096; // 超长命令转临时文件执行
 
-    private static volatile List<String> bashHead;
     private static final List<String> BASH_HEAD = List.of("bash");
     private static final List<List<String>> WINDOWS_BASH_HEADS = List.of(
             BASH_HEAD,
@@ -30,6 +34,7 @@ public class ToolBash implements Tool {
             List.of("C:\\Program Files\\Git\\bin\\bash.exe")
     );
     private static volatile boolean valid = true;
+    private static volatile List<String> bashHead;
 
     private ToolBash() {
     }
@@ -50,11 +55,10 @@ public class ToolBash implements Tool {
     @Override
     public String description() {
         return """
-                在当前工作区执行bash -c命令。
+                在临时文件夹执行bash命令。
                 如果agent运行环境（由工作区路径判断）非windows，bash为原生实现。
                 如果agent运行环境为Windows，则bash实现查找顺序(bash -> wsl bash -> git bash)。
                 由于上述三种bash实现的路径表示不一样，可先pwd判断格式再执行绝对路径命令书写。
-                Windows下只能用单引号!Windows下只能用单引号!Windows下只能用单引号!。
                 """;
     }
 
@@ -88,12 +92,7 @@ public class ToolBash implements Tool {
             if (command == null || command.isBlank()) {
                 return "json parse error: wrong command";
             }
-            ArrayList<String> bash = new ArrayList<>(bashHead);
-            bash.add("-c");
-            bash.add(command);
-            ProcessBuilder processBuilder = new ProcessBuilder(bash);
-            processBuilder.directory(new File(workspace));
-            processBuilder.redirectErrorStream(true);
+            ProcessBuilder processBuilder = assembleProcessBuilder(command, workspace);
             Process process = processBuilder.start();
             String out;
             try (BufferedReader reader = new BufferedReader(
@@ -120,6 +119,28 @@ public class ToolBash implements Tool {
             Thread.currentThread().interrupt();
             return "tool use error: bash execute was interrupted, maybe try again later.";
         }
+    }
+
+    private static ProcessBuilder assembleProcessBuilder(String command, String workSpace) throws IOException {
+        ArrayList<String> bash = new ArrayList<>(bashHead);
+        Path path = Path.of(workSpace);
+        Path tmpDir = Constants.TEMP_DIR.resolve(path.getFileName().toString());
+        Files.createDirectories(tmpDir);
+        ProcessBuilder processBuilder;
+        if (command.length() > THRESHOLD) {
+            String tmpName = UUID.randomUUID().toString();
+            Path tmpFile = Files.createTempFile(tmpDir, tmpName, ".sh");
+            Files.writeString(tmpFile, command);
+            bash.add(tmpFile.toFile().getName());
+        } else {
+            String base64 = Base64.getEncoder().encodeToString(command.getBytes(StandardCharsets.UTF_8));
+            bash.add("-c");
+            bash.add("echo " + base64 + " | base64 -d | bash");
+        }
+        processBuilder = new ProcessBuilder(bash);
+        processBuilder.directory(tmpDir.toFile());
+        processBuilder.redirectErrorStream(true);
+        return processBuilder;
     }
 
     private void defineBash() {
@@ -159,7 +180,7 @@ public class ToolBash implements Tool {
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                 String out = reader.lines().collect(Collectors.joining("\n"));
-                boolean exited = process.waitFor(TIMEOUT, TimeUnit.SECONDS);
+                boolean exited = process.waitFor(SHORT_TIMEOUT, TimeUnit.SECONDS);
                 if (exited && out.toLowerCase().contains("gnu bash")) {
                     return true;
                 }
