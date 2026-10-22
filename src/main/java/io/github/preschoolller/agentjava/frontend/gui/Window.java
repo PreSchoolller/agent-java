@@ -31,6 +31,8 @@ import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.WindowConstants;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.StyledDocument;
 import javax.swing.text.View;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -2276,6 +2278,19 @@ public class Window extends JFrame {
         }
     }
 
+    /**
+     * 修饰回车的换行：往光标处手工插一个 \n（须在 EDT，本方法只会从 keyPressed 分支调）。
+     * 插入会经 DocumentListener 走既有的 saveDraft + refitInputHeight，与打字母同路径。
+     */
+    private void insertNewlineAtCaret() {
+        try {
+            ((StyledDocument) inputTextArea.getDocument())
+                    .insertString(inputTextArea.getCaretPosition(), "\n", null);
+        } catch (BadLocationException ex) {
+            // 光标位置理论上不会越界（caret 始终停留在有效区间）；真越界吞掉保输入线程安全
+        }
+    }
+
     private void initInputArea() {
         inputBox = Ui.panel(20, Ui.CARD_BG, Ui.BORDER_STRONG);
         inputTextArea = new JTextPane();
@@ -2287,15 +2302,29 @@ public class Window extends JFrame {
         // 卡片是深色圆角底，文字与光标必须显式设浅色（见踩坑 #19）
         inputTextArea.setForeground(Ui.TEXT);
         inputTextArea.setCaretColor(Ui.TEXT);
-        inputTextArea.setToolTipText("回车发送，Shift+回车换行");
+        inputTextArea.setToolTipText("回车发送；Shift/ Ctrl+回车换行");
+        // 纯回车发送；Shift/ Ctrl 的回车由我们自己往光标处插 \n——修饰回车的默认 binding
+        // 不可靠（探针实测连默认 insert-break 都可能不触发，Ctrl+回车更是没默认 binding），
+        // 所以不赌 L&F 的默认行为；typed 的 '\n' 一并吃掉防默认 insertContent 双插
         inputTextArea.addKeyListener(new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
-                if (e.getKeyCode() != KeyEvent.VK_ENTER || e.isShiftDown()) {
+                if (e.getKeyCode() != KeyEvent.VK_ENTER) {
                     return;
                 }
                 e.consume();
+                if (e.isShiftDown() || e.isControlDown()) {
+                    insertNewlineAtCaret();
+                    return;
+                }
                 submitInput();
+            }
+
+            @Override
+            public void keyTyped(KeyEvent e) {
+                if (e.getKeyChar() == '\n' || e.getKeyChar() == '\r') {
+                    e.consume(); // 换行只能来自 keyPressed 的手工插入，typed 的别再插一份
+                }
             }
         });
         // 草稿按会话暂存：输入内容一变就写当前会话的键，切会话由 showConversation 取回；

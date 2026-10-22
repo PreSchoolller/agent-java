@@ -804,6 +804,46 @@ class WindowGuiTest {
         edt(() -> WINDOW.getInputTextArea().setText(""));
         Thread.sleep(400);
         assertEquals(48, WINDOW.getInputPreferredHeight(), "清空后回落到初始高度（不只长不缩）");
+        assertEnterKeyMods();
+    }
+
+    /**
+     * 输入框回车键位（换行需求）：纯回车发送；Shift+回车 / Ctrl+回车 / Shift+Ctrl+回车
+     * 不发送、由自己往光标处插 \n（默认 binding 对修饰回车不可靠，见踩坑 #32）。合成
+     * KeyEvent 走真实监听器路径。**不依赖"会话已有消息"**：活跃会话在此刻可能是空的，
+     * 发送与否按消息条数差值断言。
+     */
+    private static void assertEnterKeyMods() throws Exception {
+        int before = store.getActive().getMessages().size();
+        // Ctrl+回车：插一个 \n，不发送
+        edt(() -> WINDOW.getInputTextArea().dispatchEvent(pressedEnter(KeyEvent.CTRL_DOWN_MASK)));
+        Thread.sleep(100);
+        assertEquals(before, store.getActive().getMessages().size(), "Ctrl+回车不该发送（留给换行）");
+        assertEquals("\n", WINDOW.getInputTextArea().getText(), "Ctrl+回车在光标处插换行");
+        // 收掉再试 Shift+Ctrl+回车：同上
+        edt(() -> WINDOW.getInputTextArea().setText(""));
+        edt(() -> WINDOW.getInputTextArea().dispatchEvent(pressedEnter(
+                KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)));
+        Thread.sleep(100);
+        assertEquals(before, store.getActive().getMessages().size(), "Shift+Ctrl+回车不该发送（留给换行）");
+        assertEquals("\n", WINDOW.getInputTextArea().getText(), "Shift+Ctrl+回车在光标处插换行");
+        // 纯回车：真实发送路径吃下多行文本，消息原文带换行落库
+        String sent = "第一行\n第二行";
+        edt(() -> WINDOW.getInputTextArea().setText(sent));
+        edt(() -> WINDOW.getInputTextArea().dispatchEvent(pressedEnter(0)));
+        Thread.sleep(200);
+        List<Message> messages = store.getActive().getMessages();
+        assertEquals(before + 1, messages.size(), "纯回车应新增一条消息");
+        assertEquals(sent, messages.get(messages.size() - 1).text(), "多行文本原样落库");
+        assertEquals("", WINDOW.getInputTextArea().getText(), "发送后输入框清空");
+        // 收尾清场：恢复输入框为空（多行草稿不留在窗口里）
+        edt(() -> WINDOW.getInputTextArea().setText(""));
+    }
+
+    /** 合成一次"按下回车"KeyEvent（modifiers 传 0 或 Shift/Ctrl 掩码） */
+    private static KeyEvent pressedEnter(int modifiers) {
+        return new KeyEvent(WINDOW.getInputTextArea(), KeyEvent.KEY_PRESSED,
+                System.currentTimeMillis(), modifiers, KeyEvent.VK_ENTER, '\r');
     }
 
     // —— 断言外的公共小工具：默认模型/思考强度/权限模式非空 & 最后消息 & 重新读盘 ——
