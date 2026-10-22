@@ -50,16 +50,16 @@ import java.util.Properties;
  *  不再初始化 Jackson，已复归裸 target/classes——详见踩坑记录 #26 补注）
  * 输出：持久化往返 + 删尾/分叉/置顶/工作区落盘/主文件元数据化（PERSIST_OK）、
  * 按需加载断言（LAZY_OK：新建 store 不读会话文件、元数据保存不重写会话文件、触达消息才读）、
- * 配置方案往返/重命名/平面键迁移/主题偏好/审核通知三开关测试（SETTINGS_OK）、
+ * 配置方案往返/重命名/平面键迁移/主题偏好/审核通知三开关/工具勾选名单测试（SETTINGS_OK）、
  * Markdown 解析断言（MD_PARSE_OK）、
- * 设置面板分页切换断言（默认页/双向往返 + 5b 号通用页截图/审核通知卡）、
+ * 设置面板分页切换断言（默认页/双向往返 + 5b 号通用页截图/审核通知卡 + 5d 工具页）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
  * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗 + 侧栏工作区分组/组头加号/组头折叠（WORKSPACE_OK，
  * 主区工作区显示条已移除，分组头是工作区唯一可见处）+
  * 窄窗口工具审批/摘要不能裁掉一个按钮、展开能看见参数全文（NARROW_OK）+
  * 输入框高度自适应增高/触帽内部滚动/清空回落（INPUT_OK）+
- * 二十五张截图
- * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置(5b通用页/5c目录展开),6markdown,7流式,8悬停菜单,
+ * 二十六张截图
+ * window-{1展开,1b拖宽侧栏,2切换会话,3生成中,4折叠,5设置(5b通用页/5c目录展开/5d工具页),6markdown,7流式,8悬停菜单,
  * 9置顶,10搜索高亮,11搜索片段,12右键菜单,13长会话,14深色主题,15深色设置,16工具卡片,
  * 16b工具卡展开,17权限确认卡,18划词选区,19会话内搜索,20工作区弹窗,20b分组加号,20c组头收起,21输入增高}.png（SHOT_OK）。 * 注意：Swing 视图树非线程安全，所有 UI 操作必须像下面这样包在 EDT 里执行（见踩坑记录 #1）。
  */
@@ -349,6 +349,20 @@ public class Shot {
         AppSettings notifyReread = AppSettings.at(settingsFile);
         expect(!notifyReread.isApprovalSound() && notifyReread.isApprovalSystemNotify()
                 && notifyReread.isApprovalBringToFront(), "审核通知偏好独立落盘往返");
+        // 工具勾选名单（前端存名单，后端消费 getEnabledTools 过滤声明/执行）：
+        // 默认未配置=全启用；名单落盘往返；空名单=显式全不启用（与未配置语义区分）；未配置语义恢复
+        expect(testSettings.isToolEnabled("read"), "未配置时工具默认启用");
+        testSettings.setEnabledTools(List.of("read", "bash"));
+        testSettings.save();
+        AppSettings toolsReread = AppSettings.at(settingsFile);
+        expect(toolsReread.getEnabledTools().equals(List.of("read", "bash"))
+                && toolsReread.isToolEnabled("read") && !toolsReread.isToolEnabled("grep"), "工具名单落盘往返");
+        testSettings.setEnabledTools(List.of());
+        testSettings.save();
+        expect(!AppSettings.at(settingsFile).isToolEnabled("read"), "空名单=显式全不启用");
+        testSettings.setEnabledTools(null);
+        testSettings.save();
+        expect(AppSettings.at(settingsFile).isToolEnabled("bash"), "未配置语义恢复全启用");
         System.out.println("SETTINGS_OK");
 
         // —— Markdown 解析断言（块类型与数量） ——
@@ -502,6 +516,13 @@ public class Shot {
                 && uiHasShowingTextAnyWindow("审核到来时窗口抢到前台"), "通用页审核通知三开关在");
         expect(!uiHasShowingTextAnyWindow("配置方案"), "通用页不含配置方案控件");
         captureDialog(args[0] + "-5b-settings-general.png", "设置");
+        // 工具页：注册表直连读（ToolCatalog 包 catch(Throwable)，裸类路径下 ToolManager.<clinit>
+        // 的 NCDFE 被吞 → 空列表占位，踩坑 #26），切页断言只看不依赖注册表可见性的两侧——其他页的控件不在
+        edt(() -> uiClickAnyWindow("工具"));
+        Thread.sleep(400);
+        expect(!uiHasShowingTextAnyWindow("配置方案") && !uiHasShowingTextAnyWindow("正文字号"),
+                "工具页不含其他页控件");
+        captureDialog(args[0] + "-5d-settings-tools.png", "设置");
         edt(() -> uiClickAnyWindow("模型服务"));
         Thread.sleep(400);
         expect(uiHasShowingTextAnyWindow("配置方案"), "切回模型服务页");

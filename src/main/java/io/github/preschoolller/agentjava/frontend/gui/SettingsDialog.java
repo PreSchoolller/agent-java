@@ -3,6 +3,7 @@ package io.github.preschoolller.agentjava.frontend.gui;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
+import io.github.preschoolller.agentjava.frontend.store.ToolCatalog;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -48,10 +49,11 @@ import java.util.function.Function;
 
 /**
  * 设置面板（模态对话框）：编辑 AppSettings 并持久化。
- * 顶部标签页分两页（胶囊切页，当前页主题色实心）：
- * 「通用」= 全局对话体验（主题/正文字号/关闭按钮）；
+ * 顶部标签页分三页（胶囊切页，当前页主题色实心）：
+ * 「通用」= 全局对话体验（主题/正文字号/关闭按钮/审核通知）；
  * 「模型服务」= 配置方案的全部参数（方案管理/后端地址/Key/API 类型/默认模型/温度/最大 Tokens/系统提示词
- * + 模型目录：每个模型一条可展开行，编辑名字/上下文窗口/最大输出/默认推理等级/输入能力，落 Profile.modelsMeta）。
+ * + 模型目录：每个模型一条可展开行，编辑名字/上下文窗口/最大输出/默认推理等级/输入能力，落 Profile.modelsMeta）；
+ * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）。
  * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
  * 随方案在模型服务页编辑。
  * "模型服务"页首行是配置方案管理（下拉切换 + 新建/重命名/删除）：面板里的一切改动
@@ -96,6 +98,8 @@ public class SettingsDialog extends JDialog {
     private JPanel catalogPanel;
     /** 每个条目的展开态（按元数据对象跟踪；目录重建不丢状态，换方案清空重来） */
     private final Map<ModelMeta, Boolean> expandedStates = new IdentityHashMap<>();
+    /** 工具页的勾选框（按注册表顺序建；保存时按 clientProperty 里的工具名收集勾选结果） */
+    private final List<JCheckBox> toolCheckBoxes = new ArrayList<>();
     /** 当前行删除按钮（随目录重建刷新；Shot 断言初始可用态用） */
     private final List<JButton> rowDeleteButtons = new ArrayList<>();
     private final JSpinner temperatureSpinner;
@@ -104,9 +108,10 @@ public class SettingsDialog extends JDialog {
     private final JTextArea systemPromptArea = new JTextArea(6, 24);
     private boolean saved;
 
-    /** 标签页 id：通用（全局对话体验）/ 模型服务（配置方案参数）；默认页=模型服务（原首屏内容） */
+    /** 标签页 id：通用（全局对话体验）/ 模型服务（配置方案参数）/ 工具（注册表勾选名单）；默认页=模型服务 */
     private static final String TAB_GENERAL = "general";
     private static final String TAB_PROFILE = "profile";
+    private static final String TAB_TOOLS = "tools";
     private String currentTab = TAB_PROFILE;
     private JPanel tabsPanel;
     private JPanel pagesPanel;
@@ -187,6 +192,7 @@ public class SettingsDialog extends JDialog {
         tabsPanel.setBorder(BorderFactory.createEmptyBorder(0, 18, 4, 18));
         tabsPanel.add(new TabButton("通用", TAB_GENERAL));
         tabsPanel.add(new TabButton("模型服务", TAB_PROFILE));
+        tabsPanel.add(new TabButton("工具", TAB_TOOLS));
 
         // 两页内容（CardLayout 切换）：每页各自套滚动容器——原先是两卡同屏共用一份
         // groupsScroll（装不下出滚动条的挤压重排修法），分页后短页不再继承长页的滚动空间。
@@ -196,6 +202,7 @@ public class SettingsDialog extends JDialog {
         pagesPanel.setOpaque(false);
         pagesPanel.add(wrapPage(buildGeneralPage()), TAB_GENERAL);
         pagesPanel.add(wrapPage(buildProfilePage()), TAB_PROFILE);
+        pagesPanel.add(wrapPage(buildToolsPage()), TAB_TOOLS);
         pageLayout.show(pagesPanel, currentTab);
 
         JButton saveButton = Ui.primaryButton("保存");
@@ -309,6 +316,83 @@ public class SettingsDialog extends JDialog {
         groups.add(backendCard);
         groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
         return groups;
+    }
+
+    /**
+     * 工具页：ToolManager 注册表逐条勾选（前端只存名单，后端经 AppSettings.getEnabledTools
+     * 消费——声明给模型哪些工具由后端接线）。注册表经 ToolCatalog 反射读取（前端 store 不
+     * 直接 import backend.tool，见 ToolCatalog 类注释）；拿不到时给兜底提示。
+     */
+    private JPanel buildToolsPage() {
+        JPanel groups = new JPanel();
+        groups.setLayout(new BoxLayout(groups, BoxLayout.Y_AXIS));
+        groups.setBackground(Ui.BG);
+        groups.setBorder(BorderFactory.createEmptyBorder(6, 18, 4, 18));
+
+        JPanel toolsCard = Ui.card(Ui.CARD_BG);
+        toolsCard.setLayout(new GridBagLayout());
+        List<ToolCatalog.ToolInfo> tools = ToolCatalog.registered();
+        int row = 0;
+        for (ToolCatalog.ToolInfo info : tools) {
+            row = addToolRow(toolsCard, row, info);
+        }
+        if (tools.isEmpty()) {
+            // 注册表没拿到（裸类路径回归/没有注册工具）：提示兜底，不改任何落盘语义
+            JLabel hint = new JLabel("未拿到工具列表（后端工具类不可用或没有注册工具）；此前已配置的名单保持不变");
+            hint.setFont(Ui.FONT_PLAIN);
+            hint.setForeground(Ui.TEXT_SECONDARY);
+            GridBagConstraints gbc = new GridBagConstraints();
+            gbc.insets = new Insets(10, 14, 10, 14);
+            gbc.anchor = GridBagConstraints.WEST;
+            gbc.gridx = 0;
+            gbc.gridy = row;
+            gbc.gridwidth = 2;
+            toolsCard.add(hint, gbc);
+        }
+        groups.add(toolsCard);
+        groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
+        return groups;
+    }
+
+    /** 工具一行：等宽工具名 + 勾选框（勾选框文字=说明文字）。长说明按固定 330px 宽的 HTML 分段
+     *  折行（踩坑 #17 的 Swing HTML；span 颜色现场读 Ui 镜像，随主题重建生效），不进自动宽排量
+     *  防布局正反馈（踩坑 #3：JLabel 首选宽=单行全文宽，会把整页撑爆/裁边） */
+    private int addToolRow(JPanel card, int row, ToolCatalog.ToolInfo info) {
+        JLabel name = new JLabel(info.name());
+        name.setFont(new Font("Monospaced", Font.BOLD, 13));
+        name.setForeground(Ui.TEXT);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(6, 14, 6, 14);
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        card.add(name, gbc);
+        gbc.gridx = 1;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        card.add(enabledToolCheckBox(info), gbc);
+        return row + 1;
+    }
+
+    /** 勾选框：文字是说明文字（次要色），勾选态=AppSettings.isToolEnabled（未配置=全启用） */
+    private JCheckBox enabledToolCheckBox(ToolCatalog.ToolInfo info) {
+        String description = escapeHtml(info.description().replace("\n", " "));
+        JCheckBox box = new JCheckBox("<html><div style='width:330px'><span style='color:"
+                + Ui.hex(Ui.TEXT_SECONDARY) + "'>" + description + "</span></div></html>");
+        box.setSelected(settings.isToolEnabled(info.name()));
+        box.putClientProperty("toolName", info.name());
+        box.setToolTipText(info.name() + "：声明给模型可选的工具");
+        Ui.styleCheckBox(box);
+        toolCheckBoxes.add(box);
+        return box;
+    }
+
+    /** 拼进 HTML 前转义说明文字（工具描述里会有 < > & 和引号） */
+    private static String escapeHtml(String raw) {
+        return raw.replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace("\"", "&quot;");
     }
 
     /** 单页套滚动容器（原 groupsScroll 同款）：装不下出竖向滚动条、行永不挤压重排；
@@ -921,6 +1005,18 @@ public class SettingsDialog extends JDialog {
         settings.setApprovalSound(approvalSoundCheckBox.isSelected());
         settings.setApprovalSystemNotify(approvalSystemNotifyCheckBox.isSelected());
         settings.setApprovalBringToFront(approvalBringToFrontCheckBox.isSelected());
+        // 工具勾选：全部勾选=恢复"未配置"语义（未来新注册的工具自动启用）；全部不勾=显式空名单
+        // （全不启用是合法配置，别当成未配置洗掉）。注册表没拿到（反射失败）时不动这项，
+        // 避免用空勾选把已有配置洗净
+        if (!toolCheckBoxes.isEmpty()) {
+            List<String> checked = new ArrayList<>();
+            for (JCheckBox box : toolCheckBoxes) {
+                if (box.isSelected()) {
+                    checked.add((String) box.getClientProperty("toolName"));
+                }
+            }
+            settings.setEnabledTools(checked.size() == toolCheckBoxes.size() ? null : checked);
+        }
         settings.setLogLevel((String) logLevelCombo.getSelectedItem());
         settings.applyProfiles(working, selectedName); // 内部落盘 + fireChanged
         saved = true;

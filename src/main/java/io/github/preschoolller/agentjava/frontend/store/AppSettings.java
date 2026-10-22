@@ -45,6 +45,9 @@ public final class AppSettings {
     private boolean approvalSound = true;
     private boolean approvalSystemNotify = true;
     private boolean approvalBringToFront = true;
+    /** 已勾选的工具名（设置面板"工具"页勾选，后端据此过滤工具声明/执行）。
+     *  null = 从未配置，语义为全部启用（未来新注册的工具也自动启用）；空列表 = 显式全不启用 */
+    private List<String> enabledTools;
     /** TinyLog日志等级，修改需重启生效 */
     private String logLevel = "info";
     private static final Set<String> allowLevels = Set.of("trace", "debug", "info", "warn", "error");
@@ -320,6 +323,29 @@ public final class AppSettings {
         this.approvalBringToFront = approvalBringToFront;
     }
 
+    /**
+     * 已勾选的工具名列表：设置面板"工具"页的勾选结果（落盘 enabledTools，逗号连接）。
+     * 未配置过（null）时语义为全部启用，当场经 ToolCatalog 反射取注册表全名——
+     * 注册表拿不出来（裸类路径回归，踩坑 #26 语义）时退空列表，调用方按空=未配置兜底。
+     * 已配置时返回存值副本（含显式空列表=全不启用，调用方原样消费即可）。
+     */
+    public List<String> getEnabledTools() {
+        if (enabledTools != null) {
+            return List.copyOf(enabledTools);
+        }
+        return ToolCatalog.registeredNames();
+    }
+
+    /** 某个工具当前是否勾选：未配置视为全部启用 */
+    public boolean isToolEnabled(String toolName) {
+        return enabledTools == null || enabledTools.contains(toolName);
+    }
+
+    /** 写工具勾选（设置面板保存时提交）：null 表示恢复"未配置=全部启用" */
+    public void setEnabledTools(List<String> names) {
+        enabledTools = names == null ? null : List.copyOf(names);
+    }
+
     public int getWindowWidth() {
         return windowWidth;
     }
@@ -431,6 +457,9 @@ public final class AppSettings {
         properties.setProperty("approvalSound", String.valueOf(approvalSound));
         properties.setProperty("approvalSystemNotify", String.valueOf(approvalSystemNotify));
         properties.setProperty("approvalBringToFront", String.valueOf(approvalBringToFront));
+        if (enabledTools != null) {
+            properties.setProperty("enabledTools", String.join(",", enabledTools));
+        }
 
         properties.setProperty("windowWidth", String.valueOf(windowWidth));
         properties.setProperty("windowHeight", String.valueOf(windowHeight));
@@ -473,6 +502,10 @@ public final class AppSettings {
         approvalSound = Boolean.parseBoolean(properties.getProperty("approvalSound", "true"));
         approvalSystemNotify = Boolean.parseBoolean(properties.getProperty("approvalSystemNotify", "true"));
         approvalBringToFront = Boolean.parseBoolean(properties.getProperty("approvalBringToFront", "true"));
+        // 工具勾选：缺键=从未配置（全部启用）；空值=显式全不启用（拆开存，两者语义不同）
+        String enabledToolsRaw = properties.getProperty("enabledTools");
+        enabledTools = enabledToolsRaw == null ? null
+                : Arrays.stream(enabledToolsRaw.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList();
         logLevel = properties.getProperty("logLevel");
         if (logLevel == null || !allowLevels.contains(logLevel)) {
             logLevel = "info";
