@@ -78,10 +78,10 @@ src/main/java/io/github/preschoolller/agentjava/
 - **组件计划.md** —— 前端做了什么/还欠什么，改动要在这里登记状态；
 - **踩坑记录.md** —— Swing/工程真实踩过的 28 个坑（EDT 线程、首选宽反馈循环、z-order、
   假 exited……），改到对应模块先扫雷；
-- **tools/Shot.java** —— 回归工具：跑一遍出 25 张截图 + 持久化/解析/流式/窗口化/托盘断言，
+- **src/test/** —— JUnit 5 回归测试：纯逻辑单测（持久化往返/配置方案/Markdown 解析）+
+  GUI 回归 `WindowGuiTest`（有序用例，出 28 张截图 + UI 断言）：
 
 ```bash
-javac -encoding UTF-8 -cp target/classes -d target/classes foragent/tools/Shot.java
-java -cp target/classes foragent.tools.Shot target/window
-# 断言全过打印 SHOT_OK，截图落在 target/ 下
+mvn test
+# 纯逻辑 20 例 + GUI 19 例（无托盘环境托盘段自动跳过），截图落在 target/regression/ 下
 ```
