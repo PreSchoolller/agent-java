@@ -50,9 +50,9 @@ import java.util.Properties;
  *  不再初始化 Jackson，已复归裸 target/classes——详见踩坑记录 #26 补注）
  * 输出：持久化往返 + 删尾/分叉/置顶/工作区落盘/主文件元数据化（PERSIST_OK）、
  * 按需加载断言（LAZY_OK：新建 store 不读会话文件、元数据保存不重写会话文件、触达消息才读）、
- * 配置方案往返/重命名/平面键迁移/主题偏好测试（SETTINGS_OK）、
+ * 配置方案往返/重命名/平面键迁移/主题偏好/审核通知三开关测试（SETTINGS_OK）、
  * Markdown 解析断言（MD_PARSE_OK）、
- * 设置面板分页切换断言（默认页/双向往返 + 5b 号通用页截图）、
+ * 设置面板分页切换断言（默认页/双向往返 + 5b 号通用页截图/审核通知卡）、
  * 流式落库断言（STREAM_OK）、工具调用卡断言（TOOLCARD_OK）、权限确认卡断言（APPROVAL_OK）、
  * 长会话窗口化断言（WINDOWING_OK）+ 工作区弹窗 + 侧栏工作区分组/组头加号/组头折叠（WORKSPACE_OK，
  * 主区工作区显示条已移除，分组头是工作区唯一可见处）+
@@ -341,6 +341,14 @@ public class Shot {
         testSettings.setMinimizeToTray(true);
         testSettings.save();
         expect(AppSettings.at(settingsFile).isMinimizeToTray(), "托盘偏好落盘往返");
+        // 审核通知三通道：默认全开、开关独立、落盘往返（工具审批到来时提醒哪些通道）
+        expect(testSettings.isApprovalSound() && testSettings.isApprovalSystemNotify()
+                && testSettings.isApprovalBringToFront(), "审核通知默认全开");
+        testSettings.setApprovalSound(false);
+        testSettings.save();
+        AppSettings notifyReread = AppSettings.at(settingsFile);
+        expect(!notifyReread.isApprovalSound() && notifyReread.isApprovalSystemNotify()
+                && notifyReread.isApprovalBringToFront(), "审核通知偏好独立落盘往返");
         System.out.println("SETTINGS_OK");
 
         // —— Markdown 解析断言（块类型与数量） ——
@@ -489,6 +497,9 @@ public class Shot {
         Thread.sleep(400);
         expect(uiHasShowingTextAnyWindow("正文字号") && uiHasShowingTextAnyWindow("主题")
                 && uiHasShowingTextAnyWindow("日志等级"), "切到通用页（全局项在）");
+        expect(uiHasShowingTextAnyWindow("审核到来时播放系统提示音")
+                && uiHasShowingTextAnyWindow("审核到来时弹系统通知（托盘气泡）")
+                && uiHasShowingTextAnyWindow("审核到来时窗口抢到前台"), "通用页审核通知三开关在");
         expect(!uiHasShowingTextAnyWindow("配置方案"), "通用页不含配置方案控件");
         captureDialog(args[0] + "-5b-settings-general.png", "设置");
         edt(() -> uiClickAnyWindow("模型服务"));

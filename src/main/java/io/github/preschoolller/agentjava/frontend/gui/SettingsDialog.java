@@ -74,6 +74,10 @@ public class SettingsDialog extends JDialog {
     private final JComboBox<String> themeCombo = new JComboBox<>(new String[]{"跟随系统", "浅色", "深色"});
     /** 关闭按钮最小化到托盘（系统不支持托盘时勾了也只会直接退出） */
     private final JCheckBox trayCheckBox = new JCheckBox("最小化到托盘");
+    /** 审核通知三开关（全局 UI 偏好，默认全开）：工具审批到来时的提醒通道 */
+    private final JCheckBox approvalSoundCheckBox = new JCheckBox("审核到来时播放系统提示音");
+    private final JCheckBox approvalSystemNotifyCheckBox = new JCheckBox("审核到来时弹系统通知（托盘气泡）");
+    private final JCheckBox approvalBringToFrontCheckBox = new JCheckBox("审核到来时窗口抢到前台");
     /** 日志等级下拉：TinyLog 重启生效，选项=AppSettings.allowLevels 同名值 */
     private final JComboBox<String> logLevelCombo =
             new JComboBox<>(new String[]{"trace", "debug", "info", "warn", "error"});
@@ -143,6 +147,15 @@ public class SettingsDialog extends JDialog {
         trayCheckBox.setSelected(settings.isMinimizeToTray());
         Ui.styleCheckBox(trayCheckBox);
         trayCheckBox.setToolTipText("系统不支持托盘时，关闭按钮仍会直接退出");
+        approvalSoundCheckBox.setSelected(settings.isApprovalSound());
+        approvalSystemNotifyCheckBox.setSelected(settings.isApprovalSystemNotify());
+        approvalSystemNotifyCheckBox.setToolTipText("系统不支持托盘、或从托盘注销时，这一路不生效");
+        approvalBringToFrontCheckBox.setSelected(settings.isApprovalBringToFront());
+        approvalBringToFrontCheckBox.setToolTipText("窗口已有焦点时不抢；最小化/托盘隐藏的会先还原到前台");
+        for (JCheckBox box : new JCheckBox[]{approvalSoundCheckBox, approvalSystemNotifyCheckBox,
+                approvalBringToFrontCheckBox}) {
+            Ui.styleCheckBox(box);
+        }
         // 日志等级：TinyLog 启动时读一次（Main→Configuration.set），改了不重启不生效——
         // 初值直接放等级名（不用中文别名），与写入值一一对应省映射
         logLevelCombo.setSelectedItem(settings.getLogLevel());
@@ -226,6 +239,15 @@ public class SettingsDialog extends JDialog {
         addRow(chatCard, chatRow, "日志等级", buildLogLevelRow());
         // 系统提示词是每套配置方案自己的值（落 Profile），随方案在模型服务页编辑
         groups.add(chatCard);
+
+        // 审核通知卡：工具审批到来时的三通道提醒（开关独立，落全局 UI 偏好不随方案走）
+        JPanel approveCard = Ui.card(Ui.CARD_BG);
+        approveCard.setLayout(new GridBagLayout());
+        int approveRow = 0;
+        approveRow = addRow(approveCard, approveRow, "提示音", approvalSoundCheckBox);
+        approveRow = addRow(approveCard, approveRow, "系统通知", approvalSystemNotifyCheckBox);
+        addRow(approveCard, approveRow, "窗口置顶", approvalBringToFrontCheckBox);
+        groups.add(approveCard);
         groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
         return groups;
     }
@@ -896,6 +918,9 @@ public class SettingsDialog extends JDialog {
             default -> "light";
         });
         settings.setMinimizeToTray(trayCheckBox.isSelected());
+        settings.setApprovalSound(approvalSoundCheckBox.isSelected());
+        settings.setApprovalSystemNotify(approvalSystemNotifyCheckBox.isSelected());
+        settings.setApprovalBringToFront(approvalBringToFrontCheckBox.isSelected());
         settings.setLogLevel((String) logLevelCombo.getSelectedItem());
         settings.applyProfiles(working, selectedName); // 内部落盘 + fireChanged
         saved = true;

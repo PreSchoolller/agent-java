@@ -822,6 +822,14 @@ public class Window extends JFrame {
         toFront();
     }
 
+    /** 托盘气泡系统通知（审核提醒用）：托盘未注册（系统不支持/未启动到这一步）时静默跳过 */
+    public void showTrayNotification(String title, String text) {
+        if (trayIcon == null) {
+            return;
+        }
+        trayIcon.displayMessage(title, text, TrayIcon.MessageType.INFO);
+    }
+
     /** 按当前主题构建全部界面组件；组件构造期捕获颜色，换主题必须整体重建（见 retheme） */
     private void buildUi() {
         initInputArea();
@@ -1071,6 +1079,9 @@ public class Window extends JFrame {
                 card.approval = decision;
             }
             refreshSidebarBadges(); // 侧栏亮"待确认"标注
+            // 审核提醒（计划外）：按设置里的三通道各自动作。参数此刻已全部到位（审批在
+            // FunctionToolCallDone 之后才进来），摘要直接取参数流。
+            ApprovalNotifier.announce(Window.this, message.toolName(), toolArgsSummary(args.toString()));
             if (card != null && conversationId.equals(displayedConvId)) {
                 updateMaterialization(); // 待确认卡一般是最后一张，窗口化下保证它已物化
                 if (card.materialized) {

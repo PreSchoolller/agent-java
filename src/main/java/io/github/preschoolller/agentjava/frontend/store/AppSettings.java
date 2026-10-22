@@ -41,6 +41,10 @@ public final class AppSettings {
     private String uiTheme = "light";
     /** 关闭按钮最小化到托盘（全局 UI 偏好，默认关闭=直接退出） */
     private boolean minimizeToTray;
+    /** 审核通知三通道（全局 UI 偏好，默认全开）：工具审批到来时的提醒，独立开关互不牵制 */
+    private boolean approvalSound = true;
+    private boolean approvalSystemNotify = true;
+    private boolean approvalBringToFront = true;
     /** TinyLog日志等级，修改需重启生效 */
     private String logLevel = "info";
     private static final Set<String> allowLevels = Set.of("trace", "debug", "info", "warn", "error");
@@ -292,6 +296,30 @@ public final class AppSettings {
         this.minimizeToTray = minimizeToTray;
     }
 
+    public boolean isApprovalSound() {
+        return approvalSound;
+    }
+
+    public void setApprovalSound(boolean approvalSound) {
+        this.approvalSound = approvalSound;
+    }
+
+    public boolean isApprovalSystemNotify() {
+        return approvalSystemNotify;
+    }
+
+    public void setApprovalSystemNotify(boolean approvalSystemNotify) {
+        this.approvalSystemNotify = approvalSystemNotify;
+    }
+
+    public boolean isApprovalBringToFront() {
+        return approvalBringToFront;
+    }
+
+    public void setApprovalBringToFront(boolean approvalBringToFront) {
+        this.approvalBringToFront = approvalBringToFront;
+    }
+
     public int getWindowWidth() {
         return windowWidth;
     }
@@ -400,6 +428,10 @@ public final class AppSettings {
         properties.setProperty("contentFontSize", String.valueOf(contentFontSize));
         properties.setProperty("uiTheme", uiTheme);
         properties.setProperty("minimizeToTray", String.valueOf(minimizeToTray));
+        properties.setProperty("approvalSound", String.valueOf(approvalSound));
+        properties.setProperty("approvalSystemNotify", String.valueOf(approvalSystemNotify));
+        properties.setProperty("approvalBringToFront", String.valueOf(approvalBringToFront));
+
         properties.setProperty("windowWidth", String.valueOf(windowWidth));
         properties.setProperty("windowHeight", String.valueOf(windowHeight));
         properties.setProperty("windowX", String.valueOf(windowX));
@@ -437,6 +469,10 @@ public final class AppSettings {
         sidebarDivider = parseInt(properties.getProperty("sidebarDivider"), sidebarDivider);
         setUiTheme(properties.getProperty("uiTheme"));
         minimizeToTray = Boolean.parseBoolean(properties.getProperty("minimizeToTray", "false"));
+        // 审核通知三开关：缺键（旧文件/手工改坏）默认开——提醒缺了比响了更没人发现
+        approvalSound = Boolean.parseBoolean(properties.getProperty("approvalSound", "true"));
+        approvalSystemNotify = Boolean.parseBoolean(properties.getProperty("approvalSystemNotify", "true"));
+        approvalBringToFront = Boolean.parseBoolean(properties.getProperty("approvalBringToFront", "true"));
         logLevel = properties.getProperty("logLevel");
         if (logLevel == null || !allowLevels.contains(logLevel)) {
             logLevel = "info";
