@@ -49,14 +49,27 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
  * gitignore 内）。产出：窗口默认态/侧栏分组、拖宽、切会话、生成中、折叠、设置面板分页（通用页审核通知
  * 三开关/工具页）、Markdown 渲染与划词搜索、流式落库、工具卡折叠、权限确认卡、窄窗口不裁按钮、
  * 悬停菜单、置顶/搜索高亮/片段/右键菜单、长会话窗口化、深色主题、托盘最小化、工作区弹窗与
- * 侧栏分组/组头加号/组头折叠、输入框高度自适应，共 26 张截图。
+ * 侧栏分组/组头加号/组头折叠、输入框高度自适应，共 28 张截图。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须包在 EDT 里执行（见踩坑记录 #1）。
+ * <p>
+ * 交互巡检向导（用户点名）：-Dgui.interactive=true 时每个观察点在截图后弹主题化说明卡
+ * （Ui.confirmDialog，写明"该站看什么"），人工点"下一个"才继续下一步——补自动断言够不着的
+ * 观感/手感维度（配色对齐、字形 fallback、真实鼠标手感），fail-fast 断言之外的人眼兜底；
+ * 点"取消"=人工终止向导，剩余观察点静默自动跑完（回归仍出全量结果）。
+ * -Dgui.interactive.auto=true 再叠一层自动过站：向导卡照弹、600ms 后自动点"下一个"
+ * （agent/CI 冒烟验证交互管线用，人工巡检不用）。两开关默认关，绝不自动卡人。
  */
 @TestMethodOrder(OrderAnnotation.class)
 class WindowGuiTest {
 
     /** 截图输出目录（产物落在 gitignore 的 target/ 下），-Dregression.dir 可覆盖 */
     private static final Path SCREENS = Path.of(System.getProperty("regression.dir", "target/regression"));
+
+    /** 交互巡检向导：真交互 / 自动过站（见类注释） */
+    private static boolean WIZARD;
+    private static boolean WIZARD_AUTO;
+    private static int gateNo;
+    private static boolean gateAborted;
 
     /** 窗口挂在侧栏/主区监听后，store 操作必须进 EDT；窗口建起来之前随便（见用例 s01 前 @BeforeAll） */
     private static ConversationStore store;
@@ -79,6 +92,8 @@ class WindowGuiTest {
     static void setUpAll() throws Exception {
         assumeFalse(GraphicsEnvironment.isHeadless(), "无显示环境（headless）：GUI 回归跳过，纯模型单测不受影响");
         Files.createDirectories(SCREENS);
+        WIZARD = Boolean.getBoolean("gui.interactive");
+        WIZARD_AUTO = WIZARD && Boolean.getBoolean("gui.interactive.auto");
         // 截图配色固定浅色：开发者本机存过深色时回归图才有确定基线（只改内存，不落盘）
         AppSettings.get().setUiTheme("light");
         Path dir = Files.createTempDirectory("agentjava-gui");
@@ -136,7 +151,8 @@ class WindowGuiTest {
         assertTrue(sidebarGroupRows().stream().anyMatch(g -> "默认工作区".equals(g[0]) && g[1] == null),
                 "侧栏默认工作区分组在");
         assertFalse(uiHasText("复制路径"), "主区工作区显示条已移除（复制路径钮随条消失）");
-        capture("window-1-expanded.png");
+        captureGated("window-1-expanded.png",
+                "窗口默认态：侧栏单一「默认工作区」分组头；主区瀑布流高度自适应；输入区右下角模型/思考强度/权限模式的默认选中。");
     }
 
     @Test
@@ -145,7 +161,7 @@ class WindowGuiTest {
         // —— 截图 1b：分隔条拖到 360px（模拟手动拖宽侧栏） ——
         edt(() -> WINDOW.getSplitPane().setDividerLocation(360));
         Thread.sleep(600);
-        capture("window-1b-wide.png");
+        captureGated("window-1b-wide.png", "分隔条拖到 360 宽后的侧栏形态，条目横向更舒展（点完下一个会拖回默认宽）。");
         edt(() -> WINDOW.getSplitPane().setDividerLocation(Sidebar.EXPANDED_WIDTH));
         Thread.sleep(400);
     }
@@ -156,7 +172,8 @@ class WindowGuiTest {
         // —— 截图 2：切换到第一段对话（用户气泡靠右 + 长文本高度自适应 + 滚到底部） ——
         edt(() -> WINDOW.getStore().switchTo(c1.getId()));
         Thread.sleep(1200);
-        capture("window-2-switched.png");
+        captureGated("window-2-switched.png",
+                "切到第一段对话：用户消息气泡靠右、长文本卡片高度自适应、视图自动滚到底部。");
     }
 
     @Test
@@ -165,7 +182,7 @@ class WindowGuiTest {
         // —— 截图 3：生成中状态（停止按钮 + 胶囊文案） ——
         edt(() -> WINDOW.setGenerating(true));
         Thread.sleep(500);
-        capture("window-3-generating.png");
+        captureGated("window-3-generating.png", "生成中状态：输入区出现停止按钮；侧栏该会话条目亮「生成中」胶囊（下一个会熄灭它）。");
         assertTrue(sidebarBadgeHtml(store.getActive().getId()).contains(">生成中<"), "侧栏亮\"生成中\"标注");
         edt(() -> WINDOW.setGenerating(false));
         assertFalse(sidebarBadgeHtml(store.getActive().getId()).contains(">生成中<"), "生成结束侧栏标注熄灭");
@@ -181,7 +198,7 @@ class WindowGuiTest {
             WINDOW.getContentPane().revalidate();
         });
         Thread.sleep(800);
-        capture("window-4-collapsed.png");
+        captureGated("window-4-collapsed.png", "侧栏折叠后的窄形态，只剩汉堡按钮和主区。");
     }
 
     @Test
@@ -209,7 +226,7 @@ class WindowGuiTest {
         boolean[] modelDeleteEnabled = new boolean[1];
         edt(() -> modelDeleteEnabled[0] = dialogHolder.isModelRowDeleteEnabled(0));
         assertTrue(modelDeleteEnabled[0], "打开设置行删除钮即可用（目录两条）");
-        captureDialog("window-5-settings.png", "设置");
+        captureDialogGated("window-5-settings.png", "设置", "设置面板默认页=模型服务：后端地址/模型目录两条/温度等参数表单。");
 
         // —— 设置面板分页断言（计划外）：默认页=模型服务；两枚胶囊来回切，各自页内控件在/不在。
         //  用 uiHasShowingTextAnyWindow：CardLayout 隐藏页的组件仍在容器树里，不带显隐过滤会误报 ——
@@ -223,13 +240,13 @@ class WindowGuiTest {
                 && uiHasShowingTextAnyWindow("审核到来时弹系统通知（托盘气泡）")
                 && uiHasShowingTextAnyWindow("审核到来时窗口抢到前台"), "通用页审核通知三开关在");
         assertFalse(uiHasShowingTextAnyWindow("配置方案"), "通用页不含配置方案控件");
-        captureDialog("window-5b-settings-general.png", "设置");
+        captureDialogGated("window-5b-settings-general.png", "设置", "通用页：正文字号/主题/日志等级 + 审核通知三开关的表单形态。");
         // 工具页：注册表直连读（ToolCatalog 包 catch(Throwable)），切页断言只看不依赖注册表可见性的两侧
         edt(() -> uiClickAnyWindow("工具"));
         Thread.sleep(400);
         assertFalse(uiHasShowingTextAnyWindow("配置方案") && uiHasShowingTextAnyWindow("正文字号"),
                 "工具页不含其他页控件");
-        captureDialog("window-5d-settings-tools.png", "设置");
+        captureDialogGated("window-5d-settings-tools.png", "设置", "工具页：ToolManager 注册的工具逐条一行，勾选框=声明给模型（交互模式下全量依赖在，是真实注册行）。");
         edt(() -> uiClickAnyWindow("模型服务"));
         Thread.sleep(400);
         assertTrue(uiHasShowingTextAnyWindow("配置方案"), "切回模型服务页");
@@ -240,7 +257,8 @@ class WindowGuiTest {
                 "展开后上下文/最大输出在");
         assertTrue(uiHasShowingTextAnyWindow("推理等级") && uiHasShowingTextAnyWindow("文本")
                 && uiHasShowingTextAnyWindow("图片"), "展开后推理等级/输入能力在");
-        captureDialog("window-5c-settings-catalog.png", "设置");
+        captureDialogGated("window-5c-settings-catalog.png", "设置",
+                "模型服务页展开首条目录：上下文/最大输出/推理等级/输入能力的参数区随「展开」钮打开。");
         edt(() -> dialogHolder.dispose());
         // 还原模型目录（改动只在内存，给后续深色/托盘段留原样）
         AppSettings.get().getActiveProfile().setModelMetas(oldMetas);
@@ -256,7 +274,8 @@ class WindowGuiTest {
         Thread.sleep(1500);
         scrollWaterfallToTop();
         Thread.sleep(400);
-        capture("window-6-markdown.png");
+        captureGated("window-6-markdown.png",
+                "Markdown 渲染全景：加粗/斜体/行内代码/删除线/链接、表格、代码块着色、列表（有序/无序/嵌套/待办）、引用、分隔线、diff 增删行着色。");
         // 用户消息复制（用户卡尾部"复制"钮）：uiClick 按树序先碰用户卡，剪贴板应是用户原文
         edt(() -> uiClick("复制"));
         Thread.sleep(200);
@@ -266,13 +285,13 @@ class WindowGuiTest {
         // 划词复制（计划外）：显示组件可聚焦可选中，Ctrl+C 拷选区而非整卡
         selectAndCtrlC("给我演示一下 Markdown 渲染", 0, 4);
         Thread.sleep(400); // 选区重绘是异步的，等一拍再截，不然截图里没有高亮
-        capture("window-18-selection.png");
+        captureGated("window-18-selection.png", "划词选区：卡片文字被选中且高亮可见（自动化窗口可能不在前台，看得到高亮即正常）。");
         Thread.sleep(200);
         assertEquals("给我演示", clipboardText(), "划词 Ctrl+C 复制选区");
         // 会话内搜索（Ctrl+F）：开搜索条填词，匹配计数与定位跳转；收起后入口消失
         edt(() -> WINDOW.openSearch("Markdown"));
         Thread.sleep(400);
-        capture("window-19-search.png");
+        captureGated("window-19-search.png", "会话内搜索条：填词后上方出现搜索条（上一个/下一个/收起 + 命中计数），正文命中处高亮。");
         assertTrue(uiHasShowingText("上一个") && uiHasShowingText("下一个") && uiHasShowingText("收起"), "搜索条打开");
         assertTrue(uiHasLabelContaining(" / "), "命中计数与游标显示");
         edt(() -> WINDOW.closeSearch());
@@ -308,7 +327,7 @@ class WindowGuiTest {
         assertFalse(uiHasTextPaneContaining("先拆解一下问题再作答"), "再点收回");
         edt(() -> streamHolder[0].appendChunk("每 120ms 渲染一次，`高度`自适应。\n\n```java\nint x = 42;\n```\n"));
         Thread.sleep(600);
-        capture("window-7-streaming.png");
+        captureGated("window-7-streaming.png", "流式输出卡：思考区已收成一行「已思考 N 秒」，正文含加粗/行内代码/代码块；后面的收尾会落库。");
         edt(() -> streamHolder[0].finish());
         Message streamedMessage = lastMessage();
         assertEquals(streamedBody, streamedMessage.text(), "正文落库干净（无思考标记拼接）");
@@ -357,7 +376,7 @@ class WindowGuiTest {
         Thread.sleep(200);
         edt(() -> toolHolder[0].appendArgs("\"src/Demo."));
         Thread.sleep(200);
-        capture("window-16-tool-card.png"); // "运行中…"状态，参数已流式显示出一半
+        captureGated("window-16-tool-card.png", "工具调用卡「运行中…」状态：参数 JSON 正在流式追加（此刻只有一半就对了，另一半会补上）。"); // "运行中…"状态，参数已流式显示出一半
         edt(() -> toolHolder[0].appendArgs("java\"}"));
         Thread.sleep(200);
         // finish 传空参数：终态参数应回退到流式累积的完整 JSON（argsByCallId 兜底路径）
@@ -385,7 +404,7 @@ class WindowGuiTest {
         Thread.sleep(300);
         assertTrue(uiHasTextAreaStartingWith("public class Demo"), "点头部展开结果");
         assertTrue(uiHasText("复制结果") && uiHasText("复制参数"), "展开后有复制入口");
-        capture("window-16b-tool-expanded.png");
+        captureGated("window-16b-tool-expanded.png", "工具卡展开态：结果文本区可见，尾部有「复制结果/复制参数」两个入口（下一个会收回）。");
         edt(() -> uiClickNamed("tool-header"));
         Thread.sleep(300);
         assertFalse(uiHasTextAreaStartingWith("public class Demo"), "再点头部收回");
@@ -407,7 +426,7 @@ class WindowGuiTest {
         Thread.sleep(300);
         assertTrue(uiHasText("待确认") && uiHasText("允许") && uiHasText("拒绝"), "待确认态徽标与按钮");
         assertTrue(sidebarBadgeHtml(store.getActive().getId()).contains(">待确认<"), "侧栏亮\"待确认\"标注");
-        capture("window-17-approval.png");
+        captureGated("window-17-approval.png", "权限确认卡：头部「待确认」徽标 + 允许/拒绝按钮；侧栏该会话亮「待确认」（下一个点的是自动化允许，不是你现在决定）。");
         edt(() -> uiClick("允许"));
         Thread.sleep(300);
         assertTrue(Boolean.TRUE.equals(decision[0].getNow(null)), "允许按钮写入 future");
@@ -484,6 +503,7 @@ class WindowGuiTest {
         });
         Thread.sleep(400);
         assertTrue(uiHasTextAreaStartingWith("{\"path\": \"workspace/very/long"), "展开显示参数全文");
+        humanGate("窄窗口审批（无截图）：窗口缩到 760 宽后，长参数待确认卡头部的「允许」按钮仍完整可见、不是被裁出行外；展开区能看到参数全文。");
         edt(() -> uiClick("允许")); // 点击落到按钮上 future 才会被写——顺带证明窄窗口下可点
         Thread.sleep(300);
         assertTrue(Boolean.TRUE.equals(narrowDecision[0].getNow(null)), "窄窗口下允许按钮仍可点击");
@@ -510,7 +530,7 @@ class WindowGuiTest {
             }
         });
         Thread.sleep(400);
-        capture("window-8-hover.png");
+        captureGated("window-8-hover.png", "悬停菜单：卡片右上角「…」浮层在合成 mouseEntered 后显示（真实鼠标划上去应同样出现）。");
     }
 
     @Test
@@ -525,15 +545,15 @@ class WindowGuiTest {
         Thread.sleep(400);
         edt(() -> store.setPinned(c2.getId(), true));
         Thread.sleep(400);
-        capture("window-9-pinned.png");
+        captureGated("window-9-pinned.png", "置顶排序：c2 置顶后跳到列表最前，时间行带「置顶」标签（侧栏已从折叠态展开回来）。");
         // —— 截图 10：搜索标题命中高亮（"今天"命中 c2 标题） ——
         edt(() -> WINDOW.getSidebar().setSearchQuery("今天"));
         Thread.sleep(400);
-        capture("window-10-search-highlight.png");
+        captureGated("window-10-search-highlight.png", "侧栏搜索「今天」：标题命中的 c2 条目高亮。");
         // —— 截图 11：搜索内容命中片段（"并发"只在 c1 内容里，条目显示片段预览行） ——
         edt(() -> WINDOW.getSidebar().setSearchQuery("并发"));
         Thread.sleep(400);
-        capture("window-11-search-snippet.png");
+        captureGated("window-11-search-snippet.png", "侧栏搜索「并发」：只在 c1 内容命中，条目带片段预览行。");
         // —— 截图 12：会话右键菜单（清掉搜索后，对列表合成一个 popupTrigger 按下事件弹菜单） ——
         edt(() -> WINDOW.getSidebar().setSearchQuery(""));
         Thread.sleep(300);
@@ -549,7 +569,7 @@ class WindowGuiTest {
             }
         });
         Thread.sleep(500);
-        capture("window-12-context-menu.png");
+        captureGated("window-12-context-menu.png", "右键菜单：对会话条目合成 popupTrigger 后弹出的菜单（真实右键应同样出现；下一个会收掉它）。");
         // —— 收尾：合成 MOUSE_EXITED 藏掉 8 号起的悬停"…"，clearSelectedPath 关掉右键菜单 ——
         edt(() -> {
             List<Component> all = new ArrayList<>();
@@ -611,7 +631,7 @@ class WindowGuiTest {
         });
         assertTrue(counters[0] > 0, "滚回顶部后首卡已物化");
         assertTrue(counters[1] < 120, "滚动后物化窗口仍受限: " + counters[1]);
-        capture("window-13-long-conversation.png");
+        captureGated("window-13-long-conversation.png", "长会话窗口化：滚回顶部后首卡已物化（300 张卡不全量物化，只有视口附近的文本组件），滚动流畅无卡顿。");
     }
 
     @Test
@@ -627,7 +647,7 @@ class WindowGuiTest {
         });
         Thread.sleep(1500);
         scrollWaterfallToTop(); // retheme 重建整窗会滚到底部，滚回顶部让思考块入镜
-        capture("window-14-dark.png");
+        captureGated("window-14-dark.png", "深色主题：整窗原地重建后的配色（侧栏/卡片/思考块/代码块/引用/表格都随深色，下一个会打开深色设置面板）。");
 
         // —— 截图 15：深色下的设置面板（主题下拉应显示"深色"，输入控件跟随弹层配色） ——
         edt(() -> {
@@ -645,18 +665,8 @@ class WindowGuiTest {
             }
         });
         Thread.sleep(600);
-        edt(() -> {
-            SettingsDialog dialog = dialogHolder;
-            BufferedImage image = new BufferedImage(dialog.getWidth(), dialog.getHeight(),
-                    BufferedImage.TYPE_INT_RGB);
-            dialog.printAll(image.createGraphics());
-            try {
-                ImageIO.write(image, "png", new File(SCREENS.resolve("window-15-dark-settings.png").toString()));
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-            dialog.dispose();
-        });
+        captureDialogGated("window-15-dark-settings.png", "设置", "深色下的设置面板：主题下拉显示「深色」，输入控件跟随弹层配色，全部勾选框打勾验证选中态对勾图标。");
+        edt(() -> dialogHolder.dispose());
         // 给后续用例恢复浅色基线（截图配色只在内存）
         edt(() -> {
             AppSettings.get().setUiTheme("light");
@@ -690,6 +700,7 @@ class WindowGuiTest {
             WINDOW.setVisible(true);
         });
         assertEquals(1, tray.getTrayIcons().length, "托盘图标常驻（不随偏好注销）");
+        humanGate("托盘最小化演示已完成：点关闭后窗口收进托盘再恢复显示（本机 SystemTray 支持时才走到这里；无托盘环境整段自动跳过）。");
     }
 
     @Test
@@ -704,7 +715,8 @@ class WindowGuiTest {
         Thread.sleep(800);
         assertTrue(uiHasTextAnyWindow("新建对话的工作区——工具的相对路径以此为基准"), "工作区弹窗打开");
         assertTrue(uiHasTextAnyWindow("浏览…"), "弹窗里有浏览按钮（资源管理器选目录）");
-        captureDialog("window-20-workspace.png", "选择工作区");
+        captureDialogGated("window-20-workspace.png", "选择工作区",
+                "新建对话的工作区弹窗：说明文案 + 「浏览…」按钮 + 路径输入（下一个自动点「取消」，不新建会话）。");
         edt(() -> uiClickAnyWindow("取消"));
         Thread.sleep(300);
         assertEquals(conversationsBefore, store.getConversations().size(), "取消不新建会话");
@@ -729,6 +741,7 @@ class WindowGuiTest {
         String wsName = Path.of(wsPath).getFileName().toString();
         assertTrue(sidebarGroupRows().stream().anyMatch(g -> wsName.equals(g[0]) && wsPath.equals(g[1])),
                 "绑定的工作区在侧栏有自己的分组");
+        humanGate("弹窗选定的工作区已落会话：主区会话绑定到 ws-project 目录，侧栏出现 ws-project 分组、组下挂着新会话。");
     }
 
     @Test
@@ -754,11 +767,11 @@ class WindowGuiTest {
         edt(() -> WINDOW.getSidebar().toggleGroupCollapsed(null)); // 折叠默认组
         Thread.sleep(400);
         assertTrue(sidebarRowCount() == rowsBeforeCollapse - defaultGroupConvs, "收起组：只留组头，其余随组收掉");
-        capture("window-20c-group-collapsed.png");
+        captureGated("window-20c-group-collapsed.png", "组头折叠：默认工作区组收起后只留组头一行，组下会话全部隐藏（下一个会展开）。");
         edt(() -> WINDOW.getSidebar().toggleGroupCollapsed(null)); // 再点展开
         Thread.sleep(400);
         assertTrue(sidebarRowCount() == rowsBeforeCollapse, "再点组头展开恢复");
-        capture("window-20b-workspace-groups.png");
+        captureGated("window-20b-workspace-groups.png", "组头展开恢复 + 工作区分组全景：默认工作区组与 ws-project 组并存，组头有「＋」直达新建。");
     }
 
     @Test
@@ -777,7 +790,7 @@ class WindowGuiTest {
         edt(() -> WINDOW.getInputTextArea().setText(manyLines.toString()));
         Thread.sleep(400);
         assertEquals(240, WINDOW.getInputPreferredHeight(), "触帽后不再增高（内部滚动接管）");
-        capture("window-21-input-grow.png");
+        captureGated("window-21-input-grow.png", "输入框触帽内滚：多行输入到 240 上限后不再增高、内部滚动接管（下一个会清空回落初始高 48）。");
         edt(() -> WINDOW.getInputTextArea().setText(""));
         Thread.sleep(400);
         assertEquals(48, WINDOW.getInputPreferredHeight(), "清空后回落到初始高度（不只长不缩）");
@@ -822,6 +835,65 @@ class WindowGuiTest {
                 throw new RuntimeException(e);
             }
         });
+    }
+
+    /**
+     * 截图 + 交互向导门：全自动模式只截图；向导模式（见类注释）在截图后弹主题化说明卡等人确认，
+     * 说明卡期间画面正处该步的可观察态。人工终止后剩余观察点静默自动跑完。
+     */
+    private static void captureGated(String name, String what) throws Exception {
+        capture(name);
+        humanGate(what);
+    }
+
+    /** 同 captureGated，作用于按标题寻_dialog 的弹窗截图（工作区弹窗/设置面板） */
+    private static void captureDialogGated(String name, String dialogTitle, String what) throws Exception {
+        captureDialog(name, dialogTitle);
+        humanGate(what);
+    }
+
+    /**
+     * 交互向导门：-Dgui.interactive=true 时在 EDT 弹 APPLICATION_MODAL 的 Ui.confirmDialog
+     * （模态事件泵即阻塞期——invokeAndWait 在用户点"下一个"前不返回，无需额外 latch）；
+     * 自动过站档弹卡后 600ms 由 Swing Timer 合成一次"下一个"点击（真实按钮路径）。
+     * 必须在非 EDT 测试线程调用。
+     */
+    private static void humanGate(String what) throws Exception {
+        if (!WIZARD || gateAborted) {
+            return;
+        }
+        gateNo++;
+        boolean[] cancelled = new boolean[1];
+        edt(() -> {
+            if (WIZARD_AUTO) {
+                // 自动过站：真卡照弹，计时后合成点击走真实按钮路径（doClick 须在 EDT）
+                javax.swing.Timer autoNext = new javax.swing.Timer(600, e -> uiGateNextClick());
+                autoNext.setRepeats(false);
+                autoNext.start();
+            }
+            WINDOW.toFront();
+            cancelled[0] = !Ui.confirmDialog(WINDOW, "GUI 回归向导——人工巡检（第 " + gateNo + " 站）",
+                    "<html><b>先认一下本站看点，不放心就多看一会儿。</b><br>" + what, "下一个", false);
+        });
+        if (cancelled[0] && !gateAborted) {
+            gateAborted = true;
+            System.out.println("GUI-WIZARD: 人工终止，剩余观察点自动跑完（回归照常全量出结果）");
+        }
+    }
+
+    /** 给自动过站档找当前弹卡上的"下一个"按钮并合成点击（须在 EDT） */
+    private static void uiGateNextClick() {
+        for (java.awt.Window window : java.awt.Window.getWindows()) {
+            List<Component> all = new ArrayList<>();
+            collectComponents(window, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.JButton button
+                        && "下一个".equals(button.getText()) && button.isEnabled()) {
+                    button.doClick();
+                    return;
+                }
+            }
+        }
     }
 
     /** 把消息区滚回顶部（走滚动条 setValue，与真实用户拖拽同路径） */

@@ -85,3 +85,13 @@ src/main/java/io/github/preschoolller/agentjava/
 mvn test
 # 纯逻辑 20 例 + GUI 19 例（无托盘环境托盘段自动跳过），截图落在 target/regression/ 下
 ```
+
+GUI 回归另带**交互巡检向导**（默认关）：`-Dgui.interactive=true` 时每个观察点截图后弹
+主题化说明卡（写明"该站看什么"），人工点"下一个"才继续，人眼兜底观感/手感这类断言
+够不着的维度；点"取消"=人工终止向导，剩余流程静默自动跑完。搭配
+`-Dgui.interactive.auto=true` 向导卡照弹、600ms 自动点"下一个"（agent/CI 冒烟用）：
+
+```bash
+mvn test -Dtest=WindowGuiTest -Dgui.interactive=true                    # 人工巡检
+mvn test -Dtest=WindowGuiTest -Dgui.interactive=true -Dgui.interactive.auto=true   # 冒烟
+```
