@@ -19,7 +19,7 @@ public class ToolManager {
     private static volatile ToolManager instance;
     public static List<Tool> tools = new ArrayList<>(List.of(
             ToolRead.getInstance(),
-            ToolWslBash.getInstance()
+            ToolBash.getInstance()
     ));
 
     private ToolManager() {

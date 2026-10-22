@@ -8,7 +8,7 @@ Java 桌面 AI Agent 应用。学习用途。未完成。前端 99% 由 AI 生�
 
 ```bash
 mvn compile
-mvn exec:java -Dexec.mainClass=io.github.preschoolller.agentjava.Main
+mvn exec:java
 ```
 
 （或者 IDE 里直接跑 `Main`。）  
