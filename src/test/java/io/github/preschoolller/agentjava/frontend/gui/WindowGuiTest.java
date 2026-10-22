@@ -35,6 +35,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -52,12 +53,14 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
  * 侧栏分组/组头加号/组头折叠、输入框高度自适应，共 28 张截图。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须包在 EDT 里执行（见踩坑记录 #1）。
  * <p>
- * 交互巡检向导（用户点名）：-Dgui.interactive=true 时每个观察点在截图后弹主题化说明卡
- * （Ui.confirmDialog，写明"该站看什么"），人工点"下一个"才继续下一步——补自动断言够不着的
- * 观感/手感维度（配色对齐、字形 fallback、真实鼠标手感），fail-fast 断言之外的人眼兜底；
- * 点"取消"=人工终止向导，剩余观察点静默自动跑完（回归仍出全量结果）。
- * -Dgui.interactive.auto=true 再叠一层自动过站：向导卡照弹、600ms 后自动点"下一个"
- * （agent/CI 冒烟验证交互管线用，人工巡检不用）。两开关默认关，绝不自动卡人。
+ * 交互巡检向导（用户点名）：-Dgui.interactive=true 时每个观察点在截图后弹说明卡，人工点
+ * "下一个"才继续——补自动断言够不着的观感/手感维度（配色对齐、字形 fallback、真实鼠标手感）。
+ * 说明卡默认<b>非模态</b>（MODELESS + alwaysOnTop 钉主窗右下角）：等人期间可以随便点被测
+ * 窗口，"请顺手试"的站点就靠这条腿；有真模态弹窗在场时退回 Ui.confirmDialog 模态卡
+ * （Swing 模态规则：显示中的 APPLICATION_MODAL 弹窗把事后创建的窗也锁进模态作用域，
+ * 非模态卡会被拦死点不了）。点"取消/终止"=人工终止向导，剩余观察点静默自动跑完。
+ * -Dgui.interactive.auto=true 再叠一层自动过站：卡照弹、600ms 自动点"下一个"并落一行
+ * 过站日志（agent/CI 冒烟验证交互管线用，人工巡检不用）。两开关默认关，绝不自动卡人。
  */
 @TestMethodOrder(OrderAnnotation.class)
 class WindowGuiTest {
@@ -161,7 +164,8 @@ class WindowGuiTest {
         // —— 截图 1b：分隔条拖到 360px（模拟手动拖宽侧栏） ——
         edt(() -> WINDOW.getSplitPane().setDividerLocation(360));
         Thread.sleep(600);
-        captureGated("window-1b-wide.png", "分隔条拖到 360 宽后的侧栏形态，条目横向更舒展（点完下一个会拖回默认宽）。");
+        captureGated("window-1b-wide.png",
+                "分隔条拖到 360 宽后的侧栏形态，条目横向更舒展（点完下一个会拖回默认宽）。请顺手试：真实拖一下分隔条比对手感与合成路径是否一致。");
         edt(() -> WINDOW.getSplitPane().setDividerLocation(Sidebar.EXPANDED_WIDTH));
         Thread.sleep(400);
     }
@@ -226,7 +230,8 @@ class WindowGuiTest {
         boolean[] modelDeleteEnabled = new boolean[1];
         edt(() -> modelDeleteEnabled[0] = dialogHolder.isModelRowDeleteEnabled(0));
         assertTrue(modelDeleteEnabled[0], "打开设置行删除钮即可用（目录两条）");
-        captureDialogGated("window-5-settings.png", "设置", "设置面板默认页=模型服务：后端地址/模型目录两条/温度等参数表单。");
+        captureDialogGated("window-5-settings.png", "设置",
+                "设置面板默认页=模型服务：后端地址/模型目录两条/温度等参数表单。改动请只看不保存——「保存」会写进你机器的真实偏好。");
 
         // —— 设置面板分页断言（计划外）：默认页=模型服务；两枚胶囊来回切，各自页内控件在/不在。
         //  用 uiHasShowingTextAnyWindow：CardLayout 隐藏页的组件仍在容器树里，不带显隐过滤会误报 ——
@@ -246,7 +251,8 @@ class WindowGuiTest {
         Thread.sleep(400);
         assertFalse(uiHasShowingTextAnyWindow("配置方案") && uiHasShowingTextAnyWindow("正文字号"),
                 "工具页不含其他页控件");
-        captureDialogGated("window-5d-settings-tools.png", "设置", "工具页：ToolManager 注册的工具逐条一行，勾选框=声明给模型（交互模式下全量依赖在，是真实注册行）。");
+        captureDialogGated("window-5d-settings-tools.png", "设置",
+                "工具页：ToolManager 注册的工具逐条一行，勾选框=声明给模型（本次跑全量依赖，是真实注册行）。勾选态看看就好，别点「保存」。");
         edt(() -> uiClickAnyWindow("模型服务"));
         Thread.sleep(400);
         assertTrue(uiHasShowingTextAnyWindow("配置方案"), "切回模型服务页");
@@ -291,7 +297,9 @@ class WindowGuiTest {
         // 会话内搜索（Ctrl+F）：开搜索条填词，匹配计数与定位跳转；收起后入口消失
         edt(() -> WINDOW.openSearch("Markdown"));
         Thread.sleep(400);
-        captureGated("window-19-search.png", "会话内搜索条：填词后上方出现搜索条（上一个/下一个/收起 + 命中计数），正文命中处高亮。");
+        captureGated("window-19-search.png",
+                "会话内搜索条：填词后计数「共 N 处」并自动跳到第一处命中——命中卡的边框亮主题色闪 700ms（文字本身不做高亮；侧栏那种「高亮」是标题命中加粗，形态不同）。"
+                        + "请顺手试：点几下「下一个」看逐站跳动，改动搜索词看计数实时变化。");
         assertTrue(uiHasShowingText("上一个") && uiHasShowingText("下一个") && uiHasShowingText("收起"), "搜索条打开");
         assertTrue(uiHasLabelContaining(" / "), "命中计数与游标显示");
         edt(() -> WINDOW.closeSearch());
@@ -426,7 +434,8 @@ class WindowGuiTest {
         Thread.sleep(300);
         assertTrue(uiHasText("待确认") && uiHasText("允许") && uiHasText("拒绝"), "待确认态徽标与按钮");
         assertTrue(sidebarBadgeHtml(store.getActive().getId()).contains(">待确认<"), "侧栏亮\"待确认\"标注");
-        captureGated("window-17-approval.png", "权限确认卡：头部「待确认」徽标 + 允许/拒绝按钮；侧栏该会话亮「待确认」（下一个点的是自动化允许，不是你现在决定）。");
+        captureGated("window-17-approval.png",
+                "权限确认卡：头部「待确认」徽标 + 允许/拒绝按钮；侧栏该会话亮「待确认」。注意：别点卡片上的按钮——下一段自动化要点「允许」走允许路径，你先点了它就找不到了。");
         edt(() -> uiClick("允许"));
         Thread.sleep(300);
         assertTrue(Boolean.TRUE.equals(decision[0].getNow(null)), "允许按钮写入 future");
@@ -530,7 +539,7 @@ class WindowGuiTest {
             }
         });
         Thread.sleep(400);
-        captureGated("window-8-hover.png", "悬停菜单：卡片右上角「…」浮层在合成 mouseEntered 后显示（真实鼠标划上去应同样出现）。");
+        captureGated("window-8-hover.png", "悬停菜单：卡片右上角「…」浮层在合成 mouseEntered 后显示。请顺手试：真实把鼠标划过几张卡片看「…」与合成效果是否一致。");
     }
 
     @Test
@@ -569,7 +578,7 @@ class WindowGuiTest {
             }
         });
         Thread.sleep(500);
-        captureGated("window-12-context-menu.png", "右键菜单：对会话条目合成 popupTrigger 后弹出的菜单（真实右键应同样出现；下一个会收掉它）。");
+        captureGated("window-12-context-menu.png", "右键菜单：对会话条目合成 popupTrigger 后弹出的菜单。请顺手试：真实右键一条会话比对菜单形态（下一个会收掉菜单）。");
         // —— 收尾：合成 MOUSE_EXITED 藏掉 8 号起的悬停"…"，clearSelectedPath 关掉右键菜单 ——
         edt(() -> {
             List<Component> all = new ArrayList<>();
@@ -631,7 +640,8 @@ class WindowGuiTest {
         });
         assertTrue(counters[0] > 0, "滚回顶部后首卡已物化");
         assertTrue(counters[1] < 120, "滚动后物化窗口仍受限: " + counters[1]);
-        captureGated("window-13-long-conversation.png", "长会话窗口化：滚回顶部后首卡已物化（300 张卡不全量物化，只有视口附近的文本组件），滚动流畅无卡顿。");
+        captureGated("window-13-long-conversation.png",
+                "长会话窗口化：滚回顶部后首卡已物化（300 张卡不全量物化，只有视口附近的文本组件）。请顺手试：真实滚动滚轮拉到底再滚回来，看卡顿与否。");
     }
 
     @Test
@@ -716,7 +726,7 @@ class WindowGuiTest {
         assertTrue(uiHasTextAnyWindow("新建对话的工作区——工具的相对路径以此为基准"), "工作区弹窗打开");
         assertTrue(uiHasTextAnyWindow("浏览…"), "弹窗里有浏览按钮（资源管理器选目录）");
         captureDialogGated("window-20-workspace.png", "选择工作区",
-                "新建对话的工作区弹窗：说明文案 + 「浏览…」按钮 + 路径输入（下一个自动点「取消」，不新建会话）。");
+                "新建对话的工作区弹窗：说明文案 + 「浏览…」按钮 + 路径输入（下一个自动点「取消」，不新建会话）。这站弹窗是模态的，主窗外点不了属正常，也没有顺手试环节。");
         edt(() -> uiClickAnyWindow("取消"));
         Thread.sleep(300);
         assertEquals(conversationsBefore, store.getConversations().size(), "取消不新建会话");
@@ -790,7 +800,7 @@ class WindowGuiTest {
         edt(() -> WINDOW.getInputTextArea().setText(manyLines.toString()));
         Thread.sleep(400);
         assertEquals(240, WINDOW.getInputPreferredHeight(), "触帽后不再增高（内部滚动接管）");
-        captureGated("window-21-input-grow.png", "输入框触帽内滚：多行输入到 240 上限后不再增高、内部滚动接管（下一个会清空回落初始高 48）。");
+        captureGated("window-21-input-grow.png", "输入框触帽内滚：多行输入到 240 上限后不再增高、内部滚动接管。请顺手试：真实打几行字看高度自适应（下一个会清空回落初始高 48）。");
         edt(() -> WINDOW.getInputTextArea().setText(""));
         Thread.sleep(400);
         assertEquals(48, WINDOW.getInputPreferredHeight(), "清空后回落到初始高度（不只长不缩）");
@@ -853,9 +863,18 @@ class WindowGuiTest {
     }
 
     /**
-     * 交互向导门：-Dgui.interactive=true 时在 EDT 弹 APPLICATION_MODAL 的 Ui.confirmDialog
-     * （模态事件泵即阻塞期——invokeAndWait 在用户点"下一个"前不返回，无需额外 latch）；
-     * 自动过站档弹卡后 600ms 由 Swing Timer 合成一次"下一个"点击（真实按钮路径）。
+     * 交互向导门，两种形态自适应：
+     * <ul>
+     *   <li><b>常态 = 非模态说明卡</b>：MODELESS + alwaysOnTop，钉在主窗右下角——用户在等的
+     *       期间可以随意点被测窗口（hover/右键/打字/拖分隔条，站点的"请顺手试"都在这条腿上），
+     *       测试线程 latch.await() 等待，点「下一个」countDown；「终止」置 abort 同样放行。</li>
+     *   <li><b>真模态弹窗在场 → 退回模态卡</b>（Ui.confirmDialog）：Swing 模态规则是显示中的
+     *       APPLICATION_MODAL 弹窗把事后创建的窗也锁进模态作用域，非模态卡会被拦死点不了
+     *       （工作区弹窗那站踩过）。</li>
+     * </ul>
+     * 自动过站档（-Dgui.interactive.auto=true）：卡照弹，600ms 后 Swing Timer 在向导卡
+     * 里找「下一个」钮合成 doClick（真实按钮路径；只扫标题"GUI 回归向导"开头的卡，
+     * 产品搜索条有同名按钮，见踩坑 #31），并落一行过站日志对账。
      * 必须在非 EDT 测试线程调用。
      */
     private static void humanGate(String what) throws Exception {
@@ -863,29 +882,44 @@ class WindowGuiTest {
             return;
         }
         gateNo++;
+        if (WIZARD_AUTO) {
+            System.out.println("GUI-WIZARD auto: 第 " + gateNo + " 站已到，600ms 后自动过站");
+        }
+        String body = "<html><b>先认一下本站看点，不放心就多待一会儿。</b><br>" + what;
         boolean[] cancelled = new boolean[1];
-        edt(() -> {
-            if (WIZARD_AUTO) {
-                // 自动过站：真卡照弹，计时后合成点击走真实按钮路径（doClick 须在 EDT）
-                javax.swing.Timer autoNext = new javax.swing.Timer(600, e -> uiGateNextClick());
-                autoNext.setRepeats(false);
-                autoNext.start();
-            }
-            WINDOW.toFront();
-            cancelled[0] = !Ui.confirmDialog(WINDOW, "GUI 回归向导——人工巡检（第 " + gateNo + " 站）",
-                    "<html><b>先认一下本站看点，不放心就多看一会儿。</b><br>" + what, "下一个", false);
-        });
+        boolean[] modalShowing = new boolean[1];
+        edt(() -> modalShowing[0] = uiHasModalDialogShowing());
+        if (modalShowing[0]) {
+            edt(() -> {
+                scheduleAutoNext(600);
+                WINDOW.toFront();
+                cancelled[0] = !Ui.confirmDialog(WINDOW, "GUI 回归向导——人工巡检（第 " + gateNo + " 站）",
+                        body, "下一个", false);
+            });
+        } else {
+            CountDownLatch gate = new CountDownLatch(1);
+            edt(() -> showGateDialog(body, cancelled, gate));
+            gate.await();
+        }
         if (cancelled[0] && !gateAborted) {
             gateAborted = true;
             System.out.println("GUI-WIZARD: 人工终止，剩余观察点自动跑完（回归照常全量出结果）");
         }
     }
 
-    /** 给自动过站档找当前弹卡上的"下一个"按钮并合成点击（须在 EDT） */
+    /**
+     * 给自动过站档找当前弹卡上的"下一个"按钮并合成点击（须在 EDT）；卡未就绪就 500ms 后再来。
+     * 只扫标题以"GUI 回归向导"开头的卡——产品搜索条上也有个「下一个」钮（Window.buildSearchBar），
+     * 全窗口按文本找会点到它去，向导卡反而没动静（真实踩坑）。
+     */
     private static void uiGateNextClick() {
         for (java.awt.Window window : java.awt.Window.getWindows()) {
+            if (!(window instanceof javax.swing.JDialog dialog) || !dialog.isShowing()
+                    || !dialog.getTitle().startsWith("GUI 回归向导")) {
+                continue;
+            }
             List<Component> all = new ArrayList<>();
-            collectComponents(window, all);
+            collectComponents(dialog, all);
             for (Component component : all) {
                 if (component instanceof javax.swing.JButton button
                         && "下一个".equals(button.getText()) && button.isEnabled()) {
@@ -894,6 +928,83 @@ class WindowGuiTest {
                 }
             }
         }
+        autoNextRetries++;
+        if (autoNextRetries < 20) { // 20 次封顶防真弹不出来的环境死循环
+            scheduleAutoNext(500);
+        }
+    }
+
+    private static int autoNextRetries;
+
+    /** 自动过站档：真卡照弹，delay 后走真实按钮路径合成点击（须在 EDT） */
+    private static void scheduleAutoNext(int delay) {
+        if (!WIZARD_AUTO) {
+            return;
+        }
+        javax.swing.Timer autoNext = new javax.swing.Timer(delay, e -> uiGateNextClick());
+        autoNext.setRepeats(false);
+        autoNext.start();
+    }
+
+    /** 顶层窗口里有没有正在显示的应用级模态弹窗（工作区弹窗等；非模态说明卡会被其模态作用域拦死） */
+    private static boolean uiHasModalDialogShowing() {
+        for (java.awt.Window window : java.awt.Window.getWindows()) {
+            if (window instanceof java.awt.Dialog dialog && dialog.isShowing()
+                    && dialog.getModalityType() != java.awt.Dialog.ModalityType.MODELESS) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 非模态说明卡（须在 EDT）：MODELESS + alwaysOnTop 钉主窗右下角，不遮主内容区也不拦
+     * 被测窗交互；「下一个」/「终止」都 dispose + countDown（终止先置 abort，测试线程读定夺落日志）。
+     */
+    private static void showGateDialog(String body, boolean[] cancelled, CountDownLatch gate) {
+        javax.swing.JDialog dialog = new javax.swing.JDialog(WINDOW,
+                "GUI 回归向导——人工巡检（第 " + gateNo + " 站）", java.awt.Dialog.ModalityType.MODELESS);
+        dialog.setAlwaysOnTop(true);
+        javax.swing.JLabel messageLabel = new javax.swing.JLabel(body);
+        messageLabel.setFont(Ui.FONT_PLAIN);
+        messageLabel.setForeground(Ui.TEXT);
+        javax.swing.JButton nextButton = Ui.primaryButton("下一个");
+        javax.swing.JButton cancelButton = Ui.button("终止向导");
+        nextButton.setPreferredSize(new java.awt.Dimension(84, 28));
+        cancelButton.setPreferredSize(new java.awt.Dimension(84, 28));
+        java.awt.event.ActionListener same = e -> {
+            cancelled[0] = e.getSource() == cancelButton;
+            if (WIZARD_AUTO && !cancelled[0]) {
+                System.out.println("GUI-WIZARD auto: 第 " + gateNo + " 站已自动过站");
+            }
+            dialog.dispose();
+            gate.countDown();
+        };
+        nextButton.addActionListener(same);
+        cancelButton.addActionListener(same);
+        javax.swing.JPanel buttons = new javax.swing.JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        buttons.add(cancelButton);
+        buttons.add(nextButton);
+        javax.swing.JPanel content = new javax.swing.JPanel(new java.awt.BorderLayout(0, 12));
+        content.setBackground(Ui.BG);
+        content.setBorder(javax.swing.BorderFactory.createEmptyBorder(16, 16, 12, 16));
+        content.add(messageLabel, java.awt.BorderLayout.CENTER);
+        content.add(buttons, java.awt.BorderLayout.SOUTH);
+        dialog.setContentPane(content);
+        dialog.getRootPane().setDefaultButton(nextButton);
+        // 关闭钮必须无效化：JDialog 默认 X=dispose 但不 countDown，会把 latch 永久挂死
+        dialog.setDefaultCloseOperation(javax.swing.WindowConstants.DO_NOTHING_ON_CLOSE);
+        dialog.pack();
+        // 钉在主窗右下角内侧：不遮中心内容，也不挡用户点被测窗其它区域
+        java.awt.Rectangle windowBounds = WINDOW.getBounds();
+        dialog.setLocation(Math.max(windowBounds.x + 12,
+                windowBounds.x + windowBounds.width - dialog.getWidth() - 20),
+                Math.max(windowBounds.y + 12,
+                        windowBounds.y + windowBounds.height - dialog.getHeight() - 20));
+        scheduleAutoNext(600);
+        dialog.setVisible(true);
     }
 
     /** 把消息区滚回顶部（走滚动条 setValue，与真实用户拖拽同路径） */
