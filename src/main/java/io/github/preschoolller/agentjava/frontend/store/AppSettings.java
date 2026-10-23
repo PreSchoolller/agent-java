@@ -59,6 +59,8 @@ public final class AppSettings {
     private int windowY = -1;
     private int sidebarDivider = -1;
 
+    private String bashFilePattern = "something";
+
     private AppSettings(Path file) {
         this.file = file;
         load();
@@ -240,6 +242,10 @@ public final class AppSettings {
 
     public String getLogLevel() {
         return logLevel;
+    }
+
+    public String getBashFilePattern() {
+        return bashFilePattern;
     }
 
     /** 仅接受 trace/debug/info/warn/error，其他值忽略（TinyLog 重启读一次，改了不重启不生效） */
@@ -467,6 +473,7 @@ public final class AppSettings {
         properties.setProperty("windowY", String.valueOf(windowY));
         properties.setProperty("sidebarDivider", String.valueOf(sidebarDivider));
         properties.setProperty("logLevel", String.valueOf(logLevel));
+        properties.setProperty("bashFilePattern", String.valueOf(bashFilePattern));
         try {
             Files.createDirectories(file.getParent());
             try (OutputStream out = Files.newOutputStream(file)) {
@@ -507,6 +514,7 @@ public final class AppSettings {
         enabledTools = enabledToolsRaw == null ? null
                 : Arrays.stream(enabledToolsRaw.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList();
         logLevel = properties.getProperty("logLevel");
+        bashFilePattern = properties.getProperty("bashFilePattern", "something");
         if (logLevel == null || !allowLevels.contains(logLevel)) {
             logLevel = "info";
         }
