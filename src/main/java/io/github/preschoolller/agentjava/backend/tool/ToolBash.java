@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
+import io.github.preschoolller.agentjava.backend.tool.interfaces.BackGroundTaskDone;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.tinylog.Logger;
@@ -20,14 +21,18 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 public class ToolBash implements Tool {
 
     private static final String COMMAND = "command";
+    private static final String BACKGROUND = "background";
     private static final int TIMEOUT = 60; // seconds
     private static final int SHORT_TIMEOUT = 2; // seconds 用于检测 bash 命令超时
     private static final int THRESHOLD = 4096; // 超长命令转临时文件执行
@@ -80,14 +85,19 @@ public class ToolBash implements Tool {
     public Map<String, Object> schema() {
         return Map.of(
                 "type", "object",
-                "properties", Map.of(COMMAND, Map.of("type", "string", "description",
-                        "bash命令")),
+                "properties", Map.of(COMMAND, Map.of("type", "string", "description", "bash命令"),
+                        BACKGROUND, Map.of("type", "boolean", "description", "是否要作为后台进程运行，当次调用仅返回提交成功/失败，后台任务完成后结果会插入额外信息中")
+                ),
                 "required", List.of(COMMAND)
         );
     }
 
     @Override
     public String execute(String arguments, String workspace) {
+        return executeEnhance(arguments, workspace, null);
+    }
+
+    public String executeEnhance(String arguments, String workspace, BackGroundTaskDone bgTaskDone) {
         defineBash();
         if (!valid) {
             return "tool error: no valid bash command found in system";
@@ -101,10 +111,22 @@ public class ToolBash implements Tool {
             if (command == null || command.isBlank()) {
                 return "json parse error: wrong command";
             }
+            boolean asBackGroundTask = jsonNode.path(BACKGROUND).asBoolean(false);
             ProcessBuilder processBuilder = assembleProcessBuilder(command, workspace);
+            if (asBackGroundTask) {
+                return executeBackGround(arguments, workspace, processBuilder, bgTaskDone);
+            }
+            return executeForeGround(processBuilder, command);
+        } catch (JsonProcessingException e) {
+            return "json parse error: " + e.getMessage();
+        }
+    }
+
+    private static String executeForeGround(ProcessBuilder processBuilder, String command) {
+        try {
             Process process = processBuilder.start();
             StringBuffer out = new StringBuffer();
-            Future<?> futureRead = ThreadPoolFactory.getToolCallExecutor().submit(() -> {
+            Future<?> futureRead = ThreadPoolFactory.getReadBashOutExecutor().submit(() -> {
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                     reader.lines().forEach(out::append);
@@ -112,47 +134,86 @@ public class ToolBash implements Tool {
                     out.append("bash execute error while reading result: ").append(e.getMessage());
                 }
             });
-            // TODO 有些就是要sleep等结果的，或者是等长时间构建的，这超时时间（以及前端的等待时间）可能不够，或者说直接不允许做那些事儿？有待设计。。。
             boolean exited = process.waitFor(TIMEOUT, TimeUnit.SECONDS);
             String timeOut = "";
+            boolean doubleCheck = false;
             if (!exited) {
+                process.descendants().forEach(ProcessHandle::destroyForcibly);
                 process.destroyForcibly();
                 futureRead.cancel(true);
-                process.waitFor(SHORT_TIMEOUT, TimeUnit.SECONDS);
+                if (process.waitFor(SHORT_TIMEOUT, TimeUnit.SECONDS)) {
+                    doubleCheck = true;
+                }
                 timeOut = "\nprocess terminated after " + TIMEOUT + " seconds";
             }
-            int exitCode = process.exitValue();
-
+            try {
+                futureRead.get(SHORT_TIMEOUT, TimeUnit.SECONDS);
+            } catch (ExecutionException | TimeoutException e) {
+                // 最差情况 60秒等待->2秒强杀->2秒读缓冲流 依然到了这里，前端早已超时终止检查，结果已不重要，此处直接强杀
+                // 好情况 前方无等待顺利完成->2秒读缓冲流 到了这里，有那么长的缓冲流吗？强行截断，直接强杀
+                Logger.info("force cut off");
+                futureRead.cancel(true);
+                out.append("\n(result was cut off for long waiting)");
+            }
             out.append(out.isEmpty() ? "(no output)" : "");
             out.append(timeOut);
-            out.append("\nexit code: ").append(exitCode);
+            if (exited || doubleCheck) {
+                out.append("\n(exit code: ").append(process.exitValue()).append(")");
+            } else {
+                out.append("\n(did not exit)");
+            }
             Logger.trace("bash参数：{} bash 执行结果：{}", command, out);
             return out.toString();
-        } catch (JsonProcessingException e) {
-            return "json parse error: " + e.getMessage();
         } catch (IOException e) {
-            return "bash execute error: " + e.getMessage();
+            throw new RuntimeException(e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return "tool use error: bash execute was interrupted, maybe try again later.";
         }
     }
 
-    private static ProcessBuilder assembleProcessBuilder(String command, String workSpace) throws IOException {
+    private String executeBackGround(String arguments, String workspace, ProcessBuilder processBuilder, BackGroundTaskDone bgTaskDone) {
+        try {
+            Future<?> future = ThreadPoolFactory.getBgTaskExecutor().submit(() -> {
+                StringBuffer out = new StringBuffer();
+                try {
+                    Process process = processBuilder.start();
+                    Logger.info("background task submitted, arguments {}, workspace {}, pid {}", arguments, workspace, process.pid());
+
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+                bgTaskDone.markDone(out.toString());
+            });
+        } catch (RejectedExecutionException e) {
+            Logger.info("background task failed to submit, arguments {}, workspace {}", arguments, workspace);
+            return "background task submitted failed";
+        }
+        return "background task submitted successfully";
+    }
+
+    private static ProcessBuilder assembleProcessBuilder(String command, String workSpace) {
         ArrayList<String> bash = new ArrayList<>(bashHead);
         ProcessBuilder processBuilder;
+        boolean byFile = false;
         if (command.length() > THRESHOLD || needPutInFile(command)) {
             Path workDir = Path.of(workSpace);
             Path tmpDir = Constants.TEMP_DIR.resolve(workDir.getFileName().toString());
-            Files.createDirectories(tmpDir);
+            Path tmpFile = null;
+            try {
+                Files.createDirectories(tmpDir);
 
-            String tmpName = UUID.randomUUID().toString();
-            Path tmpFile = Files.createTempFile(tmpDir, tmpName, ".sh");
-            Files.writeString(tmpFile, command);
-
-            bash.add(buildTmpFilePath(tmpFile));
-            Logger.info("转文件执行：{}", tmpFile.toAbsolutePath());
-        } else {
+                String tmpName = UUID.randomUUID().toString();
+                tmpFile = Files.createTempFile(tmpDir, tmpName, ".sh");
+                Files.writeString(tmpFile, command);
+                bash.add(buildTmpFilePath(tmpFile));
+                Logger.info("转文件执行：{}", tmpFile.toAbsolutePath());
+                byFile = true;
+            } catch (IOException e) {
+                Logger.error("创建临时文件失败，尝试回退base64");
+            }
+        }
+        if (!byFile) {
             String base64 = Base64.getEncoder().encodeToString(command.getBytes(StandardCharsets.UTF_8));
             bash.add("-c");
             bash.add("echo " + base64 + " | base64 -d | bash");

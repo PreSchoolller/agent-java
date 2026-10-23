@@ -1,5 +1,6 @@
 package io.github.preschoolller.agentjava.backend.provider.common;
 
+import io.github.preschoolller.agentjava.backend.tool.ToolBash;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 
@@ -23,6 +24,8 @@ public class ToolCall implements Runnable {
     private volatile String workspace;
 
     private volatile ToolApprovalGate approvalGate;
+
+    private volatile BackGroundTask backGroundTask;
 
     private CompletableFuture<Status> statusFinal;
 
@@ -130,6 +133,10 @@ public class ToolCall implements Runnable {
         this.approvalGate = gate;
     }
 
+    public void setBackGroundTaskDone(BackGroundTask backGroundTask) {
+        this.backGroundTask = backGroundTask;
+    }
+
     public void setWorkspace(String workspace) {
         this.workspace = workspace;
     }
@@ -157,7 +164,11 @@ public class ToolCall implements Runnable {
                 });
                 markExtraGatesDone();
             } else {
-                result = tool.execute(arguments, workspace);
+                if (tool instanceof ToolBash toolBash) {
+                    result = toolBash.executeEnhance(arguments, workspace, out -> backGroundTask.markDone(this, out));
+                } else {
+                    result = tool.execute(arguments, workspace);
+                }
             }
             setResult(result);
             setStatus(ToolCall.Status.COMPLETE);

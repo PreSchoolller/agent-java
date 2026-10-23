@@ -30,6 +30,11 @@ public class ThreadPoolFactory {
             new ArrayBlockingQueue<>(100, true), toolCallThreadFactory,
             new ThreadPoolExecutor.CallerRunsPolicy());
 
+    public static ThreadPoolExecutor getToolCallExecutor() {
+        return toolCallExecutor;
+    }
+
+
     private static final ThreadFactory responseThreadFactory = new ThreadFactory() {
         private final AtomicInteger count = new AtomicInteger(0);
 
@@ -47,12 +52,62 @@ public class ThreadPoolFactory {
             new ArrayBlockingQueue<>(100, true), responseThreadFactory,
             new ThreadPoolExecutor.CallerRunsPolicy());
 
-
-    public static ThreadPoolExecutor getToolCallExecutor() {
-        return toolCallExecutor;
-    }
-
     public static ThreadPoolExecutor getResponseExecutor() {
         return responseExecutor;
+    }
+
+
+
+    private static final ThreadFactory bgTaskThreadFactory = new ThreadFactory() {
+        private final AtomicInteger count = new AtomicInteger(0);
+
+        @Override
+        public Thread newThread(@NotNull Runnable r) {
+            Thread thread = new Thread(r);
+            thread.setDaemon(true);
+            thread.setName("bgTask-pool-1-thread-" + count.incrementAndGet());
+            return thread;
+        }
+    };
+
+    /**
+     * 固定大小 CORE_POOL_SIZE ，限制后台进程数量，进不去明确告知后台任务创建失败，并强杀已经建立的进程
+     */
+    private static final ThreadPoolExecutor bgTaskExecutor = new ThreadPoolExecutor(
+            CORE_POOL_SIZE, CORE_POOL_SIZE, 1000, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(CORE_POOL_SIZE, true), bgTaskThreadFactory,
+            new ThreadPoolExecutor.AbortPolicy());
+
+
+    public static ThreadPoolExecutor getBgTaskExecutor() {
+        return bgTaskExecutor;
+    }
+
+
+
+    private static final ThreadFactory readBashOutFactory = new ThreadFactory() {
+        private final AtomicInteger count = new AtomicInteger(0);
+
+        @Override
+        public Thread newThread(@NotNull Runnable r) {
+            Thread thread = new Thread(r);
+            thread.setDaemon(true);
+            thread.setName("readBashOut-pool-1-thread-" + count.incrementAndGet());
+            return thread;
+        }
+    };
+
+    /**
+     * 参数同 toolCallExecutor
+     */
+    private static final ThreadPoolExecutor readBashOutExecutor = new ThreadPoolExecutor(
+            toolCallExecutor.getCorePoolSize(), toolCallExecutor.getMaximumPoolSize(),
+            toolCallExecutor.getKeepAliveTime(TimeUnit.SECONDS), TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(100, true), readBashOutFactory,
+            new ThreadPoolExecutor.AbortPolicy());
+
+
+    public static ThreadPoolExecutor getReadBashOutExecutor() {
+        return readBashOutExecutor;
     }
 }
