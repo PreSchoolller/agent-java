@@ -7,6 +7,7 @@ import io.github.preschoolller.agentjava.frontend.store.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 import io.github.preschoolller.agentjava.frontend.store.Message;
 import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
+import org.tinylog.Logger;
 
 import javax.swing.BorderFactory;
 import javax.swing.AbstractAction;
@@ -1070,7 +1071,7 @@ public class Window extends JFrame {
 
         @Override
         public void finish(String result, boolean success, String arguments) {
-            System.out.println("工具渲染结尾：" + System.currentTimeMillis());
+            Logger.info("tool call card finish");
             if (finished) {
                 return;
             }
@@ -1080,7 +1081,6 @@ public class Window extends JFrame {
             refreshSidebarBadges(); // 兜底：审批未来得及决出就被清理时熄灭"待确认"
             String finalArgs = (arguments == null || arguments.isEmpty()) ? args.toString() : arguments;
             Message updated = store.completeToolCall(conversationId, message, result, success, finalArgs);
-            System.out.println("工具入库结尾：" + System.currentTimeMillis());
             if (updated == null) {
                 return;
             }
@@ -1091,7 +1091,6 @@ public class Window extends JFrame {
             if (conversationId.equals(displayedConvId) && messageCards.contains(card)) {
                 rebuildCard(card);
             }
-            System.out.println("工具渲染真结尾：" + System.currentTimeMillis());
         }
 
         @Override
@@ -1136,7 +1135,7 @@ public class Window extends JFrame {
                 // 提醒/重绘失败绝不能让审批流挂掉：EDT 异常经 invokeAndWait 会被包成
                 // InvocationTargetException，requestToolApproval 只能误判成拒绝——"自动拒绝"事故。
                 // 决策 future 已挂好，这里吞掉显示层的失败，按钮没画出来也不影响等待与点击。
-                System.err.println("审批提醒/重绘失败（不影响审批）: " + e);
+                Logger.error("审批提醒/重绘失败（不影响审批）: {}", e.getMessage());
             }
         }
     }
@@ -2471,7 +2470,7 @@ public class Window extends JFrame {
 
         @Override
         public void finish() {
-            System.out.println("开始收尾：" + System.currentTimeMillis());
+            Logger.info("ai stream card finish");
             if (finished) {
                 return;
             }
@@ -2480,11 +2479,9 @@ public class Window extends JFrame {
             flushTimer.stop();
             liveStreams.remove(this);
             flush();
-            System.out.println("渲染收尾：" + System.currentTimeMillis());
             String thinkingText = thinking.length() == 0 ? null : thinking.toString();
             Message updated = store.updateMessageContent(conversationId, message,
                     full.toString(), thinkingText); // 正文与独立思考分别落库
-            System.out.println("入库收尾：" + System.currentTimeMillis());
             if (updated != null && card != null) {
                 card.message = updated; // 仓库记录已换成新对象，卡片同步持有（分叉按同一性定位）
             }

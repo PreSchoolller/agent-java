@@ -102,16 +102,9 @@ public class Main {
                 }
             });
 
-            // 后台任务控制（B 阶段）：终止/输出快照。UI（按钮/徽标）、存储（bg-killed）、
-            // 续轮编排都已就位，下面两个 TODO 是后端仅剩的活——按注释实现后按钮即生效。
             window.setBackGroundTaskControl(new Window.BackGroundTaskControl() {
                 @Override
                 public boolean kill(String conversationId, String callId) {
-                    // 终止机制：ShutDownJob 按 callId destroyForcibly 链（前台/后台任务都注册，
-                    // 见 ToolBash）。编排按任务类型分流：后台任务翻"已终止"卡，输出/注入/续轮由
-                    // markDone（EOF 后的完整缓冲）经 onBackGroundTaskDone 的 bg-killed 分支统一
-                    // 收尾；前台任务 waitFor 随进程死亡立即返回，工具调用带着已读输出和
-                    // "(已手动终止)"标记自行收尾，不需要额外编排。
                     TaskHandle killed = ShutDownJob.kill(callId);
                     if (killed != null && killed.background()) {
                         SwingUtilities.invokeLater(() ->
@@ -122,9 +115,6 @@ public class Main {
 
                 @Override
                 public String output(String conversationId, String callId) {
-                    // TODO(后端): 返回该任务当前已读输出（TaskHandle 里 StringBuffer 的快照；
-                    // StringBuffer 线程安全，与读流线程并发无碍）。null/空 = 暂无可读输出，
-                    // 卡片会显示"(暂无输出)"。须快速返回（按钮虽在后台线程调，别让它久等）。
                     return ShutDownJob.getBufferedOutput(callId);
                 }
             });
@@ -231,7 +221,6 @@ public class Main {
                     } else if (event instanceof FunctionToolCallDoneEvent e) {
                         Window.ToolCallHandle toolCallHandle = callIdHandleMap.get(e.callId());
                         ToolCall toolCall = e.toolCall();
-                        // 参数拼接期不挂终止/查看输出按钮（进程还不存在）：工具真正进入执行才挂
                         if (toolCallHandle != null) {
                             SwingUtilities.invokeLater(toolCallHandle::markExecuting);
                         }
