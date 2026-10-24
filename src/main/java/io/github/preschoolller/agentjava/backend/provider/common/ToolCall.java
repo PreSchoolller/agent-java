@@ -133,7 +133,7 @@ public class ToolCall implements Runnable {
         this.approvalGate = gate;
     }
 
-    public void setBackGroundTaskDone(BackGroundTask backGroundTask) {
+    public void setBackGroundTask(BackGroundTask backGroundTask) {
         this.backGroundTask = backGroundTask;
     }
 
@@ -165,7 +165,7 @@ public class ToolCall implements Runnable {
                 markExtraGatesDone();
             } else {
                 if (tool instanceof ToolBash toolBash) {
-                    result = toolBash.executeEnhance(arguments, workspace, out -> backGroundTask.markDone(this, out));
+                    result = toolBash.executeEnhance(arguments, workspace, callId, (out -> backGroundTask.markDone(callId, out)));
                 } else {
                     result = tool.execute(arguments, workspace);
                 }

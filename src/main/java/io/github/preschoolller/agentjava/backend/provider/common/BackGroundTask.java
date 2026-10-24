@@ -6,5 +6,5 @@ package io.github.preschoolller.agentjava.backend.provider.common;
 @FunctionalInterface
 public interface BackGroundTask {
 
-    boolean markDone(ToolCall toolCall, String out);
+    void markDone(String callId, String out);
 }

@@ -1,6 +1,5 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
-import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
@@ -722,7 +721,6 @@ public class Window extends JFrame {
 
     private void exitApp() {
         dispose();
-        ShutDownJob.clean();
         System.exit(0);
     }
 

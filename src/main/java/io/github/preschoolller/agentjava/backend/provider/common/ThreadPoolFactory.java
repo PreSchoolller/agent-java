@@ -71,16 +71,43 @@ public class ThreadPoolFactory {
     };
 
     /**
-     * 固定大小 CORE_POOL_SIZE ，限制后台进程数量，进不去明确告知后台任务创建失败，并强杀已经建立的进程
+     * 固定大小 CORE_POOL_SIZE ，限制后台进程数量，进不去明确告知后台任务创建失败
      */
     private static final ThreadPoolExecutor bgTaskExecutor = new ThreadPoolExecutor(
-            CORE_POOL_SIZE, CORE_POOL_SIZE, 1000, TimeUnit.SECONDS,
-            new ArrayBlockingQueue<>(CORE_POOL_SIZE, true), bgTaskThreadFactory,
+            CORE_POOL_SIZE, CORE_POOL_SIZE + 1, 1000, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(CORE_POOL_SIZE + 1, true), bgTaskThreadFactory,
             new ThreadPoolExecutor.AbortPolicy());
 
 
     public static ThreadPoolExecutor getBgTaskExecutor() {
         return bgTaskExecutor;
+    }
+
+
+
+    private static final ThreadFactory bgTaskReadOutThreadFactory = new ThreadFactory() {
+        private final AtomicInteger count = new AtomicInteger(0);
+
+        @Override
+        public Thread newThread(@NotNull Runnable r) {
+            Thread thread = new Thread(r);
+            thread.setDaemon(true);
+            thread.setName("bgTaskReadOut-pool-1-thread-" + count.incrementAndGet());
+            return thread;
+        }
+    };
+
+    /**
+     * 参数同 bgTaskExecutor
+     */
+    private static final ThreadPoolExecutor bgTaskReadOutExecutor = new ThreadPoolExecutor(
+            bgTaskExecutor.getCorePoolSize(), bgTaskExecutor.getMaximumPoolSize(), 1000, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(CORE_POOL_SIZE + 1, true), bgTaskReadOutThreadFactory,
+            new ThreadPoolExecutor.AbortPolicy());
+
+
+    public static ThreadPoolExecutor getBgTaskReadOutExecutor() {
+        return bgTaskReadOutExecutor;
     }
 
 

@@ -27,6 +27,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -48,6 +50,7 @@ public class ToolBash implements Tool {
             WSL_BASH_HEAD,
             GIT_BASH_HEAD
     );
+    private static final int BACKGROUND_OUT_THRESHOLD = 32 << 10;    // 后台任务输出长度，实际大小乘以 2B
     private static volatile boolean valid = true;
     private static volatile List<String> bashHead;
 
@@ -95,10 +98,10 @@ public class ToolBash implements Tool {
 
     @Override
     public String execute(String arguments, String workspace) {
-        return executeEnhance(arguments, workspace, null);
+        return executeEnhance(arguments, workspace, null, null);
     }
 
-    public String executeEnhance(String arguments, String workspace, BackGroundTaskDone bgTaskDone) {
+    public String executeEnhance(String arguments, String workspace, String callId, BackGroundTaskDone bgTaskDone) {
         defineBash();
         if (!valid) {
             return "tool error: no valid bash command found in system";
@@ -115,22 +118,28 @@ public class ToolBash implements Tool {
             boolean asBackGroundTask = jsonNode.path(BACKGROUND).asBoolean(false);
             ProcessBuilder processBuilder = assembleProcessBuilder(command, workspace);
             if (asBackGroundTask) {
-                return executeBackGround(arguments, workspace, processBuilder, bgTaskDone);
+                return executeBackGround(arguments, workspace, processBuilder, bgTaskDone, callId);
             }
-            return executeForeGround(processBuilder, command);
+            return executeForeGround(processBuilder, arguments, workspace);
         } catch (JsonProcessingException e) {
             return "json parse error: " + e.getMessage();
         }
     }
 
-    private static String executeForeGround(ProcessBuilder processBuilder, String command) {
+    private static String executeForeGround(ProcessBuilder processBuilder, String arguments, String workspace) {
+        StringBuffer out = new StringBuffer();
         try {
             Process process = processBuilder.start();
-            StringBuffer out = new StringBuffer();
             Future<?> futureRead = ThreadPoolFactory.getReadBashOutExecutor().submit(() -> {
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                    reader.lines().forEach(out::append);
+                    reader.lines().forEach(line -> {
+                        if (out.isEmpty()) {
+                            out.append(line);
+                        } else {
+                            out.append("\n").append(line);
+                        }
+                    });
                 } catch (IOException e) {
                     out.append("bash execute error while reading result: ").append(e.getMessage());
                 }
@@ -163,17 +172,22 @@ public class ToolBash implements Tool {
             } else {
                 out.append("\n(did not exit)");
             }
-            Logger.trace("bash参数：{} bash 执行结果：{}", command, out);
+            Logger.trace("bash参数：{} bash 执行结果：{}", arguments, out);
             return out.toString();
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            Logger.error("start process error, arguments {}, workspace {}", arguments, workspace);
+            out.append("\nbackground task failed to start: ").append(e.getMessage());
+            return out.toString();
         } catch (InterruptedException e) {
+            Logger.error("bash execute was interrupted, arguments {}, workspace {}", arguments, workspace);
             Thread.currentThread().interrupt();
             return "tool use error: bash execute was interrupted, maybe try again later.";
         }
     }
 
-    private String executeBackGround(String arguments, String workspace, ProcessBuilder processBuilder, BackGroundTaskDone bgTaskDone) {
+    private String executeBackGround(String arguments, String workspace, ProcessBuilder processBuilder, BackGroundTaskDone bgTaskDone, String callId) {
+        AtomicBoolean ready = new AtomicBoolean();
+        AtomicLong pid = new AtomicLong();
         try {
             Future<?> backFuture = ThreadPoolFactory.getBgTaskExecutor().submit(() -> {
                 StringBuffer out = new StringBuffer();
@@ -181,11 +195,25 @@ public class ToolBash implements Tool {
                 try {
                     Process process = ShutDownJob.registerBgProcess(processBuilder.start());
                     holder = process;
+                    pid.set(process.pid());
+                    ready.set(true);
                     Logger.info("background task submitted, arguments {}, workspace {}, pid {}", arguments, workspace, process.pid());
-                    Future<?> futureRead = ThreadPoolFactory.getReadBashOutExecutor().submit(() -> {
+                    Future<?> futureRead = ThreadPoolFactory.getBgTaskReadOutExecutor().submit(() -> {
                         try (BufferedReader reader = new BufferedReader(
                                 new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                            reader.lines().forEach(out::append);
+                            reader.lines().takeWhile(line -> {
+                                if (out.length() > BACKGROUND_OUT_THRESHOLD) {
+                                    out.append("\n(out put truncated for exceeds").append(BACKGROUND_OUT_THRESHOLD * 2).append("B)");
+                                    return false;
+                                }
+                                return true;
+                            }).forEach(line -> {
+                                if (out.isEmpty()) {
+                                    out.append(line);
+                                } else {
+                                    out.append("\n").append(line);
+                                }
+                            });
                         } catch (IOException e) {
                             out.append("bash execute error while reading result: ").append(e.getMessage());
                         } finally {
@@ -193,14 +221,16 @@ public class ToolBash implements Tool {
                             process.destroyForcibly();
                         }
                     });
-                    futureRead.wait();
+                    futureRead.get();
                 } catch (IOException e) {
                     Logger.error("start process error, arguments {}, workspace {}", arguments, workspace);
                     out.append("\nbackground task failed to start: ").append(e.getMessage());
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    Logger.error("future read interrupted, arguments {}, workspace {}, interrupt message", arguments, workspace, e.getMessage());
-                    out.append("\nbackground task interrupted: ").append(e.getMessage());
+                    Logger.error("bash execute was interrupted, arguments {}, workspace {}", arguments, workspace);
+                } catch (ExecutionException e) {
+                    Logger.error("future read exception, arguments {}, workspace {}, exception message {}", arguments, workspace, e.getMessage());
+                    out.append("\nbackground task exception: ").append(e.getMessage());
                 } finally {
                     if (holder != null) {
                         ShutDownJob.removeBgProcess(holder);
@@ -212,9 +242,10 @@ public class ToolBash implements Tool {
             });
         } catch (RejectedExecutionException e) {
             Logger.info("background task failed to submit, arguments {}, workspace {}", arguments, workspace);
-            return "background task submitted failed";
+            return "background task submitted failed: task pool is full, try again later";
         }
-        return "background task submitted successfully";
+        String pidStr = ", pid: " + (ready.get() ? pid : "(not start yet)");
+        return "background task submitted successfully, id: " + callId + pidStr;
     }
 
     private static ProcessBuilder assembleProcessBuilder(String command, String workSpace) {

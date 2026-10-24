@@ -23,6 +23,11 @@ public class PromptParams {
     private ToolApprovalGate approvalGate;
 
     /**
+     * bash后台任务回调
+     */
+    private BackGroundTask backGroundTask;
+
+    /**
      * 本会话绑定的工作区目录（规范化绝对路径）：工具的相对路径以此为基准，系统提示词里
      * 告知模型。null = 不涉工具的请求（纯聊天，buildParams 不注入工作区说明）。
      */
@@ -49,6 +54,10 @@ public class PromptParams {
 
     public ToolApprovalGate getApprovalGate() {
         return approvalGate;
+    }
+
+    public BackGroundTask getBackGroundTask() {
+        return backGroundTask;
     }
 
     public String getWorkspace() {
@@ -78,6 +87,7 @@ public class PromptParams {
             base.agentMode = promptParams.agentMode;
             base.approvalGate = promptParams.approvalGate;
             base.workspace = promptParams.workspace;
+            base.backGroundTask = promptParams.backGroundTask;
         }
 
         private final PromptParams base;
@@ -113,6 +123,11 @@ public class PromptParams {
 
         public Builder workspace(String workspace) {
             base.workspace = workspace;
+            return this;
+        }
+
+        public Builder backGroundTask(BackGroundTask backGroundTask) {
+            base.backGroundTask = backGroundTask;
             return this;
         }
     }

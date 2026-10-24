@@ -23,6 +23,7 @@ import com.openai.models.chat.completions.ChatCompletionUserMessageParam;
 import com.openai.models.completions.CompletionUsage;
 import com.openai.services.blocking.chat.ChatCompletionService;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
+import io.github.preschoolller.agentjava.backend.provider.common.BackGroundTask;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
@@ -210,7 +211,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                         .takeWhile(chatCompletionChunk -> !shouldStop.get())
                         .forEach(chatCompletionChunk ->
                                 visit(blockingQueue, promptParams.getApprovalGate(),
-                                        promptParams.getAgentMode(), promptParams.getWorkspace(),
+                                        promptParams.getBackGroundTask(), promptParams.getWorkspace(),
                                         chatCompletionChunk, indexToolCall, sb));
             } catch (OpenAIServiceException exception) {
                 String errorMessage = "Stream exception found. Code: " + exception.code().orElse("")
@@ -251,7 +252,7 @@ public class OpenAiChatCompletionProvider implements Provider {
     }
 
     private static void visit(BlockingQueue<BaseEvent> blockingQueue,
-                              ToolApprovalGate approvalGate, AgentMode agentMode, String workspace,
+                              ToolApprovalGate approvalGate, BackGroundTask backGroundTask, String workspace,
                               ChatCompletionChunk chatCompletionChunk, Map<Integer, ToolCall> indexToolCall, StringBuilder sb) {
         Logger.trace(chatCompletionChunk);
         Stream<ChatCompletionChunk.Choice.Delta> deltaStream = chatCompletionChunk.choices().stream()
@@ -324,6 +325,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                 ToolCall toolCall = indexToolCall.get(index);
                 toolCall.setApprovalGate(approvalGate);
                 toolCall.setWorkspace(workspace);
+                toolCall.setBackGroundTask(backGroundTask);
                 putIntoBQ(new FunctionToolCallDoneEvent(toolCall.getCallId(), toolCall), blockingQueue);
                 ThreadPoolFactory.getToolCallExecutor().execute(toolCall);
             }

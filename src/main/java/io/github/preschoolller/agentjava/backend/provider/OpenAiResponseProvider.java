@@ -33,6 +33,7 @@ import com.openai.models.responses.ResponseStreamEvent;
 import com.openai.models.responses.ResponseTextDeltaEvent;
 import com.openai.services.blocking.ResponseService;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
+import io.github.preschoolller.agentjava.backend.provider.common.BackGroundTask;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
@@ -229,7 +230,7 @@ public class OpenAiResponseProvider implements Provider {
         ResponseCreateParams responseCreateParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue,
-                promptParams.getApprovalGate(), promptParams.getAgentMode(), promptParams.getWorkspace());
+                promptParams.getApprovalGate(), promptParams.getBackGroundTask(), promptParams.getWorkspace());
         AtomicBoolean shouldStop = new AtomicBoolean(false);
         ThreadPoolFactory.getResponseExecutor().execute(() -> {
             List<ErrorMessageEvent> errors = new ArrayList<>();
@@ -245,7 +246,7 @@ public class OpenAiResponseProvider implements Provider {
             } catch (OpenAIIoException exception) {
                 errors.add(new ErrorMessageEvent("Stream event iteration failed: " + exception.getMessage()));
             } catch (RuntimeException exception) {
-                exception.printStackTrace();
+                Logger.error("Unexpected stream error: {}", exception.getMessage());
                 errors.add(new ErrorMessageEvent("Unexpected stream error: " + exception.getMessage()));
             } finally {
                 try {
@@ -301,9 +302,9 @@ public class OpenAiResponseProvider implements Provider {
     }
 
     private static ResponseStreamEventVisitorAdaptor getVisitor(BlockingQueue<BaseEvent> blockingQueue,
-                                                                 ToolApprovalGate approvalGate,
-                                                                 AgentMode agentMode,
-                                                                 String workspace) {
+                                                                ToolApprovalGate approvalGate,
+                                                                BackGroundTask backGroundTask,
+                                                                String workspace) {
         return new ResponseStreamEventVisitorAdaptor() {
 
             private void putIntoBQ(BaseEvent baseEvent) {
@@ -408,6 +409,7 @@ public class OpenAiResponseProvider implements Provider {
                     toolCall.setCallId(functionCall.callId());
                     toolCall.setApprovalGate(approvalGate);
                     toolCall.setWorkspace(workspace);
+                    toolCall.setBackGroundTask(backGroundTask);
                     putIntoBQ(new FunctionToolCallDoneEvent(functionCall.callId(), toolCall));
                     ThreadPoolFactory.getToolCallExecutor().execute(toolCall);
                 }
