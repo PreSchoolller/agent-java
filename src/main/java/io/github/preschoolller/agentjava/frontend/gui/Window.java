@@ -133,6 +133,10 @@ public class Window extends JFrame {
     private static final int ARGS_TEXT_CAP = 160;
     /** 展开态结果区下方的复制行（复制参数/复制结果）高度 */
     private static final int TOOL_COPY_ROW_HEIGHT = 28;
+    /** 用户消息长内容折叠帽：超过则收成内部滚动预览，尾行出"展开全文/收起" */
+    private static final int USER_TEXT_CAP = 240;
+    /** bg 回显卡片结果区折叠预览帽："展开全部"后才是 TOOL_RESULT_CAP 的完整滚动区 */
+    private static final int BG_RESULT_PREVIEW_CAP = 200;
     /** 结果文本区的显示字号（Monospaced，与折叠/展开高度测量共用） */
     private static final int TOOL_RESULT_FONT_SIZE = 12;
     /** 折叠工具卡的整卡高度：一行头部 + 上下内衬（不挂时间行） */
@@ -215,6 +219,10 @@ public class Window extends JFrame {
     /** 展开结果区的工具卡（P1-4 折叠）：按 callId 记（无 callId 的旧消息退化为时间戳键），
      *  内存态不落盘——重启后回到默认折叠 */
     private final Set<String> expandedToolCalls = new HashSet<>();
+    /** 展开全部的后台回显结果（超长默认收成预览，见 BG_RESULT_PREVIEW_CAP）：按 toolKey 记，内存态 */
+    private final Set<String> expandedBgResults = new HashSet<>();
+    /** 展开全文的用户消息（长内容折叠，主流聊天做法）：按消息同一性记，内存态不落盘 */
+    private final Set<Message> expandedUserTexts = new HashSet<>();
     /** 各会话的输入框草稿：切会话保留各自的未发送文本，也防 A 会话的草稿误发进 B。
      *  输入区 DocumentListener 实时写、showConversation 按会话取；内存态不落盘 */
     private final Map<String, String> draftsByConversation = new HashMap<>();
@@ -287,6 +295,9 @@ public class Window extends JFrame {
         JButton regenerate;
         JButton menu;
         boolean materialized;
+        /** 工具是否已进入执行阶段（Main 在 FunctionToolCallDone 时标记）：参数拼接/审批等待
+         *  期不挂终止/查看输出按钮——那时候进程还不存在，挂了也是摆设还闪来闪去 */
+        boolean executing;
         /** 后台任务的瞬时输出快照（"查看输出"按钮写入）：仅存内存、随终态回填或卡片重建丢弃，
          *  不落盘——快照是"此刻读一眼"的数据，进历史只会越攒越多 */
         String peekResult;
@@ -951,6 +962,12 @@ public class Window extends JFrame {
          * 须在 EDT 上调用。
          */
         void requestApproval(CompletableFuture<Boolean> decision);
+
+        /**
+         * 工具进入执行阶段（Main 在 FunctionToolCallDone 时标记）：参数拼接/审批等待期
+         * 卡片不挂终止/查看输出按钮（进程还不存在），放行/免审批后执行期才挂。须在 EDT 上调用。
+         */
+        void markExecuting();
     }
 
     /**
@@ -986,6 +1003,8 @@ public class Window extends JFrame {
         private final StringBuilder args = new StringBuilder();
         private final Timer argsTimer = new Timer(120, e -> flushArgs());
         private boolean finished;
+        /** 已进入执行阶段（markExecuting 标记）：控制按钮的显示依据，rebind 时跟到新卡片 */
+        private volatile boolean executing;
         /** 待确认的审批 future：卡片不在前台时先挂在句柄上，rebind 时挪到卡片 */
         private CompletableFuture<Boolean> pendingApproval;
 
@@ -1017,6 +1036,7 @@ public class Window extends JFrame {
             if (pendingApproval != null && !finished) {
                 newCard.approval = pendingApproval; // 审批没决完就切走了：待确认态跟到新卡片上
             }
+            newCard.executing = executing; // 执行态跟到新卡片：控制按钮的显示依据
             flushArgs(); // 把切走期间攒的参数一次性画上
         }
 
@@ -1075,6 +1095,22 @@ public class Window extends JFrame {
         }
 
         @Override
+        public void markExecuting() {
+            if (executing) {
+                return;
+            }
+            executing = true;
+            if (card != null) {
+                card.executing = true;
+            }
+            // 头部还是参数流式/免审批创建时的旧样子：重建一次把终止/查看输出按钮挂出来
+            if (card != null && conversationId.equals(displayedConvId)
+                    && messageCards.contains(card) && card.materialized) {
+                rebuildCard(card);
+            }
+        }
+
+        @Override
         public void requestApproval(CompletableFuture<Boolean> decision) {
             if (finished) {
                 // 卡片已终结（停止/异常清理抢在前面）：不会再有人点按钮，直接判否，别挂住等待方
@@ -1085,15 +1121,22 @@ public class Window extends JFrame {
             if (card != null) {
                 card.approval = decision;
             }
-            refreshSidebarBadges(); // 侧栏亮"待确认"标注
-            // 审核提醒（计划外）：按设置里的三通道各自动作。参数此刻已全部到位（审批在
-            // FunctionToolCallDone 之后才进来），摘要直接取参数流。
-            ApprovalNotifier.announce(Window.this, message.toolName(), toolArgsSummary(args.toString()));
-            if (card != null && conversationId.equals(displayedConvId)) {
-                updateMaterialization(); // 待确认卡一般是最后一张，窗口化下保证它已物化
-                if (card.materialized) {
-                    rebuildCard(card); // 头部要换"待确认"+两按钮，结构变了走重擦重建
+            try {
+                refreshSidebarBadges(); // 侧栏亮"待确认"标注
+                // 审核提醒（计划外）：按设置里的三通道各自动作。参数此刻已全部到位（审批在
+                // FunctionToolCallDone 之后才进来），摘要直接取参数流。
+                ApprovalNotifier.announce(Window.this, message.toolName(), toolArgsSummary(args.toString()));
+                if (card != null && conversationId.equals(displayedConvId)) {
+                    updateMaterialization(); // 待确认卡一般是最后一张，窗口化下保证它已物化
+                    if (card.materialized) {
+                        rebuildCard(card); // 头部要换"待确认"+两按钮，结构变了走重擦重建
+                    }
                 }
+            } catch (RuntimeException e) {
+                // 提醒/重绘失败绝不能让审批流挂掉：EDT 异常经 invokeAndWait 会被包成
+                // InvocationTargetException，requestToolApproval 只能误判成拒绝——"自动拒绝"事故。
+                // 决策 future 已挂好，这里吞掉显示层的失败，按钮没画出来也不影响等待与点击。
+                System.err.println("审批提醒/重绘失败（不影响审批）: " + e);
             }
         }
     }
@@ -1380,7 +1423,28 @@ public class Window extends JFrame {
             // 没设过前景色的文本组件默认黑字，深色主题下必须显式给（见踩坑 #19）
             textPane.setForeground(Ui.TEXT);
             textPane.setText(message.text());
-            content = textPane;
+            // 长内容折叠（主流做法）：超帽收成内部滚动预览，尾行出"展开全文/收起"；
+            // 帽与 fitCardHeight 用户分支同一常量，显示与测量一致
+            int panelWidth = waterfallPanel.getWidth();
+            int userWidth = Math.max(USER_CARD_MIN_WIDTH, Math.min(USER_CARD_MAX_WIDTH,
+                    (panelWidth > 0 ? panelWidth : 600) * 2 / 3));
+            int textWidth = userWidth - CARD_SIDE_INSETS;
+            if (measureTextHeight(message.text(), AppSettings.get().getContentFontSize(), textWidth)
+                    > USER_TEXT_CAP && !expandedUserTexts.contains(message)) {
+                JScrollPane scroll = new JScrollPane(textPane,
+                        JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                        JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+                scroll.setBorder(BorderFactory.createEmptyBorder());
+                scroll.setOpaque(false);
+                scroll.getViewport().setOpaque(false);
+                scroll.setViewportBorder(BorderFactory.createEmptyBorder());
+                scroll.getVerticalScrollBar().setUnitIncrement(16);
+                Ui.styleScrollPane(scroll);
+                scroll.setPreferredSize(new Dimension(0, USER_TEXT_CAP));
+                content = scroll;
+            } else {
+                content = textPane;
+            }
         } else {
             messageCard.markdown.materialize();
             messageCard.thinking.materialize();
@@ -1412,7 +1476,11 @@ public class Window extends JFrame {
             timeRow.add(timeLabel);
         }
         if (user) {
-            // 用户消息复制（计划外）：与 AI 卡"复制"共用按钮实现，拷用户原文
+            // 用户消息"展开全文/收起"（长内容折叠，短消息不挂）+ 复制（计划外）：拷用户原文
+            JButton expandText = createExpandTextButton(messageCard);
+            if (expandText != null) {
+                timeRow.add(expandText);
+            }
             timeRow.add(createCopyButton(() -> message.text() == null ? "" : message.text()));
         } else if (!tool) {
             MarkdownPane pane = messageCard.markdown;
@@ -1518,10 +1586,10 @@ public class Window extends JFrame {
         if (pending) {
             rightGroup.add(createApprovalButton(messageCard, "允许", true));
             rightGroup.add(createApprovalButton(messageCard, "拒绝", false));
-        } else if ((running || bgRunning) && backGroundTaskControl != null) {
-            // 后台任务控制（B 阶段）：读一眼当前输出 / 手动终止。前台"运行中"卡（审批已过、
-            // 还在执行）同样适用——审批等待期走上面的"允许/拒绝"。动作在后台线程走
-            // BackGroundTaskControl，终止后的编排按任务类型分流（Main 里实现）
+        } else if ((bgRunning || (running && messageCard.executing)) && backGroundTaskControl != null) {
+            // 后台任务控制（B 阶段）：读一眼当前输出 / 手动终止。前台"运行中"卡要等进入
+            // 执行期（executing）才挂——参数拼接期进程还不存在，审批等待期是"允许/拒绝"。
+            // 动作在后台线程走 BackGroundTaskControl，终止后的编排按任务类型分流（Main）
             rightGroup.add(createBgControlButton(messageCard, "查看输出", true));
             rightGroup.add(createBgControlButton(messageCard, "终止", false));
         }
@@ -1588,12 +1656,75 @@ public class Window extends JFrame {
 
             JPanel copyRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
             copyRow.setOpaque(false);
+            // bg 回显卡片超长折叠：预览态/展开态都在复制行左侧给出切换（与 fitCardHeight 同一帽）
+            boolean bgCollapsed = resultCap(messageCard, message.text(), textWidth) != TOOL_RESULT_CAP;
+            boolean bgExpanded = expandedBgResults.contains(toolKey(message))
+                    && message.text() != null
+                    && measureToolResultHeight(message.text(), textWidth) > TOOL_RESULT_CAP;
+            if (bgCollapsed || bgExpanded) {
+                copyRow.add(createBgResultExpandButton(messageCard), 0);
+            }
             copyRow.add(createCopyButton("复制参数", () -> message.toolArgs() == null ? "" : message.toolArgs()));
             copyRow.add(createCopyButton("复制结果", () -> message.text() == null ? "" : message.text()));
             middle.add(copyRow, BorderLayout.SOUTH);
             content.add(middle, BorderLayout.CENTER);
         }
         return content;
+    }
+
+    /**
+     * 工具卡结果区的高度帽：bg 回显卡片（运行中/完成/已终止）超长时默认收成预览
+     * （BG_RESULT_PREVIEW_CAP，"展开全部"后恢复 TOOL_RESULT_CAP 的完整滚动区），
+     * 其余卡片恒为 TOOL_RESULT_CAP。与 fitCardHeight 共用，显示与测量必须一致
+     */
+    private int resultCap(MessageCard card, String resultText, int textWidth) {
+        Message m = card.message;
+        boolean bg = Conversation.STATUS_BG_RUNNING.equals(m.toolStatus())
+                || Conversation.STATUS_BG_DONE.equals(m.toolStatus())
+                || Conversation.STATUS_BG_KILLED.equals(m.toolStatus());
+        if (!bg || expandedBgResults.contains(toolKey(m))) {
+            return TOOL_RESULT_CAP;
+        }
+        return measureToolResultHeight(resultText, textWidth) > BG_RESULT_PREVIEW_CAP + 40
+                ? BG_RESULT_PREVIEW_CAP : TOOL_RESULT_CAP;
+    }
+
+    /** bg 回显结果的"展开全部/收起"：翻 expandedBgResults 后重擦卡片（帽随之切换） */
+    private JButton createBgResultExpandButton(MessageCard card) {
+        boolean expanded = expandedBgResults.contains(toolKey(card.message));
+        JButton button = Ui.button(expanded ? "收起" : "展开全部");
+        button.setFont(new Font("微软雅黑", Font.PLAIN, 11));
+        button.addActionListener(e -> {
+            if (!expandedBgResults.remove(toolKey(card.message))) {
+                expandedBgResults.add(toolKey(card.message));
+            }
+            rebuildCard(card);
+        });
+        return button;
+    }
+
+    /** 用户消息"展开全文/收起"（长内容折叠）：短消息返回 null 不挂；点击翻 expandedUserTexts
+     *  后重擦卡片（预览滚动 ↔ 自然高度） */
+    private JButton createExpandTextButton(MessageCard card) {
+        int panelWidth = waterfallPanel.getWidth();
+        int userWidth = Math.max(USER_CARD_MIN_WIDTH, Math.min(USER_CARD_MAX_WIDTH,
+                (panelWidth > 0 ? panelWidth : 600) * 2 / 3));
+        int textWidth = userWidth - CARD_SIDE_INSETS;
+        int textHeight = measureTextHeight(card.message.text(),
+                AppSettings.get().getContentFontSize(), textWidth);
+        if (textHeight <= USER_TEXT_CAP) {
+            return null;
+        }
+        boolean expanded = expandedUserTexts.contains(card.message);
+        JButton button = Ui.button(expanded ? "收起" : "展开全文");
+        button.setFont(new Font("微软雅黑", Font.PLAIN, 11));
+        button.addActionListener(e -> {
+            if (!expandedUserTexts.remove(card.message)) {
+                expandedUserTexts.add(card.message);
+            }
+            rebuildCard(card);
+        });
+        return button;
     }
 
     /** 工具卡展开状态键：callId（会话/重启间按它记忆），无 callId 的旧消息退化为时间戳 */
@@ -2112,11 +2243,11 @@ public class Window extends JFrame {
         int height;
         if (messageCard.tool) {
             if (expandedToolCalls.contains(toolKey(messageCard.message))) {
-                // 展开：头部 + 结果文本（超长封顶，卡片内滚动）+ 参数全文区（有参数才挂，
-                // 超长封顶内部滚动）+ 复制行；框架 = 上下内衬 20 + 时间行 ~18 + 内容竖缝 12 + 余量
-                // （比 AI 卡小：没有角色标签行）
+                // 展开：头部 + 结果文本（超长封顶，卡片内滚动；bg 回显超长默认收成预览帽）+
+                // 参数全文区（有参数才挂，超长封顶内部滚动）+ 复制行；框架 = 上下内衬 20 +
+                // 时间行 ~18 + 内容竖缝 12 + 余量（比 AI 卡小：没有角色标签行）
                 int resultHeight = Math.min(measureToolResultHeight(messageCard.message.text(), textWidth)
-                        + TOOL_HEADER_HEIGHT, TOOL_RESULT_CAP);
+                        + TOOL_HEADER_HEIGHT, resultCap(messageCard, messageCard.message.text(), textWidth));
                 int argsHeight = 0;
                 String argsText = messageCard.message.toolArgs();
                 if (argsText != null && !argsText.isBlank()) {
@@ -2129,10 +2260,17 @@ public class Window extends JFrame {
                 height = TOOL_COLLAPSED_HEIGHT; // 单行：一行头部，不挂时间行（时间展开后可见）
             }
         } else {
-            int textHeight = messageCard.user
-                    ? measureTextHeight(messageCard.message.text(), AppSettings.get().getContentFontSize(), textWidth)
-                    : messageCard.markdown.preferredHeightAt(textWidth)
-                            + thinkingHeight(messageCard, textWidth);
+            int textHeight;
+            if (messageCard.user) {
+                textHeight = measureTextHeight(messageCard.message.text(),
+                        AppSettings.get().getContentFontSize(), textWidth);
+                if (textHeight > USER_TEXT_CAP && !expandedUserTexts.contains(messageCard.message)) {
+                    textHeight = USER_TEXT_CAP; // 长内容折叠预览（"展开全文"后恢复自然高度）
+                }
+            } else {
+                textHeight = messageCard.markdown.preferredHeightAt(textWidth)
+                        + thinkingHeight(messageCard, textWidth);
+            }
             int minHeight = messageCard.user ? CARD_MIN_HEIGHT_USER : CARD_MIN_HEIGHT_AI;
             int frameHeight = messageCard.user ? CARD_FRAME_HEIGHT_USER : CARD_FRAME_HEIGHT_AI;
             height = Math.max(minHeight, textHeight + frameHeight);

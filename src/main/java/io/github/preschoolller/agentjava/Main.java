@@ -60,6 +60,11 @@ public class Main {
      */
     private static final Map<String, AtomicBoolean> RUNNING = new ConcurrentHashMap<>();
 
+    /** 后台结果送达时会话正忙（抢锁失败）的补偿标记：结果落在当轮历史快照之后，没人消化。
+     *  add 先于 tryAcquire 消除间隙竞态——抢锁失败标记留在册，本轮链释放时若会话已空闲
+     *  就补一轮让模型看到；用户主动停止的链丢弃标记（结果已在历史里，随下一条用户消息走） */
+    private static final Set<String> PENDING_BG_DELIVERY = ConcurrentHashMap.newKeySet();
+
     /** 工具执行阶段的等待上限：审批等待不计入（那个靠用户点击/停止结束），只防工具 I/O 卡死拖住整轮 */
     private static final long TOOL_EXECUTE_TIMEOUT_SECONDS = 60;
 
@@ -173,11 +178,15 @@ public class Main {
                         .agentMode(mode).workspace(workspace).approvalGate((toolCall, additionalRequest) ->
                                 requestToolApproval(toolCall, mode, callIdHandleMap, cancelled, additionalRequest));
                 // bash 后台任务完成回调（bgTask 线程触发）：EDT 上落库+上屏（工具卡回填、注入用户消息），
-                // 会话空闲（抢到锁）则自动续一轮让模型消化后台结果；生成中只落库，下一轮快照自然携带
+                // 会话空闲（抢到锁）则自动续一轮让模型消化后台结果；生成中只落库并留补偿标记，
+                // 本轮链释放时若已空闲会补一轮——结果落在快照之后也没人理的缝隙由这里兜住
                 paramsBuilder.backGroundTask((callId, output) -> SwingUtilities.invokeLater(() -> {
                     if (window.onBackGroundTaskDone(conversation.getId(), callId, output)) {
-                        AtomicBoolean token = tryAcquire(conversation.getId());
+                        String convId = conversation.getId();
+                        PENDING_BG_DELIVERY.add(convId); // 先记再抢：抢锁失败的间隙由链释放兜底
+                        AtomicBoolean token = tryAcquire(convId);
                         if (token != null) {
+                            PENDING_BG_DELIVERY.remove(convId);
                             streamReply(window, conversation, provider, token);
                         }
                     }
@@ -222,6 +231,10 @@ public class Main {
                     } else if (event instanceof FunctionToolCallDoneEvent e) {
                         Window.ToolCallHandle toolCallHandle = callIdHandleMap.get(e.callId());
                         ToolCall toolCall = e.toolCall();
+                        // 参数拼接期不挂终止/查看输出按钮（进程还不存在）：工具真正进入执行才挂
+                        if (toolCallHandle != null) {
+                            SwingUtilities.invokeLater(toolCallHandle::markExecuting);
+                        }
                         toolCalls.add(performToolCall(toolCall, toolCallHandle));
                         doneCalls.add(e.callId());
                     } else if (event instanceof ResponseCompleteEvent complete) {
@@ -264,19 +277,31 @@ public class Main {
                 } else {
                     // 双参 remove：条目还是本轮令牌才清（防御性的对称）
                     RUNNING.remove(conversation.getId(), cancelled);
-                    SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), false));
-                    if (!cancelled.get() && (inputTokens > 0 || outputTokens > 0)) {
-                        // 用量上胶囊（排在生成态刷新之后：refreshGeneratingUi 会把胶囊刷回"就绪"）。
-                        // 只在轮主会话正在显示时刷，避免后台会话的用量盖掉前台状态
-                        String convId = conversation.getId();
-                        long elapsedMillis = (System.nanoTime() - roundStartNanos) / 1_000_000;
-                        String summary = "tokens 输入 " + inputTokens + " · 输出 " + outputTokens
-                                + " · 耗时 " + (elapsedMillis / 1000.0) + " 秒";
-                        SwingUtilities.invokeLater(() -> {
-                            if (convId.equals(window.getStore().getActive().getId())) {
-                                window.setRealtimeInfo(summary);
-                            }
-                        });
+                    // 后台结果补偿：生成期间送达的结果（抢锁失败留的标记）在链释放、会话已空闲时
+                    // 补一轮让模型消化——不打断生成态，避免输入区闪烁。用户主动停止的链丢弃标记，
+                    // 结果已在历史里，随下一条用户消息自然带上
+                    AtomicBoolean bgToken = null;
+                    if (PENDING_BG_DELIVERY.remove(conversation.getId()) && !cancelled.get()) {
+                        bgToken = tryAcquire(conversation.getId());
+                    }
+                    if (bgToken != null) {
+                        final AtomicBoolean continueToken = bgToken;
+                        SwingUtilities.invokeLater(() -> streamReply(window, conversation, provider, continueToken));
+                    } else {
+                        SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), false));
+                        if (!cancelled.get() && (inputTokens > 0 || outputTokens > 0)) {
+                            // 用量上胶囊（排在生成态刷新之后：refreshGeneratingUi 会把胶囊刷回"就绪"）。
+                            // 只在轮主会话正在显示时刷，避免后台会话的用量盖掉前台状态
+                            String convId = conversation.getId();
+                            long elapsedMillis = (System.nanoTime() - roundStartNanos) / 1_000_000;
+                            String summary = "tokens 输入 " + inputTokens + " · 输出 " + outputTokens
+                                    + " · 耗时 " + (elapsedMillis / 1000.0) + " 秒";
+                            SwingUtilities.invokeLater(() -> {
+                                if (convId.equals(window.getStore().getActive().getId())) {
+                                    window.setRealtimeInfo(summary);
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -300,6 +325,10 @@ public class Main {
         Logger.info("审批工具： {}， 是否额外申请：{}", toolCall.getTool().name(), additionalRequest);
         Window.ToolCallHandle handle = callIdHandleMap.get(toolCall.getCallId());
         if (handle == null || cancelled.get()) {
+            // 自动拒绝的三个分支之一。出现过"没人点却自动拒绝"（间歇性），每个分支留日志
+            // 便于下次 occurrence 定位：卡片缺失 / 用户已停止 / EDT 异常 / 等待被中断
+            Logger.info("审批自动拒绝：handle={} cancelled={}",
+                    handle == null ? "缺失(callId=" + toolCall.getCallId() + ")" : "在册", cancelled.get());
             return false; // 没有卡片可挂 / 已经叫停：宁可拦下也不静默执行
         }
         CompletableFuture<Boolean> decision = new CompletableFuture<>();
@@ -311,17 +340,23 @@ public class Main {
                 } catch (TimeoutException stillWaiting) {
                     // 用户还没点，继续等
                 } catch (CancellationException rejected) {
+                    Logger.info("审批自动拒绝：decision 被取消");
                     return false;
                 } catch (ExecutionException impossible) {
+                    Logger.info("审批自动拒绝：decision 异常完成 {}", impossible.getCause());
                     return false; // 只有 complete(true/false)，正常到不了
                 }
             }
+            Logger.info("审批自动拒绝：用户点了停止");
             decision.cancel(true); // 用户点了停止：终结等待，provider 会把这次调用按未放行收尾
             return false;
         } catch (InterruptedException e) {
+            Logger.info("审批自动拒绝：等待线程被中断");
             Thread.currentThread().interrupt();
             return false;
         } catch (InvocationTargetException e) {
+            // requestApproval 在 EDT 上抛了异常（提醒/重绘层），不再让它伪装成用户拒绝
+            Logger.error("审批自动拒绝：EDT 异常 {}", e.getCause() == null ? "" : e.getCause().toString());
             return false;
         }
     }
