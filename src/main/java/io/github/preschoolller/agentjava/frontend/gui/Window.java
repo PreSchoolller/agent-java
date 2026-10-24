@@ -1105,6 +1105,37 @@ public class Window extends JFrame {
         scrollToBottom();
     }
 
+    /**
+     * 后台任务完成（agent 循环的 markDone 回调，须在 EDT 上调用）：输出回填进提交时的工具卡
+     * （翻"后台完成"、自动展开露输出），并按决策1以用户身份注入一条"【后台任务完成】"消息——
+     * 模型经下一轮的历史快照消费后台输出。会话不在前台时只落库不出卡；会话已删除或找不到
+     * 对应工具卡时什么都不做并返回 false（调用方据此跳过自动续轮），true = 已落库。
+     */
+    public boolean onBackGroundTaskDone(String conversationId, String callId, String output) {
+        Message updated = store.completeBackGroundTask(conversationId, callId, output);
+        if (updated == null) {
+            return false;
+        }
+        Message userMessage = store.appendMessage(conversationId, Conversation.ROLE_USER,
+                "【后台任务完成 id: " + callId + "】\n"
+                        + (output == null || output.isBlank() ? "(无输出)" : output.strip()));
+        if (conversationId.equals(displayedConvId)) {
+            insertMessageCard(userMessage);
+            for (MessageCard card : messageCards) {
+                if (card.tool && callId.equals(card.message.callId())) {
+                    expandedToolCalls.add(toolKey(card.message)); // 完成即自动展开，输出不用翻卡找
+                    card.message = updated;
+                    rebuildCard(card);
+                    break;
+                }
+            }
+            updateMaterialization(); // 新用户卡在末尾，窗口化时补物化
+            scrollToBottom();
+        }
+        showTrayNotification("后台任务完成", toolArgsSummary(updated.toolArgs()));
+        return true;
+    }
+
     /** 设置输入框回车提交后的回调：输入会先自动加为用户卡片并清空输入框，然后 (会话, 文本) 交给回调 */
     public void onInputSubmitted(BiConsumer<Conversation, String> handler) {
         this.inputHandler = handler;
@@ -1412,13 +1443,15 @@ public class Window extends JFrame {
         boolean running = "running".equals(message.toolStatus());
         boolean error = "error".equals(message.toolStatus());
         boolean interrupted = "interrupted".equals(message.toolStatus()); // 崩溃残留（P0-5），灰态
+        boolean bgRunning = Conversation.STATUS_BG_RUNNING.equals(message.toolStatus());
+        boolean bgDone = Conversation.STATUS_BG_DONE.equals(message.toolStatus());
         // 待确认（P0-4 权限确认卡）：卡片手里攥着一个还没被点的审批 future。
         // 徽标沿用三态色位，警示色比"失败"收敛；旁边挂"允许/拒绝"两按钮
         boolean pending = running && messageCard.approval != null && !messageCard.approval.isDone();
         JLabel statusLabel = new JLabel(pending ? "待确认" : running ? "运行中…" : error ? "失败"
-                : interrupted ? "已中断" : "完成");
+                : interrupted ? "已中断" : bgRunning ? "后台运行中…" : bgDone ? "后台完成" : "完成");
         statusLabel.setFont(new Font("微软雅黑", Font.PLAIN, 11));
-        statusLabel.setForeground(pending ? Ui.WARNING : running ? Ui.ACCENT
+        statusLabel.setForeground(pending ? Ui.WARNING : running ? Ui.ACCENT : bgRunning ? Ui.WARNING
                 : error ? Ui.DANGER : Ui.TEXT_SECONDARY);
         // EAST 段最后 add：极窄两端重叠时按钮画在上层、命中测试也归它，保证可点
         JPanel rightGroup = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));

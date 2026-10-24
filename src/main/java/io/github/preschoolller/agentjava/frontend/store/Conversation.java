@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava.frontend.store;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -11,6 +12,11 @@ public class Conversation {
     public static final String ROLE_USER = "user";
     public static final String ROLE_AI = "ai";
     public static final String ROLE_TOOL = "tool";
+
+    /** 工具卡状态：命令已转入后台、当次只回了提交成功（终态等后台任务完成的回调回填） */
+    public static final String STATUS_BG_RUNNING = "bg-running";
+    /** 工具卡状态：后台任务已完成，输出已回填进结果区 */
+    public static final String STATUS_BG_DONE = "bg-done";
 
     private final String id;
     private String title;
@@ -176,14 +182,63 @@ public class Conversation {
         return null;
     }
 
-    /** 工具调用完成：回填结果文本并写终态（按消息对象同一性查找），返回替换后的新记录；没找到返回 null */
+    /** 工具调用完成：回填结果文本并写终态（按消息对象同一性查找），返回替换后的新记录；没找到返回 null。
+     *  bash 后台提交是特例：当次只回"提交成功"，命令转后台运行，翻 bg-running 等后台回调写终态 */
     public Message updateToolResult(Message target, String result, boolean success, String arguments) {
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) == target) {
+                String status = success ? "ok" : "error";
+                if (success && isBackGroundSubmission(target.toolName(), arguments, result)) {
+                    status = STATUS_BG_RUNNING;
+                }
                 Message updated = new Message(target.role(), result, target.time(),
-                        target.toolName(), arguments, success ? "ok" : "error", target.callId(),
+                        target.toolName(), arguments, status, target.callId(),
                         target.thinking());
                 messages.set(i, updated);
+                touch();
+                return updated;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 后台提交识别：bash 参数声明了 background=true，且返回的是提交成功文案（池满等提交失败
+     * 按普通失败走，不挂"后台运行中"）。成功/失败靠返回文案前缀区分——提交结果是给模型看的
+     * 协议文案（ToolBash.executeBackGround），前端按同一前缀识别；参数不是合法 JSON 按前台处理。
+     */
+    private static boolean isBackGroundSubmission(String toolName, String arguments, String result) {
+        if (!"bash".equals(toolName) || arguments == null || result == null) {
+            return false;
+        }
+        if (!result.startsWith("background task submitted successfully")) {
+            return false;
+        }
+        try {
+            Object raw = JsonKit.parse(arguments);
+            return raw instanceof Map<?, ?> map && Boolean.TRUE.equals(map.get("background"));
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 后台任务完成：按 callId 找最后一条"后台运行中"的工具消息，把输出追加进结果区并翻
+     * bg-done 终态（按状态限定，重复回调不会二次追加），返回替换后的新记录；没找到返回 null
+     */
+    public Message updateBackGroundResult(String callId, String output) {
+        List<Message> loadedMessages = ensureLoaded();
+        for (int i = loadedMessages.size() - 1; i >= 0; i--) {
+            Message target = loadedMessages.get(i);
+            if (callId != null && callId.equals(target.callId())
+                    && STATUS_BG_RUNNING.equals(target.toolStatus())) {
+                String section = "—— 后台任务完成 ——\n"
+                        + (output == null || output.isBlank() ? "(无输出)" : output.strip());
+                Message updated = new Message(target.role(),
+                        target.text() + "\n" + section, target.time(),
+                        target.toolName(), target.toolArgs(), STATUS_BG_DONE, target.callId(),
+                        target.thinking());
+                loadedMessages.set(i, updated);
                 touch();
                 return updated;
             }

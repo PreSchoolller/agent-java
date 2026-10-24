@@ -257,6 +257,21 @@ public class ConversationStore {
         return updated;
     }
 
+    /** 后台任务完成的落库（agent 循环 markDone 回调）：按 callId 找到"后台运行中"的工具消息，
+     *  追加输出并翻"后台完成"终态；返回替换后的新记录，会话不存在/没找到返回 null */
+    public Message completeBackGroundTask(String id, String callId, String output) {
+        Conversation conversation = findById(id);
+        if (conversation == null) {
+            return null;
+        }
+        Message updated = conversation.updateBackGroundResult(callId, output);
+        if (updated != null) {
+            saveAndSyncSession(conversation);
+            fireChanged();
+        }
+        return updated;
+    }
+
     private Conversation findById(String id) {
         if (id == null) {
             return null;
@@ -419,9 +434,10 @@ public class ConversationStore {
                 Map<?, ?> messageMap = (Map<?, ?>) item;
                 // 崩溃恢复（P0-5）：running 只该存在于活着的进程内存里，读盘遇到就是上次崩了/被杀的
                 // 残留，翻成 interrupted（前端显示"已中断"灰态）；其空结果回传时本就被
-                // buildRoleMessages 的空文本跳过，不会发给后端
+                // buildRoleMessages 的空文本跳过，不会发给后端。
+                // bg-running 同理：后台进程已随 ShutDownJob 的退出清理被杀，回不到"后台完成"了
                 String status = str(messageMap.get("status"));
-                if ("running".equals(status)) {
+                if ("running".equals(status) || Conversation.STATUS_BG_RUNNING.equals(status)) {
                     status = "interrupted";
                 }
                 messages.add(messageMap.containsKey("name")

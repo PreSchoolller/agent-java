@@ -92,6 +92,7 @@ public class Main {
                     // 已派发的工具还在后台跑完才收尾（P2-5）：胶囊上说明状态，避免用户以为卡死连点。
                     // 纯文案不改停止语义；链结束 setConversationGenerating(false) 会把胶囊刷回"就绪"
                     window.setRealtimeInfo("正在等待工具收尾…");
+                    Logger.info("停止生成......");
                 }
             });
         });
@@ -143,6 +144,16 @@ public class Main {
                 PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
                         .agentMode(mode).workspace(workspace).approvalGate((toolCall, additionalRequest) ->
                                 requestToolApproval(toolCall, mode, callIdHandleMap, cancelled, additionalRequest));
+                // bash 后台任务完成回调（bgTask 线程触发）：EDT 上落库+上屏（工具卡回填、注入用户消息），
+                // 会话空闲（抢到锁）则自动续一轮让模型消化后台结果；生成中只落库，下一轮快照自然携带
+                paramsBuilder.backGroundTask((callId, output) -> SwingUtilities.invokeLater(() -> {
+                    if (window.onBackGroundTaskDone(conversation.getId(), callId, output)) {
+                        AtomicBoolean token = tryAcquire(conversation.getId());
+                        if (token != null) {
+                            streamReply(window, conversation, provider, token);
+                        }
+                    }
+                }));
                 for (PromptParams.RoleMessage roleMessage : history) {
                     paramsBuilder.roleMessages(roleMessage);
                 }

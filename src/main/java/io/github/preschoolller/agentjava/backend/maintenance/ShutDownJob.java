@@ -29,10 +29,11 @@ public class ShutDownJob {
         return Collections.unmodifiableSet(bgProcesses);
     }
 
-    public static void clean() {
+    public static synchronized void clean() {
         bgProcesses.forEach(process -> {
             process.descendants().forEach(ProcessHandle::destroyForcibly);
             process.destroyForcibly();
         });
+        bgProcesses.clear();
     }
 }

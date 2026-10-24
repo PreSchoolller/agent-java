@@ -233,9 +233,9 @@ public class ToolBash implements Tool {
                     out.append("\nbackground task exception: ").append(e.getMessage());
                 } finally {
                     if (holder != null) {
-                        ShutDownJob.removeBgProcess(holder);
                         holder.descendants().forEach(ProcessHandle::destroyForcibly);
                         holder.destroyForcibly();
+                        ShutDownJob.removeBgProcess(holder);
                     }
                     bgTaskDone.markDone(out.toString());
                 }

@@ -3,6 +3,7 @@ package io.github.preschoolller.agentjava.backend.provider.common;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -70,12 +71,14 @@ public class ThreadPoolFactory {
         }
     };
 
+    private static final int bgTaskMax = CORE_POOL_SIZE;
+
     /**
      * 固定大小 CORE_POOL_SIZE ，限制后台进程数量，进不去明确告知后台任务创建失败
      */
     private static final ThreadPoolExecutor bgTaskExecutor = new ThreadPoolExecutor(
-            CORE_POOL_SIZE, CORE_POOL_SIZE + 1, 1000, TimeUnit.SECONDS,
-            new ArrayBlockingQueue<>(CORE_POOL_SIZE + 1, true), bgTaskThreadFactory,
+            bgTaskMax, bgTaskMax, 1000, TimeUnit.SECONDS,
+            new SynchronousQueue<>(true), bgTaskThreadFactory,
             new ThreadPoolExecutor.AbortPolicy());
 
 
@@ -101,8 +104,8 @@ public class ThreadPoolFactory {
      * 参数同 bgTaskExecutor
      */
     private static final ThreadPoolExecutor bgTaskReadOutExecutor = new ThreadPoolExecutor(
-            bgTaskExecutor.getCorePoolSize(), bgTaskExecutor.getMaximumPoolSize(), 1000, TimeUnit.SECONDS,
-            new ArrayBlockingQueue<>(CORE_POOL_SIZE + 1, true), bgTaskReadOutThreadFactory,
+            bgTaskMax, bgTaskMax, 1000, TimeUnit.SECONDS,
+            new SynchronousQueue<>(true), bgTaskReadOutThreadFactory,
             new ThreadPoolExecutor.AbortPolicy());
 
 
