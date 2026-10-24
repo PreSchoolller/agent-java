@@ -3,6 +3,7 @@ package io.github.preschoolller.agentjava.backend.tool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.BackGroundTaskDone;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
@@ -174,16 +175,40 @@ public class ToolBash implements Tool {
 
     private String executeBackGround(String arguments, String workspace, ProcessBuilder processBuilder, BackGroundTaskDone bgTaskDone) {
         try {
-            Future<?> future = ThreadPoolFactory.getBgTaskExecutor().submit(() -> {
+            Future<?> backFuture = ThreadPoolFactory.getBgTaskExecutor().submit(() -> {
                 StringBuffer out = new StringBuffer();
+                Process holder = null;
                 try {
-                    Process process = processBuilder.start();
+                    Process process = ShutDownJob.registerBgProcess(processBuilder.start());
+                    holder = process;
                     Logger.info("background task submitted, arguments {}, workspace {}, pid {}", arguments, workspace, process.pid());
-
+                    Future<?> futureRead = ThreadPoolFactory.getReadBashOutExecutor().submit(() -> {
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                            reader.lines().forEach(out::append);
+                        } catch (IOException e) {
+                            out.append("bash execute error while reading result: ").append(e.getMessage());
+                        } finally {
+                            process.descendants().forEach(ProcessHandle::destroyForcibly);
+                            process.destroyForcibly();
+                        }
+                    });
+                    futureRead.wait();
                 } catch (IOException e) {
-                    throw new RuntimeException(e);
+                    Logger.error("start process error, arguments {}, workspace {}", arguments, workspace);
+                    out.append("\nbackground task failed to start: ").append(e.getMessage());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    Logger.error("future read interrupted, arguments {}, workspace {}, interrupt message", arguments, workspace, e.getMessage());
+                    out.append("\nbackground task interrupted: ").append(e.getMessage());
+                } finally {
+                    if (holder != null) {
+                        ShutDownJob.removeBgProcess(holder);
+                        holder.descendants().forEach(ProcessHandle::destroyForcibly);
+                        holder.destroyForcibly();
+                    }
+                    bgTaskDone.markDone(out.toString());
                 }
-                bgTaskDone.markDone(out.toString());
             });
         } catch (RejectedExecutionException e) {
             Logger.info("background task failed to submit, arguments {}, workspace {}", arguments, workspace);
