@@ -101,16 +101,17 @@ public class Main {
             window.setBackGroundTaskControl(new Window.BackGroundTaskControl() {
                 @Override
                 public boolean kill(String conversationId, String callId) {
-                    // TODO(后端): 终止机制 —— ShutDownJob 的 Set<Process> 换成
-                    // Map<String callId, TaskHandle>（TaskHandle = Process + 输出 StringBuffer，
-                    // ToolBash.executeBackGround 注册时把手里现成的 callId 带上）。
-                    // kill = 按 callId destroyForcibly 链：bg 线程经读流 EOF 走既有 finally
+                    // 终止机制：ShutDownJob 按 callId destroyForcibly 链（TaskHandle 注册见
+                    // ToolBash.executeBackGround）。bg 线程经读流 EOF 走既有 finally
                     // （kill→remove→markDone）自行收尾，卡片此刻已被下面翻成 bg-killed，
                     // markDone 的回填/注入会被 Conversation 的 bg-running 状态守卫自然丢弃。
-                    boolean killed = false; // 替换为 ShutDownJob.kill(callId)
+                    boolean killed = ShutDownJob.kill(callId);
+                    // 终止瞬间抓一把已读输出快照：终止多半发生在"想看看它卡在哪"的场景，
+                    // 不带输出的话卡片和模型都只知道任务死了，不知道死前发生了什么
+                    String output = killed ? ShutDownJob.getBufferedOutput(callId) : null;
                     if (killed) {
                         SwingUtilities.invokeLater(() -> {
-                            if (window.onBackGroundTaskKilled(conversationId, callId)) {
+                            if (window.onBackGroundTaskKilled(conversationId, callId, output)) {
                                 // 终止也要让模型知道（注入的用户消息已在历史里），空闲则续轮，与完成回调同款
                                 Conversation conv = window.getStore().getConversation(conversationId);
                                 if (conv != null) {
@@ -130,7 +131,7 @@ public class Main {
                     // TODO(后端): 返回该任务当前已读输出（TaskHandle 里 StringBuffer 的快照；
                     // StringBuffer 线程安全，与读流线程并发无碍）。null/空 = 暂无可读输出，
                     // 卡片会显示"(暂无输出)"。须快速返回（按钮虽在后台线程调，别让它久等）。
-                    return null;
+                    return ShutDownJob.getBufferedOutput(callId);
                 }
             });
         });

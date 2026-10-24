@@ -1143,9 +1143,10 @@ public class Window extends JFrame {
     /**
      * 后台任务控制接口（B 阶段，后端实现）：终止运行中的后台任务、获取当前输出快照。
      * 实现须线程安全（按钮在后台线程上调用）；kill 可能阻塞（等进程死透），绝不能碰 EDT。
-     * 契约：kill 返回 true = 已终止，实现方随后经 EDT 调 onBackGroundTaskKilled 落库上屏
-     * 并自行决定是否续轮（Main 里的桩是现成模板）；false = 未终止，卡片维持"后台运行中"。
-     * output 应快速返回（读内存缓冲），null/空 = 暂无可读输出。
+     * 契约：kill 返回 true = 已终止，实现方随后经 EDT 调 onBackGroundTaskKilled(conversationId,
+     * callId, output) 落库上屏（output 取 TaskHandle 缓冲快照）并自行决定是否续轮（Main 里的
+     * 实现是现成模板）；false = 未终止，卡片维持"后台运行中"。output 应快速返回（读内存缓冲），
+     * null/空 = 暂无可读输出。
      */
     public interface BackGroundTaskControl {
         boolean kill(String conversationId, String callId);
@@ -1162,16 +1163,18 @@ public class Window extends JFrame {
 
     /**
      * 后台任务被手动终止（BackGroundTaskControl.kill 实现方经 EDT 调用）：工具卡翻"已终止"
-     * 并按决策1注入一条【后台任务已终止】用户消息告知模型。会话不在前台只落库不出卡；
-     * 找不到对应卡片返回 false。须在 EDT 上调用。
+     * 并附终止瞬间已读到的输出快照，再按决策1注入一条【后台任务已终止】用户消息（带输出，
+     * 模型据此知道任务死前发生了什么）。会话不在前台只落库不出卡；找不到对应卡片返回
+     * false。须在 EDT 上调用。
      */
-    public boolean onBackGroundTaskKilled(String conversationId, String callId) {
-        Message updated = store.terminateBackGroundTask(conversationId, callId);
+    public boolean onBackGroundTaskKilled(String conversationId, String callId, String output) {
+        Message updated = store.terminateBackGroundTask(conversationId, callId, output);
         if (updated == null) {
             return false;
         }
         Message userMessage = store.appendMessage(conversationId, Conversation.ROLE_USER,
-                "【后台任务已终止 id: " + callId + "】");
+                "【后台任务已终止 id: " + callId + "】\n"
+                        + (output == null || output.isBlank() ? "(无输出)" : output.strip()));
         if (conversationId.equals(displayedConvId)) {
             insertMessageCard(userMessage);
             for (MessageCard card : messageCards) {
