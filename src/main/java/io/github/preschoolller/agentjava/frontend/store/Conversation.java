@@ -183,13 +183,17 @@ public class Conversation {
     }
 
     /** 工具调用完成：回填结果文本并写终态（按消息对象同一性查找），返回替换后的新记录；没找到返回 null。
-     *  bash 后台提交是特例：当次只回"提交成功"，命令转后台运行，翻 bg-running 等后台回调写终态 */
+     *  bash 后台提交是特例：成功翻 bg-running 等后台回调写终态；池满等提交失败（协议文案
+     *  "background task submitted failed" 开头，ToolCall 仍为 COMPLETE）显式翻 error，
+     *  避免卡片把提交失败显示成"完成" */
     public Message updateToolResult(Message target, String result, boolean success, String arguments) {
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) == target) {
                 String status = success ? "ok" : "error";
                 if (success && isBackGroundSubmission(target.toolName(), arguments, result)) {
                     status = STATUS_BG_RUNNING;
+                } else if (success && isFailedBackGroundSubmission(target.toolName(), result)) {
+                    status = "error";
                 }
                 Message updated = new Message(target.role(), result, target.time(),
                         target.toolName(), arguments, status, target.callId(),
@@ -203,9 +207,9 @@ public class Conversation {
     }
 
     /**
-     * 后台提交识别：bash 参数声明了 background=true，且返回的是提交成功文案（池满等提交失败
-     * 按普通失败走，不挂"后台运行中"）。成功/失败靠返回文案前缀区分——提交结果是给模型看的
-     * 协议文案（ToolBash.executeBackGround），前端按同一前缀识别；参数不是合法 JSON 按前台处理。
+     * 后台提交识别：bash 参数声明了 background=true，且返回的是提交成功文案（成功/失败靠
+     * 返回文案前缀区分——提交结果是给模型看的协议文案 ToolBash.executeBackGround，前端按
+     * 同一前缀识别；参数不是合法 JSON 按前台处理）。
      */
     private static boolean isBackGroundSubmission(String toolName, String arguments, String result) {
         if (!"bash".equals(toolName) || arguments == null || result == null) {
@@ -220,6 +224,13 @@ public class Conversation {
         } catch (RuntimeException e) {
             return false;
         }
+    }
+
+    /** 后台提交失败识别：协议文案 "background task submitted failed" 前缀（池满等拒绝路径）。
+     *  此时 ToolCall 状态仍为 COMPLETE，不显式翻 error 卡片会误显示"完成" */
+    private static boolean isFailedBackGroundSubmission(String toolName, String result) {
+        return "bash".equals(toolName) && result != null
+                && result.startsWith("background task submitted failed");
     }
 
     /**
