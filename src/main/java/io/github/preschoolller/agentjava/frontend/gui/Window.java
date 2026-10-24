@@ -124,7 +124,9 @@ public class Window extends JFrame {
     private static final int CARD_SIDE_INSETS = 34;
     /** 工具调用卡的头部高度（角色标+工具名+参数+状态一行）与结果区高度帽（超出内部滚动） */
     private static final int TOOL_HEADER_HEIGHT = 26;
-    private static final int TOOL_RESULT_CAP = 320;
+    /** 展开态结果区高度帽：320 太矮，长输出/输出快照得频繁滚动看着累；加高到 ~2 倍卡片内可视，
+     *  超出仍内部滚动兜底 */
+    private static final int TOOL_RESULT_CAP = 520;
     /** 展开态参数区（"参数"小标题 + 全文文本）：标题行高与文本高度帽（超出内部滚动），
      *  无参数不挂。帽与收到 fitCardHeight 的展开公式同一常量，测量/显示一致 */
     private static final int ARGS_CAPTION_HEIGHT = 16;
@@ -1516,9 +1518,10 @@ public class Window extends JFrame {
         if (pending) {
             rightGroup.add(createApprovalButton(messageCard, "允许", true));
             rightGroup.add(createApprovalButton(messageCard, "拒绝", false));
-        } else if (bgRunning && backGroundTaskControl != null) {
-            // 后台任务控制（B 阶段）：读一眼当前输出 / 手动终止。动作在后台线程走
-            // BackGroundTaskControl，成功后的落库与续轮由控制实现方（Main）编排
+        } else if ((running || bgRunning) && backGroundTaskControl != null) {
+            // 后台任务控制（B 阶段）：读一眼当前输出 / 手动终止。前台"运行中"卡（审批已过、
+            // 还在执行）同样适用——审批等待期走上面的"允许/拒绝"。动作在后台线程走
+            // BackGroundTaskControl，终止后的编排按任务类型分流（Main 里实现）
             rightGroup.add(createBgControlButton(messageCard, "查看输出", true));
             rightGroup.add(createBgControlButton(messageCard, "终止", false));
         }

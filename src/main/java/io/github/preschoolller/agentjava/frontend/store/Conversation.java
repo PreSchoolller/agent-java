@@ -186,8 +186,8 @@ public class Conversation {
 
     /** 工具调用完成：回填结果文本并写终态（按消息对象同一性查找），返回替换后的新记录；没找到返回 null。
      *  bash 后台提交是特例：成功翻 bg-running 等后台回调写终态；池满等提交失败（协议文案
-     *  "background task submitted failed" 开头，ToolCall 仍为 COMPLETE）显式翻 error，
-     *  避免卡片把提交失败显示成"完成" */
+     *  "background task submitted failed" 开头，ToolCall 仍为 COMPLETE）显式翻 error；
+     *  前台任务被用户终止（结果带"(已手动终止)"标记）翻 bg-killed 复用"已终止"徽标 */
     public Message updateToolResult(Message target, String result, boolean success, String arguments) {
         for (int i = 0; i < messages.size(); i++) {
             if (messages.get(i) == target) {
@@ -196,6 +196,8 @@ public class Conversation {
                     status = STATUS_BG_RUNNING;
                 } else if (success && isFailedBackGroundSubmission(target.toolName(), result)) {
                     status = "error";
+                } else if (success && isManuallyTerminated(result)) {
+                    status = STATUS_BG_KILLED;
                 }
                 Message updated = new Message(target.role(), result, target.time(),
                         target.toolName(), arguments, status, target.callId(),
@@ -233,6 +235,13 @@ public class Conversation {
     private static boolean isFailedBackGroundSubmission(String toolName, String result) {
         return "bash".equals(toolName) && result != null
                 && result.startsWith("background task submitted failed");
+    }
+
+    /** 前台任务被手动终止识别：ToolBash.executeForeGround 在结果尾部写 "(已手动终止)"
+     *  （exit code 是 kill 码没有参考价值），翻 bg-killed 复用"已终止"徽标。与后台提交
+     *  文案同为前后端协议字符串，改动需两侧同步 */
+    private static boolean isManuallyTerminated(String result) {
+        return result != null && result.contains("(已手动终止)");
     }
 
     /**

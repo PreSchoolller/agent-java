@@ -1,6 +1,7 @@
 package io.github.preschoolller.agentjava;
 
 import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
+import io.github.preschoolller.agentjava.backend.maintenance.TaskHandle;
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
@@ -101,17 +102,17 @@ public class Main {
             window.setBackGroundTaskControl(new Window.BackGroundTaskControl() {
                 @Override
                 public boolean kill(String conversationId, String callId) {
-                    // 终止机制：ShutDownJob 按 callId destroyForcibly 链（TaskHandle 注册见
-                    // ToolBash.executeBackGround）。这里只负责杀进程 + EDT 翻卡（即时反馈）；
-                    // 输出回填、【后台任务已终止】注入与续轮由 markDone（EOF 后的完整缓冲）
-                    // 经 onBackGroundTaskDone 的 bg-killed 分支统一收尾——终止快照拿不到
-                    // 管道排干的尾巴，完整输出以 markDone 为准。
-                    boolean killed = ShutDownJob.kill(callId);
-                    if (killed) {
+                    // 终止机制：ShutDownJob 按 callId destroyForcibly 链（前台/后台任务都注册，
+                    // 见 ToolBash）。编排按任务类型分流：后台任务翻"已终止"卡，输出/注入/续轮由
+                    // markDone（EOF 后的完整缓冲）经 onBackGroundTaskDone 的 bg-killed 分支统一
+                    // 收尾；前台任务 waitFor 随进程死亡立即返回，工具调用带着已读输出和
+                    // "(已手动终止)"标记自行收尾，不需要额外编排。
+                    TaskHandle killed = ShutDownJob.kill(callId);
+                    if (killed != null && killed.background()) {
                         SwingUtilities.invokeLater(() ->
                                 window.onBackGroundTaskKilled(conversationId, callId));
                     }
-                    return killed;
+                    return killed != null;
                 }
 
                 @Override

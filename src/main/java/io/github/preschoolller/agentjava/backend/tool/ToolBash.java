@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
+import io.github.preschoolller.agentjava.backend.maintenance.TaskHandle;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.BackGroundTaskDone;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
@@ -120,16 +121,18 @@ public class ToolBash implements Tool {
             if (asBackGroundTask) {
                 return executeBackGround(arguments, workspace, processBuilder, bgTaskDone, callId);
             }
-            return executeForeGround(processBuilder, arguments, workspace);
+            return executeForeGround(processBuilder, arguments, workspace, callId);
         } catch (JsonProcessingException e) {
             return "json parse error: " + e.getMessage();
         }
     }
 
-    private static String executeForeGround(ProcessBuilder processBuilder, String arguments, String workspace) {
+    /** 前台执行：进程注册进 ShutDownJob（callId 键），工具卡"终止"按钮可中途杀掉它——
+     *  waitFor 随进程死亡立即返回，已读输出照常回填，结果附"(已手动终止)"标记 */
+    private static String executeForeGround(ProcessBuilder processBuilder, String arguments, String workspace, String callId) {
         StringBuffer out = new StringBuffer();
         try {
-            Process process = processBuilder.start();
+            Process process = ShutDownJob.registerBgProcess(callId, new TaskHandle(out, processBuilder.start(), false));
             Future<?> futureRead = ThreadPoolFactory.getReadBashOutExecutor().submit(() -> {
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
@@ -172,6 +175,11 @@ public class ToolBash implements Tool {
             } else {
                 out.append("\n(did not exit)");
             }
+            if (ShutDownJob.wasKilled(callId)) {
+                // 用户从工具卡手动终止：exit code 是 kill 码没参考价值，注明真实原因
+                //（Conversation.updateToolResult 按此标记把卡片翻"已终止"徽标）
+                out.append("\n(已手动终止)");
+            }
             Logger.trace("bash参数：{} bash 执行结果：{}", arguments, out);
             return out.toString();
         } catch (IOException e) {
@@ -182,6 +190,8 @@ public class ToolBash implements Tool {
             Logger.error("bash execute was interrupted, arguments {}, workspace {}", arguments, workspace);
             Thread.currentThread().interrupt();
             return "tool use error: bash execute was interrupted, maybe try again later.";
+        } finally {
+            ShutDownJob.removeBgProcess(callId);
         }
     }
 
@@ -193,7 +203,7 @@ public class ToolBash implements Tool {
                 StringBuffer out = new StringBuffer();
                 Process holder = null;
                 try {
-                    Process process = ShutDownJob.registerBgProcess(processBuilder.start());
+                    Process process = ShutDownJob.registerBgProcess(callId, new TaskHandle(out, processBuilder.start(), true));
                     holder = process;
                     pid.set(process.pid());
                     ready.set(true);
@@ -235,7 +245,7 @@ public class ToolBash implements Tool {
                     if (holder != null) {
                         holder.descendants().forEach(ProcessHandle::destroyForcibly);
                         holder.destroyForcibly();
-                        ShutDownJob.removeBgProcess(holder);
+                        ShutDownJob.removeBgProcess(callId);
                     }
                     bgTaskDone.markDone(out.toString());
                 }
