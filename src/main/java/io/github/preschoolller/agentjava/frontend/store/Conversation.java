@@ -17,6 +17,8 @@ public class Conversation {
     public static final String STATUS_BG_RUNNING = "bg-running";
     /** 工具卡状态：后台任务已完成，输出已回填进结果区 */
     public static final String STATUS_BG_DONE = "bg-done";
+    /** 工具卡状态：后台任务被用户手动终止（终态；与"已中断"区分——那是异常退出残留） */
+    public static final String STATUS_BG_KILLED = "bg-killed";
 
     private final String id;
     private String title;
@@ -248,6 +250,27 @@ public class Conversation {
                 Message updated = new Message(target.role(),
                         target.text() + "\n" + section, target.time(),
                         target.toolName(), target.toolArgs(), STATUS_BG_DONE, target.callId(),
+                        target.thinking());
+                loadedMessages.set(i, updated);
+                touch();
+                return updated;
+            }
+        }
+        return null;
+    }
+
+    /** 后台任务被手动终止：按 callId 找最后一条"后台运行中"的工具消息，追加终止标记并翻
+     *  bg-killed 终态，返回替换后的新记录；没找到返回 null（重复终止/未知 callId）。
+     *  bg-killed 之后再到的 markDone 会因状态守卫在这里查不到而自然丢弃 */
+    public Message updateBackGroundKilled(String callId) {
+        List<Message> loadedMessages = ensureLoaded();
+        for (int i = loadedMessages.size() - 1; i >= 0; i--) {
+            Message target = loadedMessages.get(i);
+            if (callId != null && callId.equals(target.callId())
+                    && STATUS_BG_RUNNING.equals(target.toolStatus())) {
+                Message updated = new Message(target.role(),
+                        target.text() + "\n—— 已手动终止 ——", target.time(),
+                        target.toolName(), target.toolArgs(), STATUS_BG_KILLED, target.callId(),
                         target.thinking());
                 loadedMessages.set(i, updated);
                 touch();

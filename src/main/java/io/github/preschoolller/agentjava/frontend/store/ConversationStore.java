@@ -272,6 +272,26 @@ public class ConversationStore {
         return updated;
     }
 
+    /** 后台任务被手动终止的落库（BackGroundTaskControl.kill 实现方回调）：按 callId 找到
+     *  "后台运行中"的工具消息翻 bg-killed 终态；返回替换后的新记录，会话不存在/没找到返回 null */
+    public Message terminateBackGroundTask(String id, String callId) {
+        Conversation conversation = findById(id);
+        if (conversation == null) {
+            return null;
+        }
+        Message updated = conversation.updateBackGroundKilled(callId);
+        if (updated != null) {
+            saveAndSyncSession(conversation);
+            fireChanged();
+        }
+        return updated;
+    }
+
+    /** 按会话 id 取会话（后台任务终止等按 id 定向的场景用，Main 不持有 Conversation 对象）；不存在返回 null */
+    public Conversation getConversation(String id) {
+        return id == null ? null : findById(id);
+    }
+
     private Conversation findById(String id) {
         if (id == null) {
             return null;

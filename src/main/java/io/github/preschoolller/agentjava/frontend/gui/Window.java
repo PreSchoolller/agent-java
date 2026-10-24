@@ -285,6 +285,9 @@ public class Window extends JFrame {
         JButton regenerate;
         JButton menu;
         boolean materialized;
+        /** 后台任务的瞬时输出快照（"查看输出"按钮写入）：仅存内存、随终态回填或卡片重建丢弃，
+         *  不落盘——快照是"此刻读一眼"的数据，进历史只会越攒越多 */
+        String peekResult;
 
         MessageCard(JPanel card, boolean user, boolean tool, Message message, MarkdownPane markdown) {
             this.card = card;
@@ -1124,6 +1127,7 @@ public class Window extends JFrame {
             for (MessageCard card : messageCards) {
                 if (card.tool && callId.equals(card.message.callId())) {
                     expandedToolCalls.add(toolKey(card.message)); // 完成即自动展开，输出不用翻卡找
+                    card.peekResult = null; // 快照被真实输出取代
                     card.message = updated;
                     rebuildCard(card);
                     break;
@@ -1133,6 +1137,54 @@ public class Window extends JFrame {
             scrollToBottom();
         }
         showTrayNotification("后台任务完成", toolArgsSummary(updated.toolArgs()));
+        return true;
+    }
+
+    /**
+     * 后台任务控制接口（B 阶段，后端实现）：终止运行中的后台任务、获取当前输出快照。
+     * 实现须线程安全（按钮在后台线程上调用）；kill 可能阻塞（等进程死透），绝不能碰 EDT。
+     * 契约：kill 返回 true = 已终止，实现方随后经 EDT 调 onBackGroundTaskKilled 落库上屏
+     * 并自行决定是否续轮（Main 里的桩是现成模板）；false = 未终止，卡片维持"后台运行中"。
+     * output 应快速返回（读内存缓冲），null/空 = 暂无可读输出。
+     */
+    public interface BackGroundTaskControl {
+        boolean kill(String conversationId, String callId);
+
+        String output(String conversationId, String callId);
+    }
+
+    private BackGroundTaskControl backGroundTaskControl;
+
+    /** 注册后台任务控制实现（B 阶段后端接入点）；null 或未注册 = 未实现，卡片不挂按钮 */
+    public void setBackGroundTaskControl(BackGroundTaskControl control) {
+        this.backGroundTaskControl = control;
+    }
+
+    /**
+     * 后台任务被手动终止（BackGroundTaskControl.kill 实现方经 EDT 调用）：工具卡翻"已终止"
+     * 并按决策1注入一条【后台任务已终止】用户消息告知模型。会话不在前台只落库不出卡；
+     * 找不到对应卡片返回 false。须在 EDT 上调用。
+     */
+    public boolean onBackGroundTaskKilled(String conversationId, String callId) {
+        Message updated = store.terminateBackGroundTask(conversationId, callId);
+        if (updated == null) {
+            return false;
+        }
+        Message userMessage = store.appendMessage(conversationId, Conversation.ROLE_USER,
+                "【后台任务已终止 id: " + callId + "】");
+        if (conversationId.equals(displayedConvId)) {
+            insertMessageCard(userMessage);
+            for (MessageCard card : messageCards) {
+                if (card.tool && callId.equals(card.message.callId())) {
+                    card.peekResult = null; // 快照随终态丢弃
+                    card.message = updated;
+                    rebuildCard(card);
+                    break;
+                }
+            }
+            updateMaterialization();
+            scrollToBottom();
+        }
         return true;
     }
 
@@ -1445,11 +1497,13 @@ public class Window extends JFrame {
         boolean interrupted = "interrupted".equals(message.toolStatus()); // 崩溃残留（P0-5），灰态
         boolean bgRunning = Conversation.STATUS_BG_RUNNING.equals(message.toolStatus());
         boolean bgDone = Conversation.STATUS_BG_DONE.equals(message.toolStatus());
+        boolean bgKilled = Conversation.STATUS_BG_KILLED.equals(message.toolStatus());
         // 待确认（P0-4 权限确认卡）：卡片手里攥着一个还没被点的审批 future。
         // 徽标沿用三态色位，警示色比"失败"收敛；旁边挂"允许/拒绝"两按钮
         boolean pending = running && messageCard.approval != null && !messageCard.approval.isDone();
         JLabel statusLabel = new JLabel(pending ? "待确认" : running ? "运行中…" : error ? "失败"
-                : interrupted ? "已中断" : bgRunning ? "后台运行中…" : bgDone ? "后台完成" : "完成");
+                : interrupted ? "已中断" : bgRunning ? "后台运行中…" : bgKilled ? "已终止"
+                : bgDone ? "后台完成" : "完成");
         statusLabel.setFont(new Font("微软雅黑", Font.PLAIN, 11));
         statusLabel.setForeground(pending ? Ui.WARNING : running ? Ui.ACCENT : bgRunning ? Ui.WARNING
                 : error ? Ui.DANGER : Ui.TEXT_SECONDARY);
@@ -1460,6 +1514,11 @@ public class Window extends JFrame {
         if (pending) {
             rightGroup.add(createApprovalButton(messageCard, "允许", true));
             rightGroup.add(createApprovalButton(messageCard, "拒绝", false));
+        } else if (bgRunning && backGroundTaskControl != null) {
+            // 后台任务控制（B 阶段）：读一眼当前输出 / 手动终止。动作在后台线程走
+            // BackGroundTaskControl，成功后的落库与续轮由控制实现方（Main）编排
+            rightGroup.add(createBgControlButton(messageCard, "查看输出", true));
+            rightGroup.add(createBgControlButton(messageCard, "终止", false));
         }
         header.add(rightGroup, BorderLayout.EAST);
 
@@ -1508,7 +1567,7 @@ public class Window extends JFrame {
             result.setFont(new Font("Monospaced", Font.PLAIN, TOOL_RESULT_FONT_SIZE));
             // 没设过前景色的文本组件默认黑字，深色主题下必须显式给（见踩坑 #19）
             result.setForeground(Ui.TEXT);
-            result.setText(message.text());
+            result.setText(toolResultText(message, messageCard));
             result.setLineWrap(true);
             result.setWrapStyleWord(false);
             JScrollPane scroll = new JScrollPane(result,
@@ -1757,6 +1816,44 @@ public class Window extends JFrame {
             rebuildCard(card);
         });
         return button;
+    }
+
+    /** 后台运行中卡片的"查看输出/终止"（B 阶段）：动作在后台线程走 BackGroundTaskControl，
+     *  结果回 EDT 收尾。终止成功后的落库、上屏与续轮由控制实现方（Main）按契约编排，卡片只发起 */
+    private JButton createBgControlButton(MessageCard card, String text, boolean peek) {
+        JButton button = peek ? Ui.button(text) : Ui.dangerButton(text);
+        button.setFont(new Font("微软雅黑", Font.BOLD, 11));
+        button.setPreferredSize(new Dimension(peek ? 76 : 52, 22));
+        button.addActionListener(e -> {
+            String conversationId = displayedConvId; // 物化卡片必属当前显示会话
+            String callId = card.message.callId();
+            CompletableFuture.runAsync(() -> {
+                if (peek) {
+                    String snap = backGroundTaskControl.output(conversationId, callId);
+                    SwingUtilities.invokeLater(() -> {
+                        card.peekResult = snap == null || snap.isBlank() ? "(暂无输出)" : snap.strip();
+                        expandedToolCalls.add(toolKey(card.message)); // 有快照就顺手展开
+                        if (messageCards.contains(card)) {
+                            rebuildCard(card);
+                        }
+                    });
+                } else if (!backGroundTaskControl.kill(conversationId, callId)) {
+                    System.err.println("后台任务终止未成功: " + callId);
+                    // 卡片维持"后台运行中"，终止按钮仍在，可重试；落库由 kill 返回 true 的实现方编排
+                }
+            });
+        });
+        return button;
+    }
+
+    /** 工具卡结果区文本：终态结果 + （后台运行中时的）瞬时输出快照段。快照仅存内存，
+     *  随终态回填（onBackGroundTaskDone/Killed 置空）或卡片按仓库重建自然丢弃 */
+    private static String toolResultText(Message message, MessageCard card) {
+        if (card.peekResult == null) {
+            return message.text();
+        }
+        return message.text() + "\n—— 输出快照（" + TIME_FORMAT.format(Instant.now())
+                + "，瞬时数据）——\n" + card.peekResult;
     }
 
     /** 只有最后一张 AI 卡片显示重新生成（且生成中隐藏），其余 AI 卡片的按钮一律藏掉；悬停菜单同步藏起 */

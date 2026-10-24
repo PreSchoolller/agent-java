@@ -95,6 +95,44 @@ public class Main {
                     Logger.info("停止生成......");
                 }
             });
+
+            // 后台任务控制（B 阶段）：终止/输出快照。UI（按钮/徽标）、存储（bg-killed）、
+            // 续轮编排都已就位，下面两个 TODO 是后端仅剩的活——按注释实现后按钮即生效。
+            window.setBackGroundTaskControl(new Window.BackGroundTaskControl() {
+                @Override
+                public boolean kill(String conversationId, String callId) {
+                    // TODO(后端): 终止机制 —— ShutDownJob 的 Set<Process> 换成
+                    // Map<String callId, TaskHandle>（TaskHandle = Process + 输出 StringBuffer，
+                    // ToolBash.executeBackGround 注册时把手里现成的 callId 带上）。
+                    // kill = 按 callId destroyForcibly 链：bg 线程经读流 EOF 走既有 finally
+                    // （kill→remove→markDone）自行收尾，卡片此刻已被下面翻成 bg-killed，
+                    // markDone 的回填/注入会被 Conversation 的 bg-running 状态守卫自然丢弃。
+                    boolean killed = false; // 替换为 ShutDownJob.kill(callId)
+                    if (killed) {
+                        SwingUtilities.invokeLater(() -> {
+                            if (window.onBackGroundTaskKilled(conversationId, callId)) {
+                                // 终止也要让模型知道（注入的用户消息已在历史里），空闲则续轮，与完成回调同款
+                                Conversation conv = window.getStore().getConversation(conversationId);
+                                if (conv != null) {
+                                    AtomicBoolean token = tryAcquire(conv.getId());
+                                    if (token != null) {
+                                        streamReply(window, conv, ProviderFactory.createProvider(), token);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    return killed;
+                }
+
+                @Override
+                public String output(String conversationId, String callId) {
+                    // TODO(后端): 返回该任务当前已读输出（TaskHandle 里 StringBuffer 的快照；
+                    // StringBuffer 线程安全，与读流线程并发无碍）。null/空 = 暂无可读输出，
+                    // 卡片会显示"(暂无输出)"。须快速返回（按钮虽在后台线程调，别让它久等）。
+                    return null;
+                }
+            });
         });
         Runtime.getRuntime().addShutdownHook(new Thread(ShutDownJob::clean));
     }
