@@ -273,14 +273,15 @@ public class ConversationStore {
     }
 
     /** 后台任务被手动终止的落库（BackGroundTaskControl.kill 实现方回调）：按 callId 找到
-     *  "后台运行中"的工具消息，翻 bg-killed 终态并附终止瞬间已读输出；返回替换后的新记录，
-     *  会话不存在/没找到返回 null */
-    public Message terminateBackGroundTask(String id, String callId, String output) {
+     *  "后台运行中"的工具消息翻 bg-killed 终态；返回替换后的新记录，会话不存在/没找到返回 null。
+     *  输出不在这里带：markDone（EOF 后的完整缓冲）随后经 completeBackGroundTask 的
+     *  bg-killed 分支补进结果区并触发注入/续轮 */
+    public Message terminateBackGroundTask(String id, String callId) {
         Conversation conversation = findById(id);
         if (conversation == null) {
             return null;
         }
-        Message updated = conversation.updateBackGroundKilled(callId, output);
+        Message updated = conversation.updateBackGroundKilled(callId);
         if (updated != null) {
             saveAndSyncSession(conversation);
             fireChanged();

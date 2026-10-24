@@ -102,26 +102,14 @@ public class Main {
                 @Override
                 public boolean kill(String conversationId, String callId) {
                     // 终止机制：ShutDownJob 按 callId destroyForcibly 链（TaskHandle 注册见
-                    // ToolBash.executeBackGround）。bg 线程经读流 EOF 走既有 finally
-                    // （kill→remove→markDone）自行收尾，卡片此刻已被下面翻成 bg-killed，
-                    // markDone 的回填/注入会被 Conversation 的 bg-running 状态守卫自然丢弃。
+                    // ToolBash.executeBackGround）。这里只负责杀进程 + EDT 翻卡（即时反馈）；
+                    // 输出回填、【后台任务已终止】注入与续轮由 markDone（EOF 后的完整缓冲）
+                    // 经 onBackGroundTaskDone 的 bg-killed 分支统一收尾——终止快照拿不到
+                    // 管道排干的尾巴，完整输出以 markDone 为准。
                     boolean killed = ShutDownJob.kill(callId);
-                    // 终止瞬间抓一把已读输出快照：终止多半发生在"想看看它卡在哪"的场景，
-                    // 不带输出的话卡片和模型都只知道任务死了，不知道死前发生了什么
-                    String output = killed ? ShutDownJob.getBufferedOutput(callId) : null;
                     if (killed) {
-                        SwingUtilities.invokeLater(() -> {
-                            if (window.onBackGroundTaskKilled(conversationId, callId, output)) {
-                                // 终止也要让模型知道（注入的用户消息已在历史里），空闲则续轮，与完成回调同款
-                                Conversation conv = window.getStore().getConversation(conversationId);
-                                if (conv != null) {
-                                    AtomicBoolean token = tryAcquire(conv.getId());
-                                    if (token != null) {
-                                        streamReply(window, conv, ProviderFactory.createProvider(), token);
-                                    }
-                                }
-                            }
-                        });
+                        SwingUtilities.invokeLater(() ->
+                                window.onBackGroundTaskKilled(conversationId, callId));
                     }
                     return killed;
                 }

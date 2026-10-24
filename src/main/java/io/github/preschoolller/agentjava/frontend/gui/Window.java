@@ -1109,18 +1109,20 @@ public class Window extends JFrame {
     }
 
     /**
-     * 后台任务完成（agent 循环的 markDone 回调，须在 EDT 上调用）：输出回填进提交时的工具卡
-     * （翻"后台完成"、自动展开露输出），并按决策1以用户身份注入一条"【后台任务完成】"消息——
-     * 模型经下一轮的历史快照消费后台输出。会话不在前台时只落库不出卡；会话已删除或找不到
-     * 对应工具卡时什么都不做并返回 false（调用方据此跳过自动续轮），true = 已落库。
+     * 后台任务结束（agent 循环的 markDone 回调，须在 EDT 上调用）：完成与被终止的任务都从
+     * 这里统一收尾——输出回填进提交时的工具卡（bg-done 翻"后台完成"；bg-killed 保持"已终止"、
+     * 把 EOF 后的完整输出补进"已手动终止"段下），并按决策1以用户身份注入消息告知模型
+     * （【后台任务完成】/【后台任务已终止】+ 输出）。会话不在前台时只落库不出卡；会话已删除
+     * 或找不到对应工具卡时什么都不做并返回 false（调用方据此跳过自动续轮），true = 已落库。
      */
     public boolean onBackGroundTaskDone(String conversationId, String callId, String output) {
         Message updated = store.completeBackGroundTask(conversationId, callId, output);
         if (updated == null) {
             return false;
         }
+        boolean killed = Conversation.STATUS_BG_KILLED.equals(updated.toolStatus());
         Message userMessage = store.appendMessage(conversationId, Conversation.ROLE_USER,
-                "【后台任务完成 id: " + callId + "】\n"
+                (killed ? "【后台任务已终止 id: " : "【后台任务完成 id: ") + callId + "】\n"
                         + (output == null || output.isBlank() ? "(无输出)" : output.strip()));
         if (conversationId.equals(displayedConvId)) {
             insertMessageCard(userMessage);
@@ -1136,17 +1138,20 @@ public class Window extends JFrame {
             updateMaterialization(); // 新用户卡在末尾，窗口化时补物化
             scrollToBottom();
         }
-        showTrayNotification("后台任务完成", toolArgsSummary(updated.toolArgs()));
+        if (!killed) {
+            // 终止是用户自己点的，不需要托盘提醒
+            showTrayNotification("后台任务完成", toolArgsSummary(updated.toolArgs()));
+        }
         return true;
     }
 
     /**
      * 后台任务控制接口（B 阶段，后端实现）：终止运行中的后台任务、获取当前输出快照。
      * 实现须线程安全（按钮在后台线程上调用）；kill 可能阻塞（等进程死透），绝不能碰 EDT。
-     * 契约：kill 返回 true = 已终止，实现方随后经 EDT 调 onBackGroundTaskKilled(conversationId,
-     * callId, output) 落库上屏（output 取 TaskHandle 缓冲快照）并自行决定是否续轮（Main 里的
-     * 实现是现成模板）；false = 未终止，卡片维持"后台运行中"。output 应快速返回（读内存缓冲），
-     * null/空 = 暂无可读输出。
+     * 契约：kill 返回 true = 已终止，实现方随后经 EDT 调 onBackGroundTaskKilled 翻卡即可；
+     * 输出回填、模型通知与续轮不在这里——markDone（EOF 后的完整缓冲）随后经
+     * onBackGroundTaskDone 的 bg-killed 分支统一收尾。false = 未终止，卡片维持"后台运行中"。
+     * output 应快速返回（读内存缓冲），null/空 = 暂无可读输出（"查看输出"按钮用）。
      */
     public interface BackGroundTaskControl {
         boolean kill(String conversationId, String callId);
@@ -1162,21 +1167,17 @@ public class Window extends JFrame {
     }
 
     /**
-     * 后台任务被手动终止（BackGroundTaskControl.kill 实现方经 EDT 调用）：工具卡翻"已终止"
-     * 并附终止瞬间已读到的输出快照，再按决策1注入一条【后台任务已终止】用户消息（带输出，
-     * 模型据此知道任务死前发生了什么）。会话不在前台只落库不出卡；找不到对应卡片返回
-     * false。须在 EDT 上调用。
+     * 后台任务被手动终止（BackGroundTaskControl.kill 实现方经 EDT 调用）：工具卡立即翻
+     * "已终止"（点完按钮的即时反馈）。输出、模型通知与续轮不在这里——markDone（EOF 后的
+     * 完整缓冲）随后经 onBackGroundTaskDone 的 bg-killed 分支统一收尾。找不到对应卡片返回
+     * false（如 markDone 抢先完成落卡）。须在 EDT 上调用。
      */
-    public boolean onBackGroundTaskKilled(String conversationId, String callId, String output) {
-        Message updated = store.terminateBackGroundTask(conversationId, callId, output);
+    public boolean onBackGroundTaskKilled(String conversationId, String callId) {
+        Message updated = store.terminateBackGroundTask(conversationId, callId);
         if (updated == null) {
             return false;
         }
-        Message userMessage = store.appendMessage(conversationId, Conversation.ROLE_USER,
-                "【后台任务已终止 id: " + callId + "】\n"
-                        + (output == null || output.isBlank() ? "(无输出)" : output.strip()));
         if (conversationId.equals(displayedConvId)) {
-            insertMessageCard(userMessage);
             for (MessageCard card : messageCards) {
                 if (card.tool && callId.equals(card.message.callId())) {
                     card.peekResult = null; // 快照随终态丢弃
@@ -1185,8 +1186,6 @@ public class Window extends JFrame {
                     break;
                 }
             }
-            updateMaterialization();
-            scrollToBottom();
         }
         return true;
     }

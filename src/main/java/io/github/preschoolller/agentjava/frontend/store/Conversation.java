@@ -236,15 +236,20 @@ public class Conversation {
     }
 
     /**
-     * 后台任务完成：按 callId 找最后一条"后台运行中"的工具消息，把输出追加进结果区并翻
-     * bg-done 终态（按状态限定，重复回调不会二次追加），返回替换后的新记录；没找到返回 null
+     * 后台任务结束（markDone 回调，读线程 EOF 后触发，输出是完整缓冲）：按 callId 找
+     * "后台运行中"→ 翻 bg-done 追加输出段；或找"已手动终止"（kill 先翻的卡）→ 把输出补进
+     * 结果区、状态保持 bg-killed——终止快照拿不到管道排干的尾巴，完整输出以这里为准。
+     * markDone 每任务恰好一次（bg 线程 finally 单次），两个分支都不会二次追加。
+     * 其余情况返回 null（未知 callId）。返回非 null 时调用方负责注入通知与续轮。
      */
     public Message updateBackGroundResult(String callId, String output) {
         List<Message> loadedMessages = ensureLoaded();
         for (int i = loadedMessages.size() - 1; i >= 0; i--) {
             Message target = loadedMessages.get(i);
-            if (callId != null && callId.equals(target.callId())
-                    && STATUS_BG_RUNNING.equals(target.toolStatus())) {
+            if (callId == null || !callId.equals(target.callId())) {
+                continue;
+            }
+            if (STATUS_BG_RUNNING.equals(target.toolStatus())) {
                 String section = "—— 后台任务完成 ——\n"
                         + (output == null || output.isBlank() ? "(无输出)" : output.strip());
                 Message updated = new Message(target.role(),
@@ -255,24 +260,32 @@ public class Conversation {
                 touch();
                 return updated;
             }
+            if (STATUS_BG_KILLED.equals(target.toolStatus())) {
+                Message updated = output == null || output.isBlank() ? target
+                        : new Message(target.role(),
+                                target.text() + "\n" + output.strip(), target.time(),
+                                target.toolName(), target.toolArgs(), STATUS_BG_KILLED,
+                                target.callId(), target.thinking());
+                loadedMessages.set(i, updated);
+                touch();
+                return updated;
+            }
         }
         return null;
     }
 
-    /** 后台任务被手动终止：按 callId 找最后一条"后台运行中"的工具消息，追加终止标记与
-     *  终止瞬间已读到的输出快照（可能差管道排干的最后几行）并翻 bg-killed 终态，返回替换
-     *  后的新记录；没找到返回 null（重复终止/未知 callId）。bg-killed 之后再到的 markDone
-     *  会因状态守卫在这里查不到而自然丢弃 */
-    public Message updateBackGroundKilled(String callId, String output) {
+    /** 后台任务被手动终止：按 callId 找最后一条"后台运行中"的工具消息，追加终止标记并翻
+     *  bg-killed 终态，返回替换后的新记录；没找到返回 null（重复终止/未知 callId）。
+     *  输出不在这里带——终止时读线程还没排干管道，markDone 的完整输出随后经
+     *  updateBackGroundResult 的 bg-killed 分支补进结果区 */
+    public Message updateBackGroundKilled(String callId) {
         List<Message> loadedMessages = ensureLoaded();
         for (int i = loadedMessages.size() - 1; i >= 0; i--) {
             Message target = loadedMessages.get(i);
             if (callId != null && callId.equals(target.callId())
                     && STATUS_BG_RUNNING.equals(target.toolStatus())) {
-                String section = "—— 已手动终止 ——\n"
-                        + (output == null || output.isBlank() ? "(无输出)" : output.strip());
                 Message updated = new Message(target.role(),
-                        target.text() + "\n" + section, target.time(),
+                        target.text() + "\n—— 已手动终止 ——", target.time(),
                         target.toolName(), target.toolArgs(), STATUS_BG_KILLED, target.callId(),
                         target.thinking());
                 loadedMessages.set(i, updated);
