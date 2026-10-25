@@ -97,8 +97,8 @@ public class ToolRead implements Tool {
 
             Path target = Path.of(path);
             Path workSpaceDir = workspace == null || workspace.isBlank() ?
-                    Constants.DEFAULT_WORKSPACE_DIR : Path.of(workspace);
-            target = workSpaceDir.resolve(target).normalize();
+                    Constants.DEFAULT_WORKSPACE_DIR : Path.of(workspace).toAbsolutePath().normalize();
+            target = workSpaceDir.resolve(target).toAbsolutePath().normalize();
             if (!target.startsWith(workSpaceDir) && !requestApproval(approvalGate, false)) {
                 return ToolApprovalGate.DENIED_RESULT;
             }
