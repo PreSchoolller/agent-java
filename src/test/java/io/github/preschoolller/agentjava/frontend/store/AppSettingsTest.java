@@ -12,6 +12,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -198,5 +199,42 @@ class AppSettingsTest {
         testSettings.setEnabledTools(null);
         testSettings.save();
         assertTrue(AppSettings.at(settingsFile).isToolEnabled("bash"), "未配置语义恢复全启用");
+    }
+
+    @Test
+    void t09_bashFilePattern() throws Exception {
+        Path settingsFile = file("settings.properties");
+        AppSettings testSettings = AppSettings.at(settingsFile);
+        // 默认未配置（null）：bash 工具只按超长阈值转文件，不再拿 "something" 字面量乱匹配
+        assertNull(testSettings.getBashFilePattern(), "未配置默认 null");
+        // 合法正则：设值 + 落盘往返
+        testSettings.setBashFilePattern("(here-?doc|<<)");
+        assertEquals("(here-?doc|<<)", testSettings.getBashFilePattern(), "合法正则设值");
+        testSettings.save();
+        assertEquals("(here-?doc|<<)", AppSettings.at(settingsFile).getBashFilePattern(), "落盘往返");
+        // 非正常/不安全正则一律拒收（不设值，原值保持）：编译不过 / 嵌套量词炸弹 / 超长
+        for (String bad : new String[]{"[unclosed", "(a+)+", "((a|b+)*)+", "a".repeat(257), "(?i)(x+)*"}) {
+            testSettings.setBashFilePattern(bad);
+        }
+        assertEquals("(here-?doc|<<)", testSettings.getBashFilePattern(), "非法/不安全正则不设值");
+        // 空白=清除配置，且清除后落盘不再写键
+        testSettings.setBashFilePattern("   ");
+        assertNull(testSettings.getBashFilePattern(), "空白清除配置");
+        testSettings.save();
+        assertNull(AppSettings.at(settingsFile).getBashFilePattern(), "清除后落盘无该配置");
+        // 手改配置文件塞进来的坏值 load 时不入库；合法值照常读
+        store(properties("bashFilePattern", "(x+)+"), settingsFile);
+        assertNull(AppSettings.at(settingsFile).getBashFilePattern(), "load 拒绝坏值");
+        store(properties("bashFilePattern", "\\d+\\.sh"), settingsFile);
+        assertEquals("\\d+\\.sh", AppSettings.at(settingsFile).getBashFilePattern(), "load 接受合法值");
+        // 旧版无条件落盘的占位默认值 "something" 迁移为未配置（那不是用户的选择）
+        store(properties("bashFilePattern", "something"), settingsFile);
+        assertNull(AppSettings.at(settingsFile).getBashFilePattern(), "旧占位默认值迁移为未配置");
+        // 校验器的"安全"边界：有界重复/普通分组量化的写法放行（误杀面别太宽）
+        assertTrue(AppSettings.isValidBashFilePattern("(a|b)+c{2,3}"), "有界重复与普通量词分组放行");
+        assertTrue(AppSettings.isValidBashFilePattern("[a+*.]{2,}\\\\w"), "字符类里的量词字符是字面量");
+        assertFalse(AppSettings.isValidBashFilePattern("(?:ab|x+)+"), "非捕获分组嵌套量词同样拦下");
+        assertFalse(AppSettings.isValidBashFilePattern(""), "空串不是合法配置");
+        assertFalse(AppSettings.isValidBashFilePattern(null), "null 不是合法配置");
     }
 }

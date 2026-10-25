@@ -285,15 +285,15 @@ public class Main {
                     } else {
                         SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), false));
                         if (!cancelled.get() && (inputTokens > 0 || outputTokens > 0)) {
-                            // 用量上胶囊（排在生成态刷新之后：refreshGeneratingUi 会把胶囊刷回"就绪"）。
-                            // 只在轮主会话正在显示时刷，避免后台会话的用量盖掉前台状态
+                            // 用量上独立胶囊（与状态胶囊分立）：refreshGeneratingUi 刷"就绪"不会再冲掉它。
+                            // 只在轮主会话正在显示时刷，避免后台会话的用量盖掉前台数据
                             String convId = conversation.getId();
                             long elapsedMillis = (System.nanoTime() - roundStartNanos) / 1_000_000;
                             String summary = "tokens 输入 " + inputTokens + " · 输出 " + outputTokens
                                     + " · 耗时 " + (elapsedMillis / 1000.0) + " 秒";
                             SwingUtilities.invokeLater(() -> {
                                 if (convId.equals(window.getStore().getActive().getId())) {
-                                    window.setRealtimeInfo(summary);
+                                    window.setUsageInfo(summary);
                                 }
                             });
                         }

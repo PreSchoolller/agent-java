@@ -104,7 +104,8 @@ import java.util.function.Supplier;
  * AI 回复按 Markdown 渲染（MarkdownRenderer）；重新生成：onRegenerate(conv -> ...) 注册回调，
  * 点击最后一张 AI 卡片上的"重新生成"按钮时旧回复已先从界面移除，后端应调
  * store.removeLastMessage 删掉旧回答再重新请求（回调在 EDT 上执行，耗时操作自己开线程）。
- * setRealtimeInfo 更新底部实时数据框；getStore() 可直接读写会话数据（本地持久化到 ~/.agentjava）。
+ * 底部胶囊分立两枚：setRealtimeInfo 刷状态（就绪/生成中…）、setUsageInfo 刷用量（tokens/耗时，
+ * 有数据后常驻不被状态刷新冲掉）；getStore() 可直接读写会话数据（本地持久化到 ~/.agentjava）。
  */
 public class Window extends JFrame {
 
@@ -188,9 +189,12 @@ public class Window extends JFrame {
             AgentMode.PLAN, AgentMode.EDIT, AgentMode.FULL_ACCESS, AgentMode.CHAT,
     };
 
-    /** 实时数据小胶囊（底部居中） */
-    private Ui.RoundPanel realtimePill;
-    private JLabel realtimeLabel;
+    /** 底部两枚分立胶囊：状态（就绪/生成中…，跟生成态刷新走）与用量（tokens/耗时，只被
+     *  setUsageInfo 覆盖——生成结束刷回"就绪"不再冲掉上一轮的用量数据） */
+    private Ui.RoundPanel statusPill;
+    private JLabel statusLabel;
+    private Ui.RoundPanel usagePill;
+    private JLabel usageLabel;
 
     /** 已渲染的消息卡片，瀑布流宽度变化时需要按折行结果重算高度 */
     private final List<MessageCard> messageCards = new ArrayList<>();
@@ -1298,9 +1302,20 @@ public class Window extends JFrame {
         refreshRegenerateButtons(); // 生成中隐藏"重新生成"，避免叠着两次请求
     }
 
-    /** 更新底部实时数据胶囊的文本，例如 token 用量、耗时等 */
+    /** 更新底部状态胶囊的文本（就绪/生成中…/正在等待工具收尾…）。用量数据走 setUsageInfo，
+     *  两枚胶囊各写各的：生成态刷新不会再冲掉用量 */
     public void setRealtimeInfo(String text) {
-        realtimeLabel.setText(text);
+        statusLabel.setText(text);
+    }
+
+    /** 更新底部用量胶囊（tokens 输入/输出 · 耗时）：一旦有过数据就常驻显示，切生成态/回到
+     *  就绪都不清空，直到下一轮用量覆盖。空文本忽略（没有"没有数据"的中间态可画） */
+    public void setUsageInfo(String text) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        usageLabel.setText(text);
+        usagePill.setVisible(true);
     }
 
     /** 用会话内容重建瀑布流（切换会话、设置变更后调用），并把窗口标题带上会话名 */
@@ -1655,9 +1670,11 @@ public class Window extends JFrame {
 
             JPanel copyRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
             copyRow.setOpaque(false);
-            // bg 回显卡片超长折叠：预览态/展开态都在复制行左侧给出切换（与 fitCardHeight 同一帽）
-            boolean bgCollapsed = resultCap(messageCard, message.text(), textWidth) != TOOL_RESULT_CAP;
-            boolean bgExpanded = expandedBgResults.contains(toolKey(message))
+            // bg 回显卡片超长折叠：预览态/展开态都在复制行左侧给出切换（与 fitCardHeight 同一帽）。
+            // 快照在场时不挂：结果区已按 TOOL_RESULT_CAP 全高展开，"收起"按了也没有可见变化
+            boolean hasPeek = messageCard.peekResult != null;
+            boolean bgCollapsed = !hasPeek && resultCap(messageCard, message.text(), textWidth) != TOOL_RESULT_CAP;
+            boolean bgExpanded = !hasPeek && expandedBgResults.contains(toolKey(message))
                     && message.text() != null
                     && measureToolResultHeight(message.text(), textWidth) > TOOL_RESULT_CAP;
             if (bgCollapsed || bgExpanded) {
@@ -1674,10 +1691,15 @@ public class Window extends JFrame {
     /**
      * 工具卡结果区的高度帽：bg 回显卡片（运行中/完成/已终止）超长时默认收成预览
      * （BG_RESULT_PREVIEW_CAP，"展开全部"后恢复 TOOL_RESULT_CAP 的完整滚动区），
-     * 其余卡片恒为 TOOL_RESULT_CAP。与 fitCardHeight 共用，显示与测量必须一致
+     * 其余卡片恒为 TOOL_RESULT_CAP。与 fitCardHeight 共用，显示与测量必须一致。
+     * "查看输出"的瞬时快照在场时直接给完整滚动区——快照是用户主动要看的东西，
+     * 收成 200px 预览帽就违背了点击本意（用户报"看着费劲"），与终态结果同一顶帽。
      */
     private int resultCap(MessageCard card, String resultText, int textWidth) {
         Message m = card.message;
+        if (card.peekResult != null) {
+            return TOOL_RESULT_CAP;
+        }
         boolean bg = Conversation.STATUS_BG_RUNNING.equals(m.toolStatus())
                 || Conversation.STATUS_BG_DONE.equals(m.toolStatus())
                 || Conversation.STATUS_BG_KILLED.equals(m.toolStatus());
@@ -2244,9 +2266,12 @@ public class Window extends JFrame {
             if (expandedToolCalls.contains(toolKey(messageCard.message))) {
                 // 展开：头部 + 结果文本（超长封顶，卡片内滚动；bg 回显超长默认收成预览帽）+
                 // 参数全文区（有参数才挂，超长封顶内部滚动）+ 复制行；框架 = 上下内衬 20 +
-                // 时间行 ~18 + 内容竖缝 12 + 余量（比 AI 卡小：没有角色标签行）
-                int resultHeight = Math.min(measureToolResultHeight(messageCard.message.text(), textWidth)
-                        + TOOL_HEADER_HEIGHT, resultCap(messageCard, messageCard.message.text(), textWidth));
+                // 时间行 ~18 + 内容竖缝 12 + 余量（比 AI 卡小：没有角色标签行）。
+                // 结果文本量"实际显示"的全文（含"查看输出"快照段）：快照只画不量会把滚动区
+                // 挤成卡高下限，用户报告的"查看输出窗口矮"正是这条测量路径漏了快照
+                String resultText = toolResultText(messageCard.message, messageCard);
+                int resultHeight = Math.min(measureToolResultHeight(resultText, textWidth)
+                        + TOOL_HEADER_HEIGHT, resultCap(messageCard, resultText, textWidth));
                 int argsHeight = 0;
                 String argsText = messageCard.message.toolArgs();
                 if (argsText != null && !argsText.isBlank()) {
@@ -2512,19 +2537,23 @@ public class Window extends JFrame {
         }
     }
 
-    /** 底部：输入区（圆角，聚焦变主题色描边）+ 实时数据胶囊 */
+    /** 底部：输入区（圆角，聚焦变主题色描边）+ 状态/用量两枚分立胶囊（并排居中） */
     private void initRealtimePill() {
-        realtimePill = Ui.panel(16, Ui.PILL_BG, null);
-        realtimeLabel = new JLabel("就绪");
-        realtimeLabel.setFont(new Font("微软雅黑", Font.PLAIN, 12));
-        realtimeLabel.setForeground(Ui.TEXT_SECONDARY);
-        realtimePill.setLayout(new FlowLayout(FlowLayout.CENTER, 0, 0));
-        realtimePill.setBorder(BorderFactory.createEmptyBorder(4, 14, 4, 14));
-        realtimePill.add(realtimeLabel);
+        statusPill = buildPill();
+        statusLabel = new JLabel("就绪");
+        stylePillLabel(statusLabel);
+        statusPill.add(statusLabel);
 
-        JPanel pillWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        usagePill = buildPill();
+        usageLabel = new JLabel("");
+        stylePillLabel(usageLabel);
+        usagePill.add(usageLabel);
+        usagePill.setVisible(false); // 还没有任何用量数据前不占位；setUsageInfo 首次到达后常驻
+
+        JPanel pillWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 0));
         pillWrapper.setBackground(Ui.BG);
-        pillWrapper.add(realtimePill);
+        pillWrapper.add(statusPill);
+        pillWrapper.add(usagePill);
 
         JPanel southPanel = new JPanel(new BorderLayout(0, 10));
         southPanel.setBackground(Ui.BG);
@@ -2533,6 +2562,18 @@ public class Window extends JFrame {
         southPanel.add(pillWrapper, BorderLayout.SOUTH);
 
         innerPanel.add(southPanel, BorderLayout.SOUTH);
+    }
+
+    private Ui.RoundPanel buildPill() {
+        Ui.RoundPanel pill = Ui.panel(16, Ui.PILL_BG, null);
+        pill.setLayout(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        pill.setBorder(BorderFactory.createEmptyBorder(4, 14, 4, 14));
+        return pill;
+    }
+
+    private static void stylePillLabel(JLabel label) {
+        label.setFont(new Font("微软雅黑", Font.PLAIN, 12));
+        label.setForeground(Ui.TEXT_SECONDARY);
     }
 
     /** 输入框回车：输入自动加为用户卡片并清空输入框，(会话, 文本) 再交给 inputHandler */

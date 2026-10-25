@@ -50,7 +50,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
  * gitignore 内）。产出：窗口默认态/侧栏分组、拖宽、切会话、生成中、折叠、设置面板分页（通用页审核通知
  * 三开关/工具页）、Markdown 渲染与划词搜索、流式落库、工具卡折叠、权限确认卡、窄窗口不裁按钮、
  * 悬停菜单、置顶/搜索高亮/片段/右键菜单、长会话窗口化、深色主题、托盘最小化、工作区弹窗与
- * 侧栏分组/组头加号/组头折叠、输入框高度自适应，共 28 张截图。
+ * 侧栏分组/组头加号/组头折叠、输入框高度自适应、后台任务查看输出满高，共 29 张截图。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须包在 EDT 里执行（见踩坑记录 #1）。
  * <p>
  * 交互巡检向导（用户点名）：-Dgui.interactive=true 时每个观察点在截图后弹说明卡，人工点
@@ -190,6 +190,19 @@ class WindowGuiTest {
         assertTrue(sidebarBadgeHtml(store.getActive().getId()).contains(">生成中<"), "侧栏亮\"生成中\"标注");
         edt(() -> WINDOW.setGenerating(false));
         assertFalse(sidebarBadgeHtml(store.getActive().getId()).contains(">生成中<"), "生成结束侧栏标注熄灭");
+        // —— 胶囊分立（用户点名：usage 数据一直可见）：状态与用量两枚独立胶囊，
+        //    生成态刷新只动状态那枚，用量设过一次就常驻 ——
+        edt(() -> WINDOW.setUsageInfo("tokens 输入 120 · 输出 34 · 耗时 2.0 秒"));
+        Thread.sleep(200);
+        assertTrue(uiHasLabelContaining("tokens 输入 120"), "用量胶囊显示");
+        edt(() -> WINDOW.setGenerating(true));
+        Thread.sleep(200);
+        assertTrue(uiHasLabelContaining("生成中") && uiHasLabelContaining("tokens 输入 120"),
+                "生成中两枚胶囊并存（互不覆盖）");
+        edt(() -> WINDOW.setGenerating(false));
+        Thread.sleep(200);
+        assertTrue(uiHasLabelContaining("就绪") && uiHasLabelContaining("tokens 输入 120"),
+                "回到就绪后用量仍在（不再被状态刷新冲掉）");
     }
 
     @Test
@@ -251,6 +264,9 @@ class WindowGuiTest {
         Thread.sleep(400);
         assertFalse(uiHasShowingTextAnyWindow("配置方案") && uiHasShowingTextAnyWindow("正文字号"),
                 "工具页不含其他页控件");
+        // bash 转文件正则行（用户点名）：工具页第二张卡；行为说明是 HTML 折行文案，
+        // 全等断言够不着，由 5d 截图目检兜底
+        assertTrue(uiHasShowingTextAnyWindow("文件正则"), "工具页含文件正则行");
         captureDialogGated("window-5d-settings-tools.png", "设置",
                 "工具页：ToolManager 注册的工具逐条一行，勾选框=声明给模型（本次跑全量依赖，是真实注册行）。勾选态看看就好，别点「保存」。");
         edt(() -> uiClickAnyWindow("模型服务"));
@@ -805,6 +821,65 @@ class WindowGuiTest {
         Thread.sleep(400);
         assertEquals(48, WINDOW.getInputPreferredHeight(), "清空后回落到初始高度（不只长不缩）");
         assertEnterKeyMods();
+    }
+
+    @Test
+    @Order(20)
+    void s20_bgPeekOutputFullHeight() throws Exception {
+        // —— 后台任务"查看输出"快照窗口（用户报"有点矮，看着费劲"）：快照在场时结果滚动区
+        //    给与终态结果同一顶帽（TOOL_RESULT_CAP=520）的完整高度，且卡片高度按
+        //    "终态文本 + 快照段"的显示全文测量（旧实现只量终态文本，快照把滚动区压成卡高下限） ——
+        StringBuilder snapshot = new StringBuilder();
+        for (int i = 1; i <= 60; i++) {
+            snapshot.append("build output line ").append(i).append("：模拟后台任务持续输出的日志行\n");
+        }
+        edt(() -> WINDOW.setBackGroundTaskControl(new Window.BackGroundTaskControl() {
+            @Override
+            public boolean kill(String conversationId, String callId) {
+                return false;
+            }
+
+            @Override
+            public String output(String conversationId, String callId) {
+                return snapshot.toString();
+            }
+        }));
+        // 后台提交卡：finish 的结果走"提交成功"协议文案 + 参数 background=true → 卡片翻"后台运行中"
+        edt(() -> store.newConversation());
+        Thread.sleep(800);
+        Window.ToolCallHandle[] bgHandle = new Window.ToolCallHandle[1];
+        String bgArgs = "{\"command\": \"mvn package\", \"background\": true}";
+        edt(() -> bgHandle[0] = WINDOW.addToolCall("bash", bgArgs, "call_bg_peek"));
+        edt(() -> bgHandle[0].finish("background task submitted successfully, id: call_bg_peek, pid: 1234",
+                true, bgArgs));
+        Thread.sleep(400);
+        assertTrue(uiHasText("后台运行中…") && uiHasText("查看输出"), "后台运行中卡挂查看输出按钮");
+        edt(() -> uiClick("查看输出"));
+        Thread.sleep(800); // 快照读取在后台线程，经 invokeLater 回 EDT 重建卡片
+        assertTrue(uiHasTextAreaStartingWith("background task submitted"), "展开显示结果与快照");
+        // 快照段在结果文本区里（"—— 输出快照（…）——"标注 + 快照全文），顺带量它的滚动区高度：
+        int[] scrollHeight = new int[1];
+        edt(() -> {
+            List<Component> all = new ArrayList<>();
+            collectComponents(WINDOW, all);
+            for (Component component : all) {
+                if (component instanceof javax.swing.JTextArea area) {
+                    String text = area.getText();
+                    if (!text.contains("输出快照") || !text.contains("build output line 60")) {
+                        continue;
+                    }
+                    for (Container c = area.getParent(); c != null; c = c.getParent()) {
+                        if (c instanceof javax.swing.JScrollPane scrollPane) {
+                            scrollHeight[0] = scrollPane.getHeight();
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        assertTrue(scrollHeight[0] >= 400, "快照全文入卡且滚动区与终态结果同顶帽（实测 " + scrollHeight[0] + "）");
+        captureGated("window-22-bg-peek.png",
+                "后台任务「查看输出」：快照展开后结果滚动区给满高度（不再被预览帽/卡高下限压扁），内部滚动看全量输出。");
     }
 
     /**

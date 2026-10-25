@@ -21,6 +21,8 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.Scrollable;
 import javax.swing.SpinnerNumberModel;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Color;
@@ -53,7 +55,8 @@ import java.util.function.Function;
  * 「通用」= 全局对话体验（主题/正文字号/关闭按钮/审核通知）；
  * 「模型服务」= 配置方案的全部参数（方案管理/后端地址/Key/API 类型/默认模型/温度/最大 Tokens/系统提示词
  * + 模型目录：每个模型一条可展开行，编辑名字/上下文窗口/最大输出/默认推理等级/输入能力，落 Profile.modelsMeta）；
- * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）。
+ * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）
+ * + bash 转文件正则（落 AppSettings.bashFilePattern：命中即写临时文件执行，替代 base64 管道）。
  * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
  * 随方案在模型服务页编辑。
  * "模型服务"页首行是配置方案管理（下拉切换 + 新建/重命名/删除）：面板里的一切改动
@@ -100,6 +103,11 @@ public class SettingsDialog extends JDialog {
     private final Map<ModelMeta, Boolean> expandedStates = new IdentityHashMap<>();
     /** 工具页的勾选框（按注册表顺序建；保存时按 clientProperty 里的工具名收集勾选结果） */
     private final List<JCheckBox> toolCheckBoxes = new ArrayList<>();
+    /** bash 转文件正则（工具页）：命令文本命中即改写临时文件执行，替代 base64 管道；
+     *  非空时必须是合法且安全的正则（AppSettings.isValidBashFilePattern），保存前拦截 */
+    private final JTextField bashPatternField = new JTextField();
+    /** 正则行的内联提示：默认解释转文件行为，校验失败换红色错误文案 */
+    private JLabel bashPatternHint;
     /** 当前行删除按钮（随目录重建刷新；Shot 断言初始可用态用） */
     private final List<JButton> rowDeleteButtons = new ArrayList<>();
     private final JSpinner temperatureSpinner;
@@ -164,6 +172,12 @@ public class SettingsDialog extends JDialog {
         // 日志等级：TinyLog 启动时读一次（Main→Configuration.set），改了不重启不生效——
         // 初值直接放等级名（不用中文别名），与写入值一一对应省映射
         logLevelCombo.setSelectedItem(settings.getLogLevel());
+        // bash 转文件正则：等宽字体（正则里的符号多），未配置显示空串
+        Ui.styleInput(bashPatternField);
+        bashPatternField.setFont(new Font("Monospaced", Font.PLAIN, 13));
+        bashPatternField.setText(settings.getBashFilePattern() == null ? "" : settings.getBashFilePattern());
+        bashPatternField.setToolTipText("命令文本命中此正则时，bash 工具把命令写入临时文件后用 bash 执行"
+                + "（替代 echo base64 | base64 -d | bash 管道，适合 heredoc 等管道不友好的写法）；留空=仅超长命令转文件");
 
         Ui.styleInput(backendUrlField);
         Ui.styleInput(keyField);
@@ -350,8 +364,69 @@ public class SettingsDialog extends JDialog {
             toolsCard.add(hint, gbc);
         }
         groups.add(toolsCard);
+
+        // bash 转文件正则卡：命中正则的命令写临时文件执行（替代 base64 管道）。非空时必须是
+        // 合法且安全的正则——内联红字实时提示，保存时再拦一道（AppSettings setter 是最后防线）
+        JPanel bashCard = Ui.card(Ui.CARD_BG);
+        bashCard.setLayout(new GridBagLayout());
+        addRow(bashCard, 0, "文件正则", bashPatternRow());
+        groups.add(bashCard);
         groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
         return groups;
+    }
+
+    /**
+     * 文件正则行：输入框 + 内联提示。提示两态——默认解释这条配置的用途（命中即转临时文件
+     * 执行，替代 base64 管道），输入了非法/不安全正则时换红色错误文案。HTML 固定 330px 折行
+     * （踩坑 #17 的 Swing HTML + 防踩坑 #3 的首选宽正反馈），颜色现场读 Ui 镜像。
+     */
+    private JComponent bashPatternRow() {
+        bashPatternHint = new JLabel();
+        bashPatternHint.setFont(Ui.FONT_PLAIN);
+        refreshBashPatternHint();
+        bashPatternField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                refreshBashPatternHint();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                refreshBashPatternHint();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                refreshBashPatternHint();
+            }
+        });
+        JPanel column = new JPanel(new BorderLayout(0, 4));
+        column.setOpaque(false);
+        column.add(bashPatternField, BorderLayout.NORTH);
+        column.add(bashPatternHint, BorderLayout.SOUTH);
+        return column;
+    }
+
+    /** 按当前输入切换内联提示：非法/不安全正则给红字，空/合法给用途说明 */
+    private void refreshBashPatternHint() {
+        if (bashPatternHint == null) {
+            return;
+        }
+        String text = bashPatternField.getText();
+        if (text != null && !text.isBlank() && !AppSettings.isValidBashFilePattern(text)) {
+            bashPatternHint.setText("<html><div style='width:330px'><span style='color:"
+                    + Ui.hex(Ui.DANGER) + "'>正则不合法或含嵌套量词（灾难性回溯风险），不能保存——请修正或清空</span></div></html>");
+            return;
+        }
+        bashPatternHint.setText("<html><div style='width:330px'><span style='color:"
+                + Ui.hex(Ui.TEXT_SECONDARY) + "'>命令文本命中此正则时，bash 工具把命令写入临时文件后用 bash 执行"
+                + "（替代 echo base64 | base64 -d | bash 管道，适合 heredoc 等管道不友好的写法）；留空=仅超长命令转文件</span></div></html>");
+    }
+
+    /** 当前输入是否可保存：空串（清除配置）或合法且安全的正则 */
+    private boolean bashPatternValid() {
+        String text = bashPatternField.getText();
+        return text == null || text.isBlank() || AppSettings.isValidBashFilePattern(text);
     }
 
     /** 工具一行：等宽工具名 + 勾选框（勾选框文字=说明文字）。长说明按固定 330px 宽的 HTML 分段
@@ -976,6 +1051,15 @@ public class SettingsDialog extends JDialog {
     }
 
     private void save() {
+        // 非正常/不安全正则不入库：整次保存拦在这里（先于一切写值），人带回字段修正或清空——
+        // setter 里还有一道校验兜底，但那会"静默丢值关窗"，这里拦下才算把原因说清楚
+        if (!bashPatternValid()) {
+            Ui.messageDialog(this, "保存受阻", "「文件正则」不是合法且安全的正则"
+                    + "（编译不过或含灾难性回溯的嵌套量词），未保存任何改动。请修正或清空后再保存。");
+            refreshBashPatternHint();
+            bashPatternField.requestFocusInWindow();
+            return;
+        }
         Profile profile = working.get(selectedName);
         profile.setBackendUrl(backendUrlField.getText().strip());
         profile.setKey(keyField.getText().strip());
@@ -1018,6 +1102,8 @@ public class SettingsDialog extends JDialog {
             settings.setEnabledTools(checked.size() == toolCheckBoxes.size() ? null : checked);
         }
         settings.setLogLevel((String) logLevelCombo.getSelectedItem());
+        // 空白=清除配置；setter 内还有一道合法性校验（防御其他调用方）
+        settings.setBashFilePattern(bashPatternField.getText());
         settings.applyProfiles(working, selectedName); // 内部落盘 + fireChanged
         saved = true;
         dispose();

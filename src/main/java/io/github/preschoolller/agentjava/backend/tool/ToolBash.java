@@ -31,6 +31,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 import java.util.stream.Collectors;
 
 public class ToolBash implements Tool {
@@ -328,11 +329,22 @@ public class ToolBash implements Tool {
         return absolutePath.toString();
     }
 
-    // TODO 或许有不适合base64管道的？先留一个代码配置
+    /**
+     * 命令文本命中配置的正则时转临时文件执行（设置面板「工具」页的"文件正则"）：替代
+     * echo base64 | base64 -d | bash 管道，规避不适合走管道的命令（heredoc 等）。
+     * 未配置（null）= 仅超长命令转文件。AppSettings 存入前已校验正则，这里仍兜一层：
+     * 手改配置文件的坏值按不匹配处理，不让 PatternSyntaxException 打穿每次工具调用。
+     */
     private static boolean needPutInFile(String command) {
-        String lowerCase = command.toLowerCase();
-        Pattern pattern = Pattern.compile(AppSettings.get().getBashFilePattern());
-        return pattern.matcher(lowerCase).find();
+        String pattern = AppSettings.get().getBashFilePattern();
+        if (pattern == null || pattern.isBlank()) {
+            return false;
+        }
+        try {
+            return Pattern.compile(pattern).matcher(command.toLowerCase()).find();
+        } catch (PatternSyntaxException e) {
+            return false;
+        }
     }
 
     private void defineBash() {

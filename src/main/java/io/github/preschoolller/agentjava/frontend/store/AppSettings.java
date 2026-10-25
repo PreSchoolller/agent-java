@@ -7,13 +7,17 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
  * 应用设置（单例）：持久化到 ~/.agentjava/settings.properties。
@@ -59,7 +63,12 @@ public final class AppSettings {
     private int windowY = -1;
     private int sidebarDivider = -1;
 
-    private String bashFilePattern = "something";
+    /** bash 工具的转文件匹配正则（设置面板「工具」页）：命令文本命中即改写成临时文件后
+     *  bash 执行，替代 echo base64 | base64 -d | bash 管道。null = 未配置（仅超长命令转文件）。
+     *  只收合法且安全的正则（见 isValidBashFilePattern），非法值不落盘也不设值 */
+    private String bashFilePattern;
+    /** 转文件正则的长度帽：文件名启发式用不了多长，超长只可能是在塞回溯炸弹 */
+    private static final int BASH_PATTERN_MAX_LENGTH = 256;
 
     private AppSettings(Path file) {
         this.file = file;
@@ -246,6 +255,103 @@ public final class AppSettings {
 
     public String getBashFilePattern() {
         return bashFilePattern;
+    }
+
+    /** 写 bash 转文件正则：空白 = 清除配置（回到"仅超长命令转文件"默认）；非空时只收
+     *  合法且安全的正则——非法/不安全值忽略不设值（旧值保持，调用方无需先自行校验） */
+    public void setBashFilePattern(String pattern) {
+        if (pattern == null || pattern.isBlank()) {
+            bashFilePattern = null;
+            return;
+        }
+        if (isValidBashFilePattern(pattern)) {
+            bashFilePattern = pattern.strip();
+        }
+    }
+
+    /**
+     * 转文件正则的"正常且安全"校验：非空白、长度在帽内、能编译、无灾难性回溯的嵌套
+     * 无限量词。这条正则会被 bash 工具拿去逐条命令做 find——回溯炸弹（(a+)+ 这类）会让
+     * 每次工具调用都卡在正则引擎里，所以存入前拦下。嵌套量词检测是保守启发式（覆盖常见
+     * 炸弹形态，不追求识别全部 ReDoS；误杀的写法换等价写法即可）。
+     */
+    public static boolean isValidBashFilePattern(String pattern) {
+        if (pattern == null) {
+            return false;
+        }
+        String trimmed = pattern.strip();
+        if (trimmed.isEmpty() || trimmed.length() > BASH_PATTERN_MAX_LENGTH) {
+            return false;
+        }
+        try {
+            Pattern.compile(trimmed);
+        } catch (PatternSyntaxException e) {
+            return false;
+        }
+        return !hasNestedUnboundedQuantifier(trimmed);
+    }
+
+    /**
+     * 嵌套无限量词扫描：含无限量词（* / + / {n,}）的分组又被无限量词修饰（(a+)+、(a|b+)*
+     * 等）判为不安全。逐字符走一遍，跳过转义符与字符类 []（里面的 * + { } 是字面量）；
+     * {@code {n,m}} 有上界的量词回溯有限，不算。已通过 Pattern.compile，扫到的 { 一定是合法量词。
+     */
+    private static boolean hasNestedUnboundedQuantifier(String pattern) {
+        Deque<Boolean> stack = new ArrayDeque<>(); // 外层各分组"是否已出现过无限量词"
+        boolean groupStarvable = false; // 当前分组内是否出现过无限量词
+        boolean justClosedStarvable = false; // 前一个字符刚闭合的分组是否含无限量词（量词修饰的对象）
+        for (int i = 0; i < pattern.length(); i++) {
+            char c = pattern.charAt(i);
+            boolean appliesToStarvableGroup = justClosedStarvable; // 本字符若是量词，修饰它
+            justClosedStarvable = false; // 闭口标志只活一步：到不了紧跟其后的量词就没用了
+            if (c == '\\') {
+                i++; // 转义：连下一个字符一起吃掉
+                continue;
+            }
+            if (c == '[') { // 字符类整段跳过（内部 \] 转义由上面的 \\ 分支处理）
+                while (++i < pattern.length() && pattern.charAt(i) != ']') {
+                    if (pattern.charAt(i) == '\\') {
+                        i++;
+                    }
+                }
+                continue;
+            }
+            if (c == '(') {
+                stack.push(groupStarvable);
+                groupStarvable = false; // 进组重置：组内量词记到组自己头上
+                continue;
+            }
+            if (c == ')') {
+                justClosedStarvable = groupStarvable;
+                Boolean parent = stack.poll();
+                groupStarvable = parent != null && (parent || justClosedStarvable); // 子组的量词算外层体内的
+                continue;
+            }
+            boolean unbounded;
+            int next = i + 1;
+            if (c == '*' || c == '+') {
+                unbounded = true;
+            } else if (c == '{') { // {n,} 无上界=无限量词；{n}/{n,m} 有界不算
+                int close = pattern.indexOf('}', i);
+                if (close < 0) { // 编译已拦截游离 {，走到这只是防御：按普通字符继续
+                    unbounded = false;
+                    next = i + 1;
+                } else {
+                    unbounded = pattern.substring(i + 1, close).matches("\\d*,");
+                    next = close + 1;
+                }
+            } else {
+                unbounded = false;
+            }
+            if (unbounded) {
+                if (appliesToStarvableGroup) {
+                    return true; // 含无限量词的分组又被无限量词修饰：回溯炸弹
+                }
+                groupStarvable = true;
+            }
+            i = next - 1; // 量词可能是多字符（{2,}），推进到量词末尾
+        }
+        return false;
     }
 
     /** 仅接受 trace/debug/info/warn/error，其他值忽略（TinyLog 重启读一次，改了不重启不生效） */
@@ -473,7 +579,9 @@ public final class AppSettings {
         properties.setProperty("windowY", String.valueOf(windowY));
         properties.setProperty("sidebarDivider", String.valueOf(sidebarDivider));
         properties.setProperty("logLevel", String.valueOf(logLevel));
-        properties.setProperty("bashFilePattern", String.valueOf(bashFilePattern));
+        if (bashFilePattern != null) { // 缺键=未配置；非法值在 load/setter 两处已拦下，落盘的必是校验过的
+            properties.setProperty("bashFilePattern", bashFilePattern);
+        }
         try {
             Files.createDirectories(file.getParent());
             try (OutputStream out = Files.newOutputStream(file)) {
@@ -513,8 +621,12 @@ public final class AppSettings {
         String enabledToolsRaw = properties.getProperty("enabledTools");
         enabledTools = enabledToolsRaw == null ? null
                 : Arrays.stream(enabledToolsRaw.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList();
+        // 转文件正则：手改配置文件塞进来的坏值（编译不过/回溯炸弹/超长）不入库——直接当未配置。
+        // "something" 是旧版无条件落盘的占位默认值（从未有过前端入口，不可能是用户的选择），一并迁移掉
+        String patternRaw = properties.getProperty("bashFilePattern");
+        bashFilePattern = patternRaw != null && !"something".equals(patternRaw.strip())
+                && isValidBashFilePattern(patternRaw) ? patternRaw.strip() : null;
         logLevel = properties.getProperty("logLevel");
-        bashFilePattern = properties.getProperty("bashFilePattern", "something");
         if (logLevel == null || !allowLevels.contains(logLevel)) {
             logLevel = "info";
         }
