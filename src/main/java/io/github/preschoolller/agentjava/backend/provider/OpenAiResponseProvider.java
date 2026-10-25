@@ -411,7 +411,6 @@ public class OpenAiResponseProvider implements Provider {
                     toolCall.setWorkspace(workspace);
                     toolCall.setBackGroundTask(backGroundTask);
                     putIntoBQ(new FunctionToolCallDoneEvent(functionCall.callId(), toolCall));
-                    ThreadPoolFactory.getToolCallExecutor().execute(toolCall);
                 }
                 return null;
             }

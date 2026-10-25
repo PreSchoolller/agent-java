@@ -327,7 +327,6 @@ public class OpenAiChatCompletionProvider implements Provider {
                 toolCall.setWorkspace(workspace);
                 toolCall.setBackGroundTask(backGroundTask);
                 putIntoBQ(new FunctionToolCallDoneEvent(toolCall.getCallId(), toolCall), blockingQueue);
-                ThreadPoolFactory.getToolCallExecutor().execute(toolCall);
             }
         }
     }

@@ -9,6 +9,7 @@ import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.RoleEnum;
+import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.provider.common.event.BaseEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDeltaEvent;
@@ -392,6 +393,10 @@ public class Main {
     private static CompletableFuture<Void> performToolCall(ToolCall toolCall, Window.ToolCallHandle toolCallHandle) {
         return CompletableFuture.runAsync(() -> {
             try {
+                // 执行必须在这里启动而非 provider 侧：Start 事件与 Done 事件同队列同线程消费，
+                // 且 addToolCall 是 invokeAndWait，走到这里时卡片句柄必然已登记——
+                // provider 抢跑会间歇性撞上"审批时句柄未注册"的自动拒绝
+                ThreadPoolFactory.getToolCallExecutor().execute(toolCall);
                 toolCall.awaitFinal(TOOL_EXECUTE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 System.out.println("工具调用：" + toolCall.getTool().name() + " call_id: " + toolCall.getCallId() + "错误！");
