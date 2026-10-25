@@ -54,7 +54,7 @@ public interface Tool {
      * @return 纯文本
      */
     default String execute(String arguments, String workspace, String callId, BackGroundTaskDone backGroundTaskDone) {
-        // 未实现四参版本却声明了 needRunInBackGround 的工具，退化为前台执行而不是静默返回空结果
+        // 未实现四参版本却声明了 supportsBackGroundTask 的工具，退化为前台执行而不是静默返回空结果
         return execute(arguments, workspace);
     }
 
@@ -70,14 +70,14 @@ public interface Tool {
     /**
      * 是否可能需要额外的审批，无视 readonly，FULL_ACCESS 下依旧会跳过
      */
-    default boolean needAdditionalApproval() {
+    default boolean supportsAdditionalApproval() {
         return false;
     }
 
     /**
      * 是否可能需要在后台运行
      */
-    default boolean needRunInBackGround() {
+    default boolean supportsBackGroundTask() {
         return false;
     }
 }

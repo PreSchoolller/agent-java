@@ -287,7 +287,6 @@ public class OpenAiChatCompletionProvider implements Provider {
                             toolCall.setCallId(callId.get());
                             toolCall.setTool(ToolManager.findByName(name));
                             toolCall.setArguments("");
-                            toolCall.setStatus(ToolCall.Status.IN_PROGRESS);
                             indexToolCall.put(index, toolCall);
                         }
                         ToolCall toolCall = indexToolCall.get(index);

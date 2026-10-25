@@ -142,7 +142,7 @@ public class ToolRead implements Tool {
     }
 
     @Override
-    public boolean needAdditionalApproval() {
+    public boolean supportsAdditionalApproval() {
         return true;
     }
 

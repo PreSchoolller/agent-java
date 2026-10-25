@@ -87,7 +87,7 @@ public class ToolBash implements Tool {
     }
 
     @Override
-    public boolean needRunInBackGround() {
+    public boolean supportsBackGroundTask() {
         return true;
     }
 

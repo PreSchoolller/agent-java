@@ -65,7 +65,7 @@ public class ToolEdit implements Tool {
     }
 
     @Override
-    public boolean needAdditionalApproval() {
+    public boolean supportsAdditionalApproval() {
         return true;
     }
 

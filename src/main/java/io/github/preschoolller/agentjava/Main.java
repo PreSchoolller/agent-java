@@ -393,28 +393,28 @@ public class Main {
     }
 
     private static CompletableFuture<Void> performToolCall(ToolCall toolCall, Window.ToolCallHandle toolCallHandle) {
-        return CompletableFuture.runAsync(() -> {
-            try {
-                // 执行必须在这里启动而非 provider 侧：Start 事件与 Done 事件同队列同线程消费，
-                // 且 addToolCall 是 invokeAndWait，走到这里时卡片句柄必然已登记——
-                // provider 抢跑会间歇性撞上"审批时句柄未注册"的自动拒绝
-                ThreadPoolFactory.getToolCallExecutor().execute(toolCall);
-                toolCall.awaitFinal(TOOL_EXECUTE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                System.out.println("工具调用：" + toolCall.getTool().name() + " call_id: " + toolCall.getCallId() + "错误！");
-            } catch (TimeoutException e) {
-                // 执行阶段超时：必须给模型和卡片一句交代——不写的话 finish(null) 卡片空白，回传历史时整条被跳过
-                String timeoutResult = "工具执行超时（" + TOOL_EXECUTE_TIMEOUT_SECONDS + " 秒未完成），已放弃等待；工具可能仍在后台执行。";
-                toolCall.setResult(timeoutResult);
-                toolCall.setStatus(ToolCall.Status.INCOMPLETE);
-                SwingUtilities.invokeLater(() -> toolCallHandle.finish(timeoutResult, false, toolCall.getArguments()));
-                return;
-            }
-            SwingUtilities.invokeLater(() -> {
+        // 执行必须在这里启动而非 provider 侧：Start 事件与 Done 事件同队列同线程消费，
+        // 且 addToolCall 是 invokeAndWait，走到这里时卡片句柄必然已登记——
+        // provider 抢跑会间歇性撞上"审批时句柄未注册"的自动拒绝
+        ThreadPoolFactory.getToolCallExecutor().execute(toolCall);
+        ToolCall.ToolCallStatus status = toolCall.getCombinedStatus();
+
+        // 执行阶段超时：额外审批工具从 extraGatesDone 起算（审批等待不计入），其余从初审通过起算。
+        // 一次性调度任务不占常驻线程；completeTerminally 先到先得，正常完成在先则这次写入无效
+        CompletableFuture<Void> clockStart = toolCall.getTool().supportsAdditionalApproval()
+                ? status.extraGatesDone() : status.executionStarted();
+        clockStart.thenRun(() -> ThreadPoolFactory.getTimeoutScheduler().schedule(() ->
+                        toolCall.completeTerminally(ToolCall.Status.INCOMPLETE,
+                                "工具执行超时（" + TOOL_EXECUTE_TIMEOUT_SECONDS + " 秒未完成），已放弃等待；工具可能仍在后台执行。"),
+                TOOL_EXECUTE_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+
+        // 终态到达（完成/拒绝/超时/异常）→ EDT 收尾卡片；返回的 future 随终态完成，续轮 forEach(join) 由此收束
+        return status.statusFinal().thenAccept(finalStatus -> SwingUtilities.invokeLater(() -> {
+            if (toolCallHandle != null) {
                 toolCallHandle.finish(toolCall.getResult(),
-                        ToolCall.Status.COMPLETE.equals(toolCall.getStatus()), toolCall.getArguments());
-            });
-        });
+                        ToolCall.Status.COMPLETE.equals(finalStatus), toolCall.getArguments());
+            }
+        }));
     }
 
     /**

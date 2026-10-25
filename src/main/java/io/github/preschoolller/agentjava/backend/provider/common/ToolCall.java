@@ -4,17 +4,12 @@ import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 public class ToolCall implements Runnable {
 
     private volatile Tool tool;
 
     private volatile String arguments;
-
-    private volatile Status status;
 
     private volatile String callId;
 
@@ -26,28 +21,21 @@ public class ToolCall implements Runnable {
 
     private volatile BackGroundTask backGroundTask;
 
-    private CompletableFuture<Status> statusFinal;
+    /** 终态（COMPLETE/INCOMPLETE）：completeTerminally 先到先得，唯一事实源 */
+    private final CompletableFuture<Status> statusFinal = new CompletableFuture<>();
 
-    /** 审批放行、进入执行阶段时完成：awaitFinal 的超时只对执行阶段计费 */
-    private CompletableFuture<Void> executionStarted;
+    /** 初审结束（放行或拒绝）时完成：非额外审批工具的执行超时从这里起算 */
+    private final CompletableFuture<Void> executionStarted = new CompletableFuture<>();
 
-    /** 审批放行、进入执行阶段时完成：awaitFinal 的超时只对执行阶段计费 */
-    private CompletableFuture<Void> extraGatesDone;
+    /** 额外审批结束（放行或拒绝）时完成：额外审批工具的执行超时从这里起算（审批等待不计入） */
+    private final CompletableFuture<Void> extraGatesDone = new CompletableFuture<>();
 
     public ToolCall() {
         tool = ToolManager.EMPTY_TOOL;
-        status = Status.EMPTY;
-        statusFinal = new CompletableFuture<>();
-        executionStarted = new CompletableFuture<>();
-        extraGatesDone = new CompletableFuture<>();
     }
 
     public String getResult() {
         return result;
-    }
-
-    public void setResult(String result) {
-        this.result = result;
     }
 
     public String getCallId() {
@@ -61,63 +49,9 @@ public class ToolCall implements Runnable {
     public Tool getTool() {
         return tool;
     }
-    public Status getStatus() {
-        return status;
-    }
 
     public String getArguments() {
         return arguments;
-    }
-
-    public void setStatus(Status status) {
-        this.status = status;
-        if (status == Status.INCOMPLETE || status == Status.COMPLETE) {
-            statusFinal.complete(status);
-        }
-    }
-
-    /** 初审结束（放行或拒绝）时调用 */
-    private void markExecutionStarted() {
-        executionStarted.complete(null);
-    }
-
-    /** 额外审批结束（放行或拒绝）时调用：等待方从这一刻起开始对执行阶段计超时 */
-    private void markExtraGatesDone() {
-        extraGatesDone.complete(null);
-    }
-
-    /**
-     * 等到终态（COMPLETE/INCOMPLETE），分两段：
-     * 审批阶段没有时限——等用户点是正常等待，靠审批钩子自己结束（点击 / 停止时看 cancelled 返回 false）；
-     * 执行阶段最多等 timeout——工具 I/O 不可中断，卡死时靠超时解锁整轮。
-     * 拒绝路径会先 complete executionStarted 再写终态，所以这里不会吊死在第一段。
-     */
-    public Status awaitFinal(long timeout, TimeUnit unit) throws InterruptedException, TimeoutException {
-        Status s = getStatus();
-        if (s == Status.COMPLETE || s == Status.INCOMPLETE) {
-            return s;
-        }
-        try {
-            executionStarted.get();
-        } catch (ExecutionException e) {
-            throw new RuntimeException(e); // complete(null) 不会异常完成，防御
-        }
-        if (tool.needAdditionalApproval()) {
-            try {
-                extraGatesDone.get();
-            } catch (ExecutionException e) {
-                throw new RuntimeException(e); // complete(null) 不会异常完成，防御
-            }
-        }
-        try {
-            return statusFinal.get(timeout, unit);
-        } catch (InterruptedException e) {
-            System.out.println("awaitFinal interrupted");
-            throw e;
-        } catch (ExecutionException e) {
-            System.out.println("awaitFinal execution error");
-            throw new RuntimeException(e);
-        }
     }
 
     public void setTool(Tool tool) {
@@ -140,48 +74,70 @@ public class ToolCall implements Runnable {
         this.workspace = workspace;
     }
 
+    /**
+     * 写入终态，先到先得：正常完成、异常、拒绝、超时多方竞写时只有第一个生效——
+     * 迟到的超时任务不得覆盖真实结果（result 必须在 statusFinal 完成前可见，等待方据此读结果）
+     */
+    public boolean completeTerminally(Status status, String result) {
+        synchronized (statusFinal) {
+            if (statusFinal.isDone()) {
+                return false;
+            }
+            this.result = result;
+            statusFinal.complete(status);
+            return true;
+        }
+    }
+
+    /** 供外界回调式组合等待的三个 future；执行超时用哪个起点见各字段注释 */
+    public ToolCallStatus getCombinedStatus() {
+        return new ToolCallStatus(statusFinal, executionStarted, extraGatesDone);
+    }
+
     @Override
     public void run() {
-        // 审批在池线程上做（可阻塞等用户点击）；读流线程只管转发事件，绝不停顿
-        if (approvalGate != null && !approvalGate.allow(this, false)) {
-            markExecutionStarted(); // 先解锁等待方，紧随其后的终态让它直接返回
-            markExtraGatesDone();
-            setResult(ToolApprovalGate.DENIED_RESULT);
-            setStatus(ToolCall.Status.INCOMPLETE);
-            return;
-        }
-        markExecutionStarted(); // 进入执行阶段
+        // 审批在池线程上做（可阻塞等用户点击）；读流线程只管转发事件，绝不停顿。
+        // 全程兜底 Throwable：任何路径都必须到达终态，否则续轮的 join 永久挂起
         try {
+            if (approvalGate != null && !approvalGate.allow(this, false)) {
+                completeTerminally(ToolCall.Status.INCOMPLETE, ToolApprovalGate.DENIED_RESULT);
+                return;
+            }
+            executionStarted.complete(null); // 初审通过，非额外审批工具的执行计时起点
             String result;
-            if (tool.needAdditionalApproval()) {
+            if (tool.supportsAdditionalApproval()) {
                 result = tool.execute(arguments, workspace, (noMore) -> {
                     if (noMore) {
-                        markExtraGatesDone(); // 进入实际执行阶段，awaitFinal 的执行超时从这里起算（审批等待不计入）
+                        extraGatesDone.complete(null); // 进入实际执行，额外审批工具的执行计时起点（审批等待不计入）
                         return true;
                     }
                     return approvalGate != null && approvalGate.allow(this, true);
                 });
-                markExtraGatesDone();
-            } else if (tool.needRunInBackGround()){
+            } else if (tool.supportsBackGroundTask()) {
                 result = tool.execute(arguments, workspace, callId, (out -> backGroundTask.markDone(callId, out)));
             } else {
                 result = tool.execute(arguments, workspace);
             }
-            setResult(result);
-            setStatus(ToolCall.Status.COMPLETE);
-        } catch (Exception e) {
-            setResult("tool call error, id: " + getCallId() + " with message: " + e.getMessage());
-            setStatus(ToolCall.Status.INCOMPLETE);
+            completeTerminally(ToolCall.Status.COMPLETE, result);
+        } catch (Throwable e) {
+            completeTerminally(ToolCall.Status.INCOMPLETE,
+                    "tool call error, id: " + getCallId() + " with message: " + e.getMessage());
         } finally {
-            markExtraGatesDone();
-            markExecutionStarted();
+            executionStarted.complete(null);
+            extraGatesDone.complete(null);
         }
     }
 
     public enum Status {
-        EMPTY,
-        IN_PROGRESS,
         COMPLETE,
         INCOMPLETE
     }
+
+    /**
+     * ToolCall 组合状态，供外界查看
+     * @param statusFinal 终态，工具执行完成 COMPLETE/INCOMPLETE
+     * @param executionStarted 完成标志开始工具执行，但可能还会申请额外门禁
+     * @param extraGatesDone 额外门禁通过，真正开始工具执行超时等待
+     */
+    public record ToolCallStatus(CompletableFuture<Status> statusFinal, CompletableFuture<Void> executionStarted, CompletableFuture<Void> extraGatesDone) {}
 }

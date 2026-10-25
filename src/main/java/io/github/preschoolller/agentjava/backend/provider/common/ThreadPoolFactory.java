@@ -3,6 +3,8 @@ package io.github.preschoolller.agentjava.backend.provider.common;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -139,5 +141,16 @@ public class ThreadPoolFactory {
 
     public static ThreadPoolExecutor getReadBashOutExecutor() {
         return readBashOutExecutor;
+    }
+
+    private static final ScheduledExecutorService timeoutScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "tool-timeout-1");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    /** 工具执行超时的一次性调度：单线程足够，任务只做终态竞写，从不阻塞等待 */
+    public static ScheduledExecutorService getTimeoutScheduler() {
+        return timeoutScheduler;
     }
 }
