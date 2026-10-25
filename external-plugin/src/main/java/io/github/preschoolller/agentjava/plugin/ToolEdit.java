@@ -10,12 +10,14 @@ import org.tinylog.Logger;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -51,7 +53,7 @@ public class ToolEdit implements Tool {
                         PATH, Map.of("type", "string", "description", "文件路径，相对路径以当前工作区为基准"),
                         OLD_STRING, Map.of("type", "string", "description", "旧文本"),
                         NEW_STRING, Map.of("type", "string", "description", "新文本"),
-                        MODE, Map.of("type", "integer", "description", "0:仅新增新文本（文末）；1:仅删除旧文本；2:替换文本（默认，要求旧文本不能为空）；3:替换所有旧文本（若没有多处要改建议用2，省去多余检查）")
+                        MODE, Map.of("type", "integer", "description", "0:仅新增新文本（文末新行）；1:仅删除旧文本；2:替换文本（默认，要求旧文本不能为空）；3:替换所有旧文本（若没有多处要改建议用2，省去多余检查）")
                 ),
                 "required", List.of(PATH, OLD_STRING, NEW_STRING, MODE)
         );
@@ -91,7 +93,7 @@ public class ToolEdit implements Tool {
                 case APPEND -> {
                     try {
                         Files.copy(oldFile, tmpFile);
-                        Files.writeString(tmpFile, args.newString, StandardOpenOption.APPEND);
+                        Files.writeString(tmpFile, "\n" + args.newString, StandardOpenOption.APPEND);
                         Files.move(tmpFile, oldFile, StandardCopyOption.ATOMIC_MOVE);
                     } catch (IOException e) {
                         Logger.error(e, "append file {} failed", oldFile);
@@ -101,38 +103,13 @@ public class ToolEdit implements Tool {
                 case DELETE -> {
                     try {
                         String[] searchLines = args.oldString.split("\\R");
-                        int searchPointer = 0;
-                        long startPointer = 0; // 命中旧文本的行起点
-                        long endPointer = 0; // 命中旧文本的下一行需保留的行起点
-                        boolean found = false;
-                        try (RandomAccessFile old = new RandomAccessFile(oldFile.toFile(), "r")) {
-                            String line;
-                            long filePointer = old.getFilePointer();
-                            while ((line = old.readLine()) != null) {
-                                line = new String(line.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
-                                if (line.equals(searchLines[searchPointer])) {
-                                    if (searchPointer == 0) { // 命中首行，记录
-                                        startPointer = filePointer;
-                                    }
-                                    if (++searchPointer == searchLines.length) { // 命中末行，记录
-                                        endPointer = old.getFilePointer();
-                                        found = true;
-                                        break;
-                                    }
-                                } else if (line.equals(searchLines[0])) {
-                                    // 中间行匹配失败，但首行又匹配成功了，记录
-                                    startPointer = filePointer;
-                                    searchPointer = 1;
-                                } else {
-                                    // 中间行匹配失败，重置
-                                    searchPointer = 0;
-                                }
-                            }
-                            if (searchPointer == 0 || !found) {
-                                Logger.info("delete old string {} failed, not found in file {}", args.oldString, oldFile);
-                                return "(edit error: no " + OLD_STRING + " found in the file)";
-                            }
+                        SearchResult searchResult = getSearchResult(oldFile, searchLines, true);
+                        if (!searchResult.found()) {
+                            Logger.info("delete old string {} failed, not found in file {}", args.oldString, oldFile);
+                            return "(edit error: no " + OLD_STRING + " found in the file)";
                         }
+                        long startPointer = searchResult.couples.get(0).startPointer;
+                        long endPointer = searchResult.couples.get(0).endPointer;
                         try (FileChannel oldChannel = FileChannel.open(oldFile, StandardOpenOption.READ);
                              FileChannel tmpChannel = FileChannel.open(tmpFile, StandardOpenOption.WRITE)) {
                             ensureTransfer(oldChannel, 0, startPointer, tmpChannel);
@@ -146,10 +123,58 @@ public class ToolEdit implements Tool {
                         return "(edit error: delete old string failed)";
                     }
                 }
-                case REPLACE, REPLACE_ALL -> {
-
+                case REPLACE -> {
+                    String[] searchLines = args.oldString.split("\\R");
+                    try {
+                        SearchResult searchResult = getSearchResult(oldFile, searchLines, true);
+                        if (!searchResult.found) {
+                            Logger.info("replace old string {} failed, not found in file {}", args.oldString, oldFile);
+                            return "(edit error: no " + OLD_STRING + " found in the file)";
+                        }
+                        long startPointer = searchResult.couples.get(0).startPointer;
+                        long endPointer = searchResult.couples.get(0).endPointer;
+                        try (FileChannel oldChannel = FileChannel.open(oldFile, StandardOpenOption.READ);
+                             FileChannel tmpChannel = FileChannel.open(tmpFile, StandardOpenOption.WRITE, StandardOpenOption.CREATE)) {
+                            ensureTransfer(oldChannel, 0, startPointer, tmpChannel);
+                            ensureWrite(tmpChannel, ByteBuffer.wrap(args.newString.getBytes(StandardCharsets.UTF_8)));
+                            ensureTransfer(oldChannel, endPointer, oldChannel.size() - endPointer, tmpChannel);
+                        }
+                        Files.move(tmpFile, oldFile, StandardCopyOption.ATOMIC_MOVE);
+                        Logger.info("edit file {} success", oldFile);
+                        return "(edit success)";
+                    } catch (IOException e) {
+                        Logger.error(e, "edit file {} failed", oldFile);
+                        return "(edit error: replace old string failed)";
+                    }
                 }
-                default -> {}
+                case REPLACE_ALL -> {
+                    String[] searchLines = args.oldString.split("\\R");
+                    try {
+                        SearchResult searchResult = getSearchResult(oldFile, searchLines, false);
+                        if (!searchResult.found) {
+                            Logger.info("replace old string {} failed, not found in file {}", args.oldString, oldFile);
+                            return "(edit error: no " + OLD_STRING + " found in the file)";
+                        }
+                        try (FileChannel oldChannel = FileChannel.open(oldFile, StandardOpenOption.READ);
+                             FileChannel tmpChannel = FileChannel.open(tmpFile, StandardOpenOption.WRITE, StandardOpenOption.CREATE)) {
+                            for (Couple couple : searchResult.couples) {
+                                ensureTransfer(oldChannel, 0, couple.startPointer, tmpChannel);
+                                ensureWrite(tmpChannel, ByteBuffer.wrap(args.newString.getBytes(StandardCharsets.UTF_8)));
+                                ensureTransfer(oldChannel, couple.endPointer, oldChannel.size() - couple.endPointer, tmpChannel);
+                            }
+                        }
+                        Files.move(tmpFile, oldFile, StandardCopyOption.ATOMIC_MOVE);
+                        Logger.info("edit file {} success", oldFile);
+                        return "(edit success)";
+                    } catch (IOException e) {
+                        Logger.error(e, "edit file {} failed", oldFile);
+                        return "(edit error: replace all old string failed)";
+                    }
+                }
+                default -> {
+                    Logger.error("不可能，绝对不可能！！！");
+                    return "(edit error: nothing happened)";
+                }
             }
         } finally {
             try {
@@ -161,6 +186,49 @@ public class ToolEdit implements Tool {
         return null;
     }
 
+    private static SearchResult getSearchResult(Path oldFile, String[] searchLines, boolean justOne) throws IOException {
+        int searchPointer = 0;
+        long startPointer = 0; // 命中旧文本的行起点
+        long endPointer = 0; // 命中旧文本的下一行需保留的行起点
+        boolean found = false;
+        List<Couple> couples = new ArrayList<>();
+        try (RandomAccessFile old = new RandomAccessFile(oldFile.toFile(), "r")) {
+            String line;
+            long filePointer = old.getFilePointer();
+            while ((line = old.readLine()) != null) {
+                line = new String(line.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
+                if (line.equals(searchLines[searchPointer])) {
+                    if (searchPointer == 0) { // 命中首行，记录
+                        startPointer = filePointer;
+                    }
+                    if (++searchPointer == searchLines.length) { // 命中末行，记录
+                        endPointer = old.getFilePointer();
+                        couples.add(new Couple(startPointer, endPointer));
+                        found = true;
+                        if (justOne) {
+                            break;
+                        }
+                        searchPointer = 0;
+                    }
+                } else if (line.equals(searchLines[0])) {
+                    // 中间行匹配失败，但首行又匹配成功了，记录
+                    startPointer = filePointer;
+                    searchPointer = 1;
+                } else {
+                    // 中间行匹配失败，重置
+                    searchPointer = 0;
+                }
+            }
+        }
+        return new SearchResult(couples, found);
+    }
+
+    private record SearchResult(List<Couple> couples, boolean found) {
+    }
+
+    private record Couple(long startPointer, long endPointer) {
+    }
+
     private static void ensureTransfer(FileChannel src, long start, long count, FileChannel dst) throws IOException {
         long max = start + count;
         long pos = start;
@@ -170,6 +238,18 @@ public class ToolEdit implements Tool {
                 break;
             }
             pos += transferred;
+        }
+    }
+
+    private static void ensureWrite(FileChannel dst, ByteBuffer bf) throws IOException {
+        int max = bf.array().length;
+        int offset = 0;
+        while (offset < max) {
+            int transferred = dst.write(bf);
+            if (transferred <= 0) {
+                break;
+            }
+            offset += transferred;
         }
     }
 
@@ -196,7 +276,7 @@ public class ToolEdit implements Tool {
         }
         String oldString = jsonNode.path(OLD_STRING).asText();
         String newString = jsonNode.path(NEW_STRING).asText();
-        Mode mode = null;
+        Mode mode;
         switch (mode = Mode.ofValue(jsonNode.path(MODE).asInt(2))) {
             case APPEND -> {
                 if (newString == null || newString.isBlank()) {
@@ -207,6 +287,10 @@ public class ToolEdit implements Tool {
             case DELETE, REPLACE, REPLACE_ALL -> {
                 if (oldString == null || oldString.isBlank()) {
                     return new ParsedArgs(null, null, null, "did nothing cause of blank " + OLD_STRING, null);
+                }
+                oldString = oldString.replaceFirst("^\\R*", "");
+                if (newString != null && !newString.isBlank()) {
+                    newString = newString.replaceAll("^\\R*", "");
                 }
                 return new ParsedArgs(path, oldString, newString, null, mode);
             }
