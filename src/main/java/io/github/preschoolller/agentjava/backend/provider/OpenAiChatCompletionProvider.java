@@ -23,13 +23,11 @@ import com.openai.models.chat.completions.ChatCompletionUserMessageParam;
 import com.openai.models.completions.CompletionUsage;
 import com.openai.services.blocking.chat.ChatCompletionService;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
-import io.github.preschoolller.agentjava.backend.provider.common.BackGroundTask;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
-import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.provider.common.event.BaseEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.ErrorMessageEvent;
@@ -210,9 +208,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                 response.stream()
                         .takeWhile(chatCompletionChunk -> !shouldStop.get())
                         .forEach(chatCompletionChunk ->
-                                visit(blockingQueue, promptParams.getApprovalGate(),
-                                        promptParams.getBackGroundTask(), promptParams.getWorkspace(),
-                                        chatCompletionChunk, indexToolCall, sb));
+                                visit(blockingQueue, chatCompletionChunk, indexToolCall, sb));
             } catch (OpenAIServiceException exception) {
                 String errorMessage = "Stream exception found. Code: " + exception.code().orElse("")
                         + "\nStatus code: " + exception.statusCode()
@@ -251,9 +247,8 @@ public class OpenAiChatCompletionProvider implements Provider {
         return "";
     }
 
-    private static void visit(BlockingQueue<BaseEvent> blockingQueue,
-                              ToolApprovalGate approvalGate, BackGroundTask backGroundTask, String workspace,
-                              ChatCompletionChunk chatCompletionChunk, Map<Integer, ToolCall> indexToolCall, StringBuilder sb) {
+    private static void visit(BlockingQueue<BaseEvent> blockingQueue, ChatCompletionChunk chatCompletionChunk,
+                              Map<Integer, ToolCall> indexToolCall, StringBuilder sb) {
         Logger.trace(chatCompletionChunk);
         Stream<ChatCompletionChunk.Choice.Delta> deltaStream = chatCompletionChunk.choices().stream()
                 .map(ChatCompletionChunk.Choice::delta);
@@ -323,9 +318,6 @@ public class OpenAiChatCompletionProvider implements Provider {
             Logger.info("流式传输终止，原因：{}", finishReason.get());
             for (Integer index : indexToolCall.keySet()) {
                 ToolCall toolCall = indexToolCall.get(index);
-                toolCall.setApprovalGate(approvalGate);
-                toolCall.setWorkspace(workspace);
-                toolCall.setBackGroundTask(backGroundTask);
                 putIntoBQ(new FunctionToolCallDoneEvent(toolCall.getCallId(), toolCall), blockingQueue);
             }
         }

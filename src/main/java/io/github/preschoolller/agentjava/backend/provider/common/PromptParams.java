@@ -16,18 +16,6 @@ public class PromptParams {
     private AgentMode agentMode;
 
     /**
-     * 工具执行前的审批钩子（P0-4 权限确认卡）：返回 false 表示未放行，工具不执行，
-     * 拒绝文本作为工具结果回给模型。允许实现里阻塞（provider 会在自己的执行线程上调用，
-     * 绝不在 SSE 读流线程上）。null = 不询问，直接执行。
-     */
-    private ToolApprovalGate approvalGate;
-
-    /**
-     * bash后台任务回调
-     */
-    private BackGroundTask backGroundTask;
-
-    /**
      * 本会话绑定的工作区目录（规范化绝对路径）：工具的相对路径以此为基准，系统提示词里
      * 告知模型。null = 不涉工具的请求（纯聊天，buildParams 不注入工作区说明）。
      */
@@ -50,14 +38,6 @@ public class PromptParams {
     /** 未显式设置时按较严的 EDIT 处理（漏接线只会多问一次，不会不问就执行） */
     public AgentMode getAgentMode() {
         return agentMode == null ? AgentMode.EDIT : agentMode;
-    }
-
-    public ToolApprovalGate getApprovalGate() {
-        return approvalGate;
-    }
-
-    public BackGroundTask getBackGroundTask() {
-        return backGroundTask;
     }
 
     public String getWorkspace() {
@@ -85,9 +65,7 @@ public class PromptParams {
             base.re = promptParams.re;
             base.roleMessages = promptParams.roleMessages;
             base.agentMode = promptParams.agentMode;
-            base.approvalGate = promptParams.approvalGate;
             base.workspace = promptParams.workspace;
-            base.backGroundTask = promptParams.backGroundTask;
         }
 
         private final PromptParams base;
@@ -116,18 +94,8 @@ public class PromptParams {
             return this;
         }
 
-        public Builder approvalGate(ToolApprovalGate approvalGate) {
-            base.approvalGate = approvalGate;
-            return this;
-        }
-
         public Builder workspace(String workspace) {
             base.workspace = workspace;
-            return this;
-        }
-
-        public Builder backGroundTask(BackGroundTask backGroundTask) {
-            base.backGroundTask = backGroundTask;
             return this;
         }
     }

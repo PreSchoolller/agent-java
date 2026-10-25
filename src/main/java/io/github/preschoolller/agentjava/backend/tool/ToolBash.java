@@ -87,6 +87,11 @@ public class ToolBash implements Tool {
     }
 
     @Override
+    public boolean needRunInBackGround() {
+        return true;
+    }
+
+    @Override
     public Map<String, Object> schema() {
         return Map.of(
                 "type", "object",
@@ -99,10 +104,11 @@ public class ToolBash implements Tool {
 
     @Override
     public String execute(String arguments, String workspace) {
-        return executeEnhance(arguments, workspace, null, null);
+        return execute(arguments, workspace, null, null);
     }
 
-    public String executeEnhance(String arguments, String workspace, String callId, BackGroundTaskDone bgTaskDone) {
+    @Override
+    public String execute(String arguments, String workspace, String callId, BackGroundTaskDone bgTaskDone) {
         defineBash();
         if (!valid) {
             return "tool error: no valid bash command found in system";

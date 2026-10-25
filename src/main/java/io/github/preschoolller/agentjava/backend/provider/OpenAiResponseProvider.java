@@ -33,14 +33,12 @@ import com.openai.models.responses.ResponseStreamEvent;
 import com.openai.models.responses.ResponseTextDeltaEvent;
 import com.openai.services.blocking.ResponseService;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
-import io.github.preschoolller.agentjava.backend.provider.common.BackGroundTask;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.ResponseStreamEventVisitorAdaptor;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
-import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.provider.common.event.BaseEvent;
 import io.github.preschoolller.agentjava.backend.provider.common.event.ErrorMessageEvent;
@@ -229,8 +227,7 @@ public class OpenAiResponseProvider implements Provider {
         }
         ResponseCreateParams responseCreateParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
-        ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue,
-                promptParams.getApprovalGate(), promptParams.getBackGroundTask(), promptParams.getWorkspace());
+        ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue);
         AtomicBoolean shouldStop = new AtomicBoolean(false);
         ThreadPoolFactory.getResponseExecutor().execute(() -> {
             List<ErrorMessageEvent> errors = new ArrayList<>();
@@ -301,10 +298,7 @@ public class OpenAiResponseProvider implements Provider {
         return "";
     }
 
-    private static ResponseStreamEventVisitorAdaptor getVisitor(BlockingQueue<BaseEvent> blockingQueue,
-                                                                ToolApprovalGate approvalGate,
-                                                                BackGroundTask backGroundTask,
-                                                                String workspace) {
+    private static ResponseStreamEventVisitorAdaptor getVisitor(BlockingQueue<BaseEvent> blockingQueue) {
         return new ResponseStreamEventVisitorAdaptor() {
 
             private void putIntoBQ(BaseEvent baseEvent) {
@@ -407,9 +401,6 @@ public class OpenAiResponseProvider implements Provider {
                     toolCall.setArguments(functionCall.arguments());
                     toolCall.setTool(ToolManager.findByName(functionCall.name()));
                     toolCall.setCallId(functionCall.callId());
-                    toolCall.setApprovalGate(approvalGate);
-                    toolCall.setWorkspace(workspace);
-                    toolCall.setBackGroundTask(backGroundTask);
                     putIntoBQ(new FunctionToolCallDoneEvent(functionCall.callId(), toolCall));
                 }
                 return null;

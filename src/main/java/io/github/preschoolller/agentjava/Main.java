@@ -169,22 +169,7 @@ public class Main {
             long outputTokens = 0;
             try {
                 PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
-                        .agentMode(mode).workspace(workspace).approvalGate((toolCall, additionalRequest) ->
-                                requestToolApproval(toolCall, mode, callIdHandleMap, cancelled, additionalRequest));
-                // bash 后台任务完成回调（bgTask 线程触发）：EDT 上落库+上屏（工具卡回填、注入用户消息），
-                // 会话空闲（抢到锁）则自动续一轮让模型消化后台结果；生成中只落库并留补偿标记，
-                // 本轮链释放时若已空闲会补一轮——结果落在快照之后也没人理的缝隙由这里兜住
-                paramsBuilder.backGroundTask((callId, output) -> SwingUtilities.invokeLater(() -> {
-                    if (window.onBackGroundTaskDone(conversation.getId(), callId, output)) {
-                        String convId = conversation.getId();
-                        PENDING_BG_DELIVERY.add(convId); // 先记再抢：抢锁失败的间隙由链释放兜底
-                        AtomicBoolean token = tryAcquire(convId);
-                        if (token != null) {
-                            PENDING_BG_DELIVERY.remove(convId);
-                            streamReply(window, conversation, provider, token);
-                        }
-                    }
-                }));
+                        .agentMode(mode).workspace(workspace);
                 for (PromptParams.RoleMessage roleMessage : history) {
                     paramsBuilder.roleMessages(roleMessage);
                 }
@@ -225,6 +210,23 @@ public class Main {
                     } else if (event instanceof FunctionToolCallDoneEvent e) {
                         Window.ToolCallHandle toolCallHandle = callIdHandleMap.get(e.callId());
                         ToolCall toolCall = e.toolCall();
+                        toolCall.setApprovalGate((tc, additionalRequest) ->
+                                requestToolApproval(tc, mode, callIdHandleMap, cancelled, additionalRequest));
+                        toolCall.setWorkspace(workspace);
+                        toolCall.setBackGroundTask((callId, output) -> SwingUtilities.invokeLater(() -> {
+                            // bash 后台任务完成回调（bgTask 线程触发）：EDT 上落库+上屏（工具卡回填、注入用户消息），
+                            // 会话空闲（抢到锁）则自动续一轮让模型消化后台结果；生成中只落库并留补偿标记，
+                            // 本轮链释放时若已空闲会补一轮——结果落在快照之后也没人理的缝隙由这里兜住
+                            if (window.onBackGroundTaskDone(conversation.getId(), callId, output)) {
+                                String convId = conversation.getId();
+                                PENDING_BG_DELIVERY.add(convId); // 先记再抢：抢锁失败的间隙由链释放兜底
+                                AtomicBoolean token = tryAcquire(convId);
+                                if (token != null) {
+                                    PENDING_BG_DELIVERY.remove(convId);
+                                    streamReply(window, conversation, provider, token);
+                                }
+                            }
+                        }));
                         if (toolCallHandle != null) {
                             SwingUtilities.invokeLater(toolCallHandle::markExecuting);
                         }

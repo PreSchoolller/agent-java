@@ -1,6 +1,5 @@
 package io.github.preschoolller.agentjava.backend.provider.common;
 
-import io.github.preschoolller.agentjava.backend.tool.ToolBash;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 
@@ -163,12 +162,10 @@ public class ToolCall implements Runnable {
                     return approvalGate != null && approvalGate.allow(this, true);
                 });
                 markExtraGatesDone();
+            } else if (tool.needRunInBackGround()){
+                result = tool.execute(arguments, workspace, callId, (out -> backGroundTask.markDone(callId, out)));
             } else {
-                if (tool instanceof ToolBash toolBash) {
-                    result = toolBash.executeEnhance(arguments, workspace, callId, (out -> backGroundTask.markDone(callId, out)));
-                } else {
-                    result = tool.execute(arguments, workspace);
-                }
+                result = tool.execute(arguments, workspace);
             }
             setResult(result);
             setStatus(ToolCall.Status.COMPLETE);
