@@ -261,7 +261,7 @@ public class Main {
                         callIdHandleMap.get(callId).finish(result, false, partialArgs);
                     });
                 }
-                // 审批阶段由点击/停止结束，执行阶段有超时兜底，这里不会永久挂起
+                // run() 全路径兜底必达终态、执行超时有调度任务兜底，join 不会永久挂起
                 toolCalls.forEach(CompletableFuture::join);
                 if (cancelled.get()) {
                     drainUntilPoison(events);
@@ -393,9 +393,7 @@ public class Main {
     }
 
     private static CompletableFuture<Void> performToolCall(ToolCall toolCall, Window.ToolCallHandle toolCallHandle) {
-        // 执行必须在这里启动而非 provider 侧：Start 事件与 Done 事件同队列同线程消费，
-        // 且 addToolCall 是 invokeAndWait，走到这里时卡片句柄必然已登记——
-        // provider 抢跑会间歇性撞上"审批时句柄未注册"的自动拒绝
+        // 执行在 Done 事件侧启动：与 Start 同队列同线程消费且 addToolCall 同步登记，卡片句柄此刻必然在册
         ThreadPoolFactory.getToolCallExecutor().execute(toolCall);
         ToolCall.ToolCallStatus status = toolCall.getCombinedStatus();
 

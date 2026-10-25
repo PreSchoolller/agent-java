@@ -22,7 +22,7 @@ import java.util.Map;
  * limit: 总读取数，默认2000
  * <p>
  * 规则：默认只能读取工作区目录下的文件，无工作区则以默认工作区目录为基准。
- * 若是绝对路径，或者是路径穿越出工作区外，发起审批流程。(待设计)
+ * 若是绝对路径，或者是路径穿越到工作区外，发起审批流程（NeedAdditionalApproval）。
  */
 public class ToolRead implements Tool {
 

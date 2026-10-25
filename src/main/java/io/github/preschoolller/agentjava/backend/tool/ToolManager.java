@@ -60,6 +60,7 @@ public class ToolManager {
         if (tool.schema() != null) {
             tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
         }
+        parameters.put("additionalProperties", JsonValue.from(false)); // strict 模式硬性要求；required 全集暂未补（当前端点不校验），要兼容官方端点时再补
         FunctionTool functionTool = FunctionTool
                 .builder()
                 .name(tool.name())
@@ -76,6 +77,7 @@ public class ToolManager {
         if (tool.schema() != null) {
             tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
         }
+        parameters.put("additionalProperties", JsonValue.from(false)); // 同上：strict 模式硬性要求
         return ChatCompletionFunctionTool
                 .builder()
                 .function(FunctionDefinition.builder()
