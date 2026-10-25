@@ -93,8 +93,20 @@ public class ToolEdit implements Tool {
                 case APPEND -> {
                     try {
                         Files.copy(oldFile, tmpFile);
-                        Files.writeString(tmpFile, "\n" + args.newString, StandardOpenOption.APPEND);
+                        String str = args.newString;
+                        try (RandomAccessFile tmp = new RandomAccessFile(tmpFile.toFile(), "r")) {
+                            if (tmp.length() > 0) { // 空文件不需要补换行，且 seek(-1) 会抛异常
+                                tmp.seek(tmp.length() - 1);
+                                byte lastByte = tmp.readByte();
+                                if (lastByte != '\n') {
+                                    str = "\n" + str;
+                                }
+                            }
+                        }
+                        Files.writeString(tmpFile, str, StandardOpenOption.APPEND);
                         Files.move(tmpFile, oldFile, StandardCopyOption.ATOMIC_MOVE);
+                        Logger.info("edit file {} success", oldFile);
+                        return "(edit success)";
                     } catch (IOException e) {
                         Logger.error(e, "append file {} failed", oldFile);
                         return "(edit error: append failed)";
@@ -104,14 +116,14 @@ public class ToolEdit implements Tool {
                     try {
                         String[] searchLines = args.oldString.split("\\R");
                         SearchResult searchResult = getSearchResult(oldFile, searchLines, true);
-                        if (!searchResult.found()) {
+                        if (!searchResult.found) {
                             Logger.info("delete old string {} failed, not found in file {}", args.oldString, oldFile);
                             return "(edit error: no " + OLD_STRING + " found in the file)";
                         }
                         long startPointer = searchResult.couples.get(0).startPointer;
                         long endPointer = searchResult.couples.get(0).endPointer;
                         try (FileChannel oldChannel = FileChannel.open(oldFile, StandardOpenOption.READ);
-                             FileChannel tmpChannel = FileChannel.open(tmpFile, StandardOpenOption.WRITE)) {
+                             FileChannel tmpChannel = FileChannel.open(tmpFile, StandardOpenOption.WRITE, StandardOpenOption.CREATE)) {
                             ensureTransfer(oldChannel, 0, startPointer, tmpChannel);
                             ensureTransfer(oldChannel, endPointer, oldChannel.size() - endPointer, tmpChannel);
                         }
@@ -133,10 +145,14 @@ public class ToolEdit implements Tool {
                         }
                         long startPointer = searchResult.couples.get(0).startPointer;
                         long endPointer = searchResult.couples.get(0).endPointer;
+                        String str = args.newString;
+                        if (!str.isEmpty() && !str.endsWith("\n")) { // 空替换文本 = 干净删除，不补行
+                            str = str + "\n";
+                        }
                         try (FileChannel oldChannel = FileChannel.open(oldFile, StandardOpenOption.READ);
                              FileChannel tmpChannel = FileChannel.open(tmpFile, StandardOpenOption.WRITE, StandardOpenOption.CREATE)) {
                             ensureTransfer(oldChannel, 0, startPointer, tmpChannel);
-                            ensureWrite(tmpChannel, ByteBuffer.wrap(args.newString.getBytes(StandardCharsets.UTF_8)));
+                            ensureWrite(tmpChannel, ByteBuffer.wrap(str.getBytes(StandardCharsets.UTF_8)));
                             ensureTransfer(oldChannel, endPointer, oldChannel.size() - endPointer, tmpChannel);
                         }
                         Files.move(tmpFile, oldFile, StandardCopyOption.ATOMIC_MOVE);
@@ -155,13 +171,19 @@ public class ToolEdit implements Tool {
                             Logger.info("replace old string {} failed, not found in file {}", args.oldString, oldFile);
                             return "(edit error: no " + OLD_STRING + " found in the file)";
                         }
+                        String str = args.newString;
+                        if (!str.isEmpty() && !str.endsWith("\n")) {
+                            str = str + "\n";
+                        }
                         try (FileChannel oldChannel = FileChannel.open(oldFile, StandardOpenOption.READ);
                              FileChannel tmpChannel = FileChannel.open(tmpFile, StandardOpenOption.WRITE, StandardOpenOption.CREATE)) {
+                            long prevEnd = 0;
                             for (Couple couple : searchResult.couples) {
-                                ensureTransfer(oldChannel, 0, couple.startPointer, tmpChannel);
-                                ensureWrite(tmpChannel, ByteBuffer.wrap(args.newString.getBytes(StandardCharsets.UTF_8)));
-                                ensureTransfer(oldChannel, couple.endPointer, oldChannel.size() - couple.endPointer, tmpChannel);
+                                ensureTransfer(oldChannel, prevEnd, couple.startPointer - prevEnd, tmpChannel); // 上一处结尾到本次开头
+                                ensureWrite(tmpChannel, ByteBuffer.wrap(str.getBytes(StandardCharsets.UTF_8)));
+                                prevEnd = couple.endPointer;
                             }
+                            ensureTransfer(oldChannel, prevEnd, oldChannel.size() - prevEnd, tmpChannel); // 最后一段尾巴
                         }
                         Files.move(tmpFile, oldFile, StandardCopyOption.ATOMIC_MOVE);
                         Logger.info("edit file {} success", oldFile);
@@ -183,7 +205,6 @@ public class ToolEdit implements Tool {
                 Logger.error(e, "tmp file {} delete failed", tmpFile);
             }
         }
-        return null;
     }
 
     private static SearchResult getSearchResult(Path oldFile, String[] searchLines, boolean justOne) throws IOException {
@@ -194,8 +215,11 @@ public class ToolEdit implements Tool {
         List<Couple> couples = new ArrayList<>();
         try (RandomAccessFile old = new RandomAccessFile(oldFile.toFile(), "r")) {
             String line;
-            long filePointer = old.getFilePointer();
-            while ((line = old.readLine()) != null) {
+            while (true) {
+                long filePointer = old.getFilePointer(); // 本行行首，逐行重取
+                if ((line = old.readLine()) == null) {
+                    break;
+                }
                 line = new String(line.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
                 if (line.equals(searchLines[searchPointer])) {
                     if (searchPointer == 0) { // 命中首行，记录
@@ -290,7 +314,7 @@ public class ToolEdit implements Tool {
                 }
                 oldString = oldString.replaceFirst("^\\R*", "");
                 if (newString != null && !newString.isBlank()) {
-                    newString = newString.replaceAll("^\\R*", "");
+                    newString = newString.replaceFirst("^\\R*", "");
                 }
                 return new ParsedArgs(path, oldString, newString, null, mode);
             }
