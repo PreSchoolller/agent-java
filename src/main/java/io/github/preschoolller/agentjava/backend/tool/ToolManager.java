@@ -6,42 +6,55 @@ import com.openai.models.FunctionParameters;
 import com.openai.models.chat.completions.ChatCompletionFunctionTool;
 import com.openai.models.responses.FunctionTool;
 import com.openai.models.responses.ResponseFunctionToolCall;
+import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import org.tinylog.Logger;
 
-import java.util.ArrayList;
+import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.ServiceLoader;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 public class ToolManager {
     public static final Tool BAD_TOOL = BadTool.getInstance();
     public static final Tool EMPTY_TOOL = EmptyTool.getInstance();
-    private static volatile ToolManager instance;
-    public static List<Tool> tools = new ArrayList<>(List.of(
-            ToolRead.getInstance(),
-            ToolBash.getInstance()
+    public static final Map<String, Tool> tools = new ConcurrentHashMap<>(Map.of(
+            ToolRead.getInstance().name(), ToolRead.getInstance(),
+            ToolBash.getInstance().name(), ToolBash.getInstance()
     ));
 
     private ToolManager() {
     }
 
-    public static ToolManager getInstance() {
-        if (instance == null) {
-            synchronized (ToolManager.class) {
-                if (instance == null) {
-                    instance = new ToolManager();
-                }
-            }
+    /**
+     * 允许插件覆盖同名内部工具，便于增强
+     * @param tool 工具
+     */
+    public static void register(Tool tool) {
+        if (tool == null || tool.name() == null) {
+            return;
         }
-        return instance;
-    }
-
-    public void register(Tool tool) {
-        tools.add(tool);
+        Tool preValue = tools.put(tool.name(), tool);
+        if (preValue != null) {
+            Logger.info("tool {} was exchanged", tool.name());
+        }
     }
 
     public static Tool findByName(String name) {
-        return tools.stream().filter(tool -> tool.name().equals(name)).findAny().orElse(BAD_TOOL);
+        return tools.getOrDefault(name, BAD_TOOL);
     }
 
     /** 只接受已注册的 Tool（buildParams 遍历 tools 时用）；BAD_TOOL.schema() 是 null，别拿占位工具进来 */
@@ -81,13 +94,7 @@ public class ToolManager {
 
     /** 执行一次工具调用：workspace 是会话绑定的工作区目录，透传给工具做相对路径解析 */
     public static String execute(ResponseFunctionToolCall functionTool, String workspace) {
-        for (Tool tool : tools) {
-            if (!tool.name().equals(functionTool.name())) {
-                continue;
-            }
-            return tool.execute(functionTool.arguments(), workspace);
-        }
-        return BAD_TOOL.execute(functionTool.arguments(), workspace);
+        return findByName(functionTool.name()).execute(functionTool.arguments(), workspace);
     }
 
     /** 执行一次工具调用：workspace 是会话绑定的工作区目录，透传给工具做相对路径解析 */
@@ -96,5 +103,45 @@ public class ToolManager {
             return BAD_TOOL.execute("", workspace);
         }
         return toolCall.getTool().execute(toolCall.getArguments(), workspace);
+    }
+
+    public static void loadExternal() {
+        try {
+            Files.createDirectories(Constants.PLUGIN_DIR);
+        } catch (IOException e) {
+            Logger.error("...-_-!...");
+        }
+        try (Stream<Path> files = Files.find(Constants.PLUGIN_DIR, 1,
+                (path, basicFileAttributes) -> path.getFileName().toString().endsWith(".jar"))) {
+            Iterator<Path> iterator = files.iterator();
+            while (iterator.hasNext()) {
+                Path jar = iterator.next();
+                String jarNameWithSuffix = jar.getFileName().toString();
+                String jarName = jarNameWithSuffix.substring(0, jarNameWithSuffix.length() - ".jar".length());
+                AtomicInteger count = new AtomicInteger();
+
+                try {
+                    URL[] jarUrl = new URL[]{jar.toUri().toURL()};
+                    URLClassLoader urlClassLoader = new URLClassLoader("plugin-" + jarName, jarUrl, ToolManager.class.getClassLoader());
+                    ServiceLoader.load(Tool.class, urlClassLoader).forEach(tool -> {
+                        register(tool);
+                        Logger.info("{} loaded by {}", tool.getClass(), tool.getClass().getClassLoader());
+                        count.incrementAndGet();
+                    });
+                } catch (MalformedURLException e) {
+                    Logger.error("should not be here, riiiight ?");
+                } catch (Throwable throwable) {
+                    Logger.error(throwable, "plugin {} failed", jarNameWithSuffix);
+                } finally {
+                    Logger.info("plugin {} loaded {} tools", jarNameWithSuffix, count.get());
+                }
+            }
+        } catch (IOException e) {
+            Logger.error("load plugin error for: {}", e.getMessage());
+        }
+    }
+
+    public static void main(String[] args) {
+        loadExternal();
     }
 }

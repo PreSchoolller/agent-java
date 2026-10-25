@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava;
 
 import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.maintenance.TaskHandle;
+import io.github.preschoolller.agentjava.backend.maintenance.WarmUpStuff;
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
@@ -120,6 +121,8 @@ public class Main {
             });
         });
         Runtime.getRuntime().addShutdownHook(new Thread(ShutDownJob::clean));
+        // 暂定这里执行。
+        WarmUpStuff.wormUp();
     }
 
     /** 抢会话锁：抢到返回本链的取消令牌，该会话已在跑返回 null */

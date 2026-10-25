@@ -15,6 +15,8 @@ public class Constants {
 
     public static final Path TEMP_DIR = Path.of(System.getProperty("java.io.tmpdir"), ".agentjava");
 
+    public static final Path PLUGIN_DIR = APP_USER_DIR.resolve("plugins");
+
     private static class InstanceHolder {
         private static final ObjectMapper MAPPER = new ObjectMapper();
     }

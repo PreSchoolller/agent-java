@@ -175,7 +175,7 @@ public class OpenAiChatCompletionProvider implements Provider {
         if (promptParams.getAgentMode() == AgentMode.CHAT) {
             return builder.build(); // 纯聊天：不声明任何工具，模型调不了东西，审批/执行链路整个不参与
         }
-        for (Tool tool : ToolManager.tools) {
+        for (Tool tool : ToolManager.tools.values()) {
             builder.addTool(ToolManager.getChatCompletionFunctionTool(tool));
         }
         return builder.build();

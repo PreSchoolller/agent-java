@@ -27,7 +27,7 @@ public final class ToolCatalog {
         List<ToolInfo> infos = new ArrayList<>();
         try {
             // 读完字段快照再遍历：tools 是运行期可 register() 增长的活列表，防遍历中并发改
-            for (Tool tool : new ArrayList<>(ToolManager.tools)) {
+            for (Tool tool : new ArrayList<>(ToolManager.tools.values())) {
                 infos.add(new ToolInfo(tool.name(), tool.description()));
             }
         } catch (Throwable ignored) {
