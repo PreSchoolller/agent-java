@@ -97,9 +97,14 @@ class WindowGuiTest {
         Files.createDirectories(SCREENS);
         WIZARD = Boolean.getBoolean("gui.interactive");
         WIZARD_AUTO = WIZARD && Boolean.getBoolean("gui.interactive.auto");
-        // 截图配色固定浅色：开发者本机存过深色时回归图才有确定基线（只改内存，不落盘）
-        AppSettings.get().setUiTheme("light");
+        // 设置单例整体指到临时文件：回归里的内存改动（钉模型目录/主题/托盘）与 Window 的
+        // 1 秒防抖落盘（boundsSaveTimer 写的是整个设置文件）都只落这份临时文件。曾只用
+        // AppSettings.get() 直改内存，s05 分隔条变更的防抖写恰好落进 s06 的钉值窗口，把
+        // 活动方案（用户的 amd）的模型目录冲成 model-a/b 写进真实配置（踩坑 #33）。
         Path dir = Files.createTempDirectory("agentjava-gui");
+        AppSettings.installForTest(dir.resolve("settings.properties"));
+        // 截图配色固定浅色：开发者本机存过深色时回归图才有确定基线（写的是上面的临时配置）
+        AppSettings.get().setUiTheme("light");
         store = new ConversationStore(dir.resolve("shot.json"));
         // —— 造两段会话（c1 六条消息让瀑布流溢出，滚动条才可见） ——
         c1 = store.newConversation();
@@ -126,7 +131,8 @@ class WindowGuiTest {
         edt(() -> {
             WINDOW = new Window("Agent", store);
             WINDOW.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
-            // 尺寸/位置由 Window 按 AppSettings 恢复（不强制 1280×720，避免把回归用的尺寸写回用户设置）
+            // 尺寸/位置由 Window 按设置恢复——设置已隔离到临时文件（首跑默认 1280×720 居中，
+            // 回归尺寸只写临时文件，不碰用户真实配置）
             WINDOW.setVisible(true);
         });
         Thread.sleep(1500);

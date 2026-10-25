@@ -88,6 +88,16 @@ public final class AppSettings {
         return new AppSettings(file);
     }
 
+    /**
+     * 测试隔离入口（GUI 回归用）：把单例整体指向指定文件——回归里的内存改动（钉模型目录/
+     * 主题/托盘偏好）连同 Window 的 1 秒防抖落盘（写的是整个设置文件）都只落这份临时文件，
+     * 真实 ~/.agentjava/settings.properties 从此读不到也写不着。须在任何窗口/组件构造前
+     * 调用（组件构造后仍每次经 get() 取值，晚调只影响调用前已读的快照）。
+     */
+    public static synchronized void installForTest(Path file) {
+        instance = new AppSettings(file);
+    }
+
     // —— 方案管理 ——
 
     /** 当前方案；名字对不上时兜底取第一个（配置文件被手工改过的情况） */
