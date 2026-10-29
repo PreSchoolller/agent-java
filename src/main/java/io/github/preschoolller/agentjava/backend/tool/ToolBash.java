@@ -23,16 +23,14 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
-import java.util.stream.Collectors;
 
 public class ToolBash implements Tool {
 
@@ -40,21 +38,33 @@ public class ToolBash implements Tool {
     private static final String BACKGROUND = "background";
     private static final int TIMEOUT = 60; // seconds
     private static final int SHORT_TIMEOUT = 2; // seconds 用于检测 bash 命令超时
+    private static final int MILI_TIMEOUT = 500; // mili seconds 用于检测等待后台 pid 超时
     private static final int THRESHOLD = 4096; // 超长命令转临时文件执行
 
-    private static final List<String> BASH_HEAD = List.of("bash");
-    private static final List<String> W_BASH_HEAD = List.of("bash");
-    private static final List<String> WSL_BASH_HEAD = List.of("wsl", "bash");
-    private static final List<String> GIT_BASH_HEAD = List.of("C:\\Program Files\\Git\\bin\\bash.exe");
+    private enum BashHead {
+        L(List.of("bash")),
+        W(List.of("bash")),
+        WSL(List.of("wsl", "bash")),
+        GIT(List.of("C:\\Program Files\\Git\\bin\\bash.exe")),
+        CUSTOM(null)
+        ;
 
-    private static final List<List<String>> WINDOWS_BASH_HEADS = List.of(
-            W_BASH_HEAD,
-            WSL_BASH_HEAD,
-            GIT_BASH_HEAD
+        private final List<String> head;
+
+        BashHead(List<String> bashHead) {
+            this.head = bashHead;
+        }
+    }
+
+    private static final List<BashHead> WINDOWS_BASH_HEADS = List.of(
+            BashHead.W,
+            BashHead.WSL,
+            BashHead.GIT
     );
     private static final int BACKGROUND_OUT_THRESHOLD = 32 << 10;    // 后台任务输出长度，实际大小乘以 2B
     private static volatile boolean valid = true;
-    private static volatile List<String> bashHead;
+    private static volatile BashHead bashHead;
+    private static volatile List<String> customBashHead;
 
     private ToolBash() {
     }
@@ -116,11 +126,11 @@ public class ToolBash implements Tool {
         }
         try {
             JsonNode jsonNode = Constants.getObjectMapper().readTree(arguments);
-            if (jsonNode == null) {
+            if (jsonNode.isNull()) {
                 return "json parse error: wrong schema";
             }
             String command = jsonNode.path(COMMAND).asText();
-            if (command == null || command.isBlank()) {
+            if (command.isBlank()) {
                 return "json parse error: wrong command";
             }
             boolean asBackGroundTask = jsonNode.path(BACKGROUND).asBoolean(false);
@@ -131,6 +141,9 @@ public class ToolBash implements Tool {
             return executeForeGround(processBuilder, arguments, workspace, callId);
         } catch (JsonProcessingException e) {
             return "json parse error: " + e.getMessage();
+        } catch (Throwable e) {
+            Logger.error(e, "tool bash execute error, arguments {}, workspace {}, call id {}", arguments, workspace, callId);
+            return "agent app error: unknown";
         }
     }
 
@@ -191,7 +204,7 @@ public class ToolBash implements Tool {
             return out.toString();
         } catch (IOException e) {
             Logger.error("start process error, arguments {}, workspace {}", arguments, workspace);
-            out.append("\nbackground task failed to start: ").append(e.getMessage());
+            out.append("\nforeground task failed to start: ").append(e.getMessage());
             return out.toString();
         } catch (InterruptedException e) {
             Logger.error("bash execute was interrupted, arguments {}, workspace {}", arguments, workspace);
@@ -202,9 +215,12 @@ public class ToolBash implements Tool {
         }
     }
 
-    private String executeBackGround(String arguments, String workspace, ProcessBuilder processBuilder, BackGroundTaskDone bgTaskDone, String callId) {
-        AtomicBoolean ready = new AtomicBoolean();
-        AtomicLong pid = new AtomicLong();
+    private static String executeBackGround(String arguments, String workspace, ProcessBuilder processBuilder, BackGroundTaskDone bgTaskDone, String callId) {
+        if (bgTaskDone == null || callId == null || callId.isBlank()) {
+            Logger.error("illegal arguments: bgTaskDone {}; callId {};", bgTaskDone, callId);
+            return "tool use error: unknown app error.";
+        }
+        CompletableFuture<Long> pid = new CompletableFuture<>();
         try {
             Future<?> backFuture = ThreadPoolFactory.getBgTaskExecutor().submit(() -> {
                 StringBuffer out = new StringBuffer();
@@ -212,8 +228,7 @@ public class ToolBash implements Tool {
                 try {
                     Process process = ShutDownJob.registerBgProcess(callId, new TaskHandle(out, processBuilder.start(), true));
                     holder = process;
-                    pid.set(process.pid());
-                    ready.set(true);
+                    pid.complete(process.pid());
                     Logger.info("background task submitted, arguments {}, workspace {}, pid {}", arguments, workspace, process.pid());
                     Future<?> futureRead = ThreadPoolFactory.getBgTaskReadOutExecutor().submit(() -> {
                         try (BufferedReader reader = new BufferedReader(
@@ -261,12 +276,19 @@ public class ToolBash implements Tool {
             Logger.info("background task failed to submit, arguments {}, workspace {}", arguments, workspace);
             return "background task submitted failed: task pool is full, try again later";
         }
-        String pidStr = ", pid: " + (ready.get() ? pid : "(not start yet)");
+        String pidS = "(not start yet)";
+        try {
+            pidS = String.valueOf(pid.get(MILI_TIMEOUT, TimeUnit.MILLISECONDS));
+        } catch (InterruptedException | ExecutionException | TimeoutException e) {
+            Logger.debug("exception encounter while waiting pid, message ignored");
+        }
+        String pidStr = ", pid: " + pidS;
         return "background task submitted successfully, id: " + callId + pidStr;
     }
 
     private static ProcessBuilder assembleProcessBuilder(String command, String workSpace) {
-        ArrayList<String> bash = new ArrayList<>(bashHead);
+        List<String> head = BashHead.CUSTOM.equals(bashHead) ? customBashHead : bashHead.head;
+        ArrayList<String> bash = new ArrayList<>(head);
         ProcessBuilder processBuilder;
         boolean byFile = false;
         if (command.length() > THRESHOLD || needPutInFile(command)) {
@@ -278,6 +300,7 @@ public class ToolBash implements Tool {
 
                 String tmpName = UUID.randomUUID().toString();
                 tmpFile = Files.createTempFile(tmpDir, tmpName, ".sh");
+                tmpFile.toFile().deleteOnExit();
                 Files.writeString(tmpFile, command);
                 bash.add(buildTmpFilePath(tmpFile));
                 Logger.info("转文件执行：{}", tmpFile.toAbsolutePath());
@@ -299,7 +322,7 @@ public class ToolBash implements Tool {
 
     private static String buildTmpFilePath(Path tmpFile) {
         Path absolutePath = tmpFile.toAbsolutePath();
-        if (BASH_HEAD == bashHead) {
+        if (BashHead.L.equals(bashHead)) {
             return absolutePath.toString();
         }
         Path root = absolutePath.getRoot();
@@ -307,26 +330,30 @@ public class ToolBash implements Tool {
         if (root != null && !root.toString().isBlank()) {
             disk = "/" + root.toString().substring(0, 1).toLowerCase();
         }
-        if (W_BASH_HEAD == bashHead || WSL_BASH_HEAD == bashHead) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("/mnt");
-            sb.append(disk);
-            for (Path path : absolutePath) {
-                sb.append("/");
-                sb.append(path.getFileName());
+        switch (bashHead) {
+            case W, WSL -> {
+                StringBuilder sb = new StringBuilder();
+                sb.append("/mnt");
+                sb.append(disk);
+                for (Path path : absolutePath) {
+                    sb.append("/");
+                    sb.append(path.getFileName());
+                }
+                return sb.toString();
             }
-            return sb.toString();
-        }
-        if (GIT_BASH_HEAD == bashHead) {
-            StringBuilder sb = new StringBuilder();
-            sb.append(disk);
-            for (Path path : absolutePath) {
-                sb.append("/");
-                sb.append(path.getFileName());
+            case GIT -> {
+                StringBuilder sb = new StringBuilder();
+                sb.append(disk);
+                for (Path path : absolutePath) {
+                    sb.append("/");
+                    sb.append(path.getFileName());
+                }
+                return sb.toString();
             }
-            return sb.toString();
+            default -> {
+                return absolutePath.toString();
+            }
         }
-        return absolutePath.toString();
     }
 
     /**
@@ -347,18 +374,36 @@ public class ToolBash implements Tool {
         }
     }
 
-    private void defineBash() {
-        if (bashHead != null) {
+    static void defineBash() {
+        exploreBash(true, false);
+    }
+
+    /**
+     * 不定死，不检查结果，作用只是拉起应用比如 wsl
+     */
+    public static void exploreBash() {
+        exploreBash(false, false);
+    }
+
+    static void exploreBash(boolean define, boolean redefine) {
+        if (bashHead != null && define) {
             return;
         }
-        synchronized (this) {
-            if (bashHead != null || !valid) {
+        if (!define) {
+            if (System.getProperty("os.name").toLowerCase().contains("win")) {
+                tryBash(BashHead.W.head, true, 0, null);
+                tryBash(BashHead.WSL.head, true, 0, null);
+            }
+            return;
+        }
+        synchronized (ToolBash.class) {
+            if (bashHead != null || !valid && !redefine) {
                 return;
             }
             String osName = System.getProperty("os.name").toLowerCase();
-            if (osName.contains("windows")) {
-                for (List<String> head : WINDOWS_BASH_HEADS) {
-                    if (tryBash(head)) {
+            if (osName.contains("win")) {
+                for (BashHead head : WINDOWS_BASH_HEADS) {
+                    if (tryBash(head.head)) {
                         bashHead = head;
                         return;
                     }
@@ -366,8 +411,8 @@ public class ToolBash implements Tool {
                 if (bashHead == null) {
                     valid = false;
                 }
-            } else if (tryBash(BASH_HEAD)) {
-                bashHead = BASH_HEAD;
+            } else if (tryBash(BashHead.L.head)) {
+                bashHead = BashHead.L;
             } else {
                 valid = false;
             }
@@ -375,25 +420,60 @@ public class ToolBash implements Tool {
     }
 
     private static boolean tryBash(List<String> head) {
+        return tryBash(head, false, SHORT_TIMEOUT, TimeUnit.SECONDS);
+    }
+
+    private static boolean tryBash(List<String> head, boolean warmup, int timeout, TimeUnit timeUnit) {
+        if (head == null || head.isEmpty()) {
+            return false;
+        }
         ArrayList<String> list = new ArrayList<>(head);
         list.add("--version");
         ProcessBuilder processBuilder = new ProcessBuilder(list);
         processBuilder.redirectErrorStream(true);
         try {
             Process process = processBuilder.start();
+            if (warmup) {
+                process.destroyForcibly();
+                return false;
+            }
+            timeout = timeout == 0 ? SHORT_TIMEOUT : timeout;
+            timeUnit = timeUnit == null ? TimeUnit.SECONDS : timeUnit;
+            // 假定(TODO此处依赖假定)上面的warmup已经拉起了耗时启动的bash（如wsl），定时任务兜底强杀进程，waitFor等进程结果
+            ThreadPoolFactory.getTimeoutScheduler().schedule(process::destroyForcibly, timeout, timeUnit);
+            String out;
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String out = reader.lines().collect(Collectors.joining("\n"));
-                boolean exited = process.waitFor(SHORT_TIMEOUT, TimeUnit.SECONDS);
-                if (exited && out.toLowerCase().contains("gnu bash")) {
-                    return true;
-                }
-                process.destroyForcibly();
+                out = reader.readLine();
             }
+            boolean exited = process.waitFor(timeout, timeUnit);
+            if (exited && out != null && out.toLowerCase().contains("gnu bash")) {
+                return true;
+            }
+            process.destroyForcibly();
         } catch (IOException | InterruptedException e) {
             Logger.info("测试bash工具{}出错", head);
             Logger.debug("测试bash工具{}出错: {}", head, e);
         }
         return false;
+    }
+
+    /**
+     * 自定义bash可执行程序位置，可设计一个前端自定义功能，待设计。
+     * 但是自定义的 buildTmpFilePath 不太好搞，TODO
+     * @param bashPath 自定义bash位置
+     * @return 添加是否成功
+     */
+    public boolean setBashHead(String bashPath) {
+        boolean result = tryBash(List.of(bashPath), false, 10, TimeUnit.SECONDS);
+        if (!result) {
+            return false;
+        }
+        synchronized (ToolBash.class) {
+            customBashHead = List.of(bashPath);
+            bashHead = BashHead.CUSTOM;
+            valid = true;
+        }
+        return true;
     }
 }

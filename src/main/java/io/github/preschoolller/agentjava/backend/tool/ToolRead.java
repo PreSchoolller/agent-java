@@ -83,11 +83,11 @@ public class ToolRead implements Tool {
     public String execute(String arguments, String workspace, NeedAdditionalApproval approvalGate) {
         try {
             JsonNode jsonNode = Constants.getObjectMapper().readTree(arguments);
-            if (jsonNode == null) {
+            if (jsonNode.isNull()) {
                 return "json parse error: wrong schema";
             }
             String path = jsonNode.path(PATH).asText();
-            if (path == null || path.isBlank()) {
+            if (path.isBlank()) {
                 return "json parse error: wrong path";
             }
             int offset = Math.max(jsonNode.path(OFFSET).asInt(1), 1);
