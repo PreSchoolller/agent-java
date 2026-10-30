@@ -41,7 +41,7 @@ public class ToolBash implements Tool {
     private static final int MILI_TIMEOUT = 500; // mili seconds 用于检测等待后台 pid 超时
     private static final int THRESHOLD = 4096; // 超长命令转临时文件执行
 
-    private enum BashHead {
+    enum BashHead {
         L(List.of("bash")),
         W(List.of("bash")),
         WSL(List.of("wsl", "bash")),
@@ -49,7 +49,7 @@ public class ToolBash implements Tool {
         CUSTOM(null)
         ;
 
-        private final List<String> head;
+        final List<String> head;
 
         BashHead(List<String> bashHead) {
             this.head = bashHead;
@@ -134,7 +134,8 @@ public class ToolBash implements Tool {
                 return "json parse error: wrong command";
             }
             boolean asBackGroundTask = jsonNode.path(BACKGROUND).asBoolean(false);
-            ProcessBuilder processBuilder = assembleProcessBuilder(command, workspace);
+            workspace = workspace == null || workspace.isBlank() ? Constants.DEFAULT_WORKSPACE_DIR.toString() : workspace;
+            ProcessBuilder processBuilder = assembleProcessBuilder(command, workspace, bashHead, Constants.TEMP_DIR);
             if (asBackGroundTask) {
                 return executeBackGround(arguments, workspace, processBuilder, bgTaskDone, callId);
             }
@@ -286,14 +287,14 @@ public class ToolBash implements Tool {
         return "background task submitted successfully, id: " + callId + pidStr;
     }
 
-    private static ProcessBuilder assembleProcessBuilder(String command, String workSpace) {
+    static ProcessBuilder assembleProcessBuilder(String command, String workSpace, BashHead bashHead, Path tempDir) {
         List<String> head = BashHead.CUSTOM.equals(bashHead) ? customBashHead : bashHead.head;
         ArrayList<String> bash = new ArrayList<>(head);
         ProcessBuilder processBuilder;
         boolean byFile = false;
         if (command.length() > THRESHOLD || needPutInFile(command)) {
             Path workDir = Path.of(workSpace);
-            Path tmpDir = Constants.TEMP_DIR.resolve(workDir.getFileName().toString());
+            Path tmpDir = tempDir.resolve(workDir.getFileName().toString());
             Path tmpFile = null;
             try {
                 Files.createDirectories(tmpDir);
@@ -302,7 +303,7 @@ public class ToolBash implements Tool {
                 tmpFile = Files.createTempFile(tmpDir, tmpName, ".sh");
                 tmpFile.toFile().deleteOnExit();
                 Files.writeString(tmpFile, command);
-                bash.add(buildTmpFilePath(tmpFile));
+                bash.add(buildTmpFilePath(tmpFile, bashHead));
                 Logger.info("转文件执行：{}", tmpFile.toAbsolutePath());
                 byFile = true;
             } catch (IOException e) {
@@ -310,6 +311,7 @@ public class ToolBash implements Tool {
             }
         }
         if (!byFile) {
+            bash = new ArrayList<>(head);
             String base64 = Base64.getEncoder().encodeToString(command.getBytes(StandardCharsets.UTF_8));
             bash.add("-c");
             bash.add("echo " + base64 + " | base64 -d | bash");
@@ -320,7 +322,7 @@ public class ToolBash implements Tool {
         return processBuilder;
     }
 
-    private static String buildTmpFilePath(Path tmpFile) {
+    static String buildTmpFilePath(Path tmpFile, ToolBash.BashHead bashHead) {
         Path absolutePath = tmpFile.toAbsolutePath();
         if (BashHead.L.equals(bashHead)) {
             return absolutePath.toString();
@@ -362,7 +364,7 @@ public class ToolBash implements Tool {
      * 未配置（null）= 仅超长命令转文件。AppSettings 存入前已校验正则，这里仍兜一层：
      * 手改配置文件的坏值按不匹配处理，不让 PatternSyntaxException 打穿每次工具调用。
      */
-    private static boolean needPutInFile(String command) {
+    static boolean needPutInFile(String command) {
         String pattern = AppSettings.get().getBashFilePattern();
         if (pattern == null || pattern.isBlank()) {
             return false;
