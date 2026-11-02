@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava.backend.tool;
 
 import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.EnabledOnOs;
@@ -171,9 +172,72 @@ class ToolBashTest {
         try {
             Field bashHeadField = ToolBash.class.getDeclaredField("bashHead");
             bashHeadField.setAccessible(true);
-            bashHeadField.set(ToolBash.getInstance(), bashHead);
+            bashHeadField.set(null, bashHead);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private static void setValid(boolean valid) {
+        try {
+            Field validField = ToolBash.class.getDeclaredField("valid");
+            validField.setAccessible(true);
+            validField.set(null, valid);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @BeforeEach
+    void beforeEach() {
+        setBashHead(null);
+        setValid(true);
+    }
+
+    @Test
+    void testExecuteWhenInvalid() {
+        setBashHead(ToolBash.BashHead.WSL);
+        setValid(false);
+        String command = "echo hello";
+        String arguments = "{\"command\": " + command + "}";
+        String workSpace = "workspace";
+        String result = ToolBash.getInstance().execute(arguments, workSpace, "ignore", System.out::println);
+        assertEquals("tool error: no valid bash command found in system", result);
+    }
+
+    @Test
+    void testExecuteWhenNullArguments() {
+        setBashHead(ToolBash.BashHead.WSL);
+        String arguments = null;
+        String workSpace = "workspace";
+        String result = ToolBash.getInstance().execute(arguments, workSpace, "ignore", System.out::println);
+        assertEquals("agent app error: unknown", result);
+    }
+
+    @Test
+    void testExecuteWhenWrongJson() {
+        setBashHead(ToolBash.BashHead.WSL);
+        String arguments = "{\"command\":";
+        String workSpace = "workspace";
+        String result = ToolBash.getInstance().execute(arguments, workSpace, "ignore", System.out::println);
+        assertTrue(result.startsWith("json parse error: "));
+    }
+
+    @Test
+    void testExecuteWhenLiteralNullArguments() {
+        setBashHead(ToolBash.BashHead.WSL);
+        String arguments = "null";
+        String workSpace = "workspace";
+        String result = ToolBash.getInstance().execute(arguments, workSpace, "ignore", System.out::println);
+        assertEquals("json parse error: wrong schema", result);
+    }
+
+    @Test
+    void testExecuteWhenEmptyArguments() {
+        setBashHead(ToolBash.BashHead.WSL);
+        String arguments = "";
+        String workSpace = "workspace";
+        String result = ToolBash.getInstance().execute(arguments, workSpace, "ignore", System.out::println);
+        assertEquals("json parse error: wrong command", result);
     }
 }

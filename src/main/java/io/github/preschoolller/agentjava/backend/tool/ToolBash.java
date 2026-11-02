@@ -322,7 +322,7 @@ public class ToolBash implements Tool {
         return processBuilder;
     }
 
-    static String buildTmpFilePath(Path tmpFile, ToolBash.BashHead bashHead) {
+    static String buildTmpFilePath(Path tmpFile, BashHead bashHead) {
         Path absolutePath = tmpFile.toAbsolutePath();
         if (BashHead.L.equals(bashHead)) {
             return absolutePath.toString();
