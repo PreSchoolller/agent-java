@@ -31,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
+import java.util.stream.Collectors;
 
 public class ToolBash implements Tool {
 
@@ -39,6 +40,7 @@ public class ToolBash implements Tool {
     private static final int TIMEOUT = 60; // seconds
     private static final int SHORT_TIMEOUT = 2; // seconds 用于检测 bash 命令超时
     private static final int MILI_TIMEOUT = 500; // mili seconds 用于检测等待后台 pid 超时
+    private static final int MILI_WARMUP_TIMEOUT = 500; // mili seconds 用于预热超时
     private static final int THRESHOLD = 4096; // 超长命令转临时文件执行
 
     enum BashHead {
@@ -436,20 +438,20 @@ public class ToolBash implements Tool {
         try {
             Process process = processBuilder.start();
             if (warmup) {
+                process.waitFor(MILI_WARMUP_TIMEOUT, TimeUnit.MILLISECONDS);
                 process.destroyForcibly();
                 return false;
             }
             timeout = timeout == 0 ? SHORT_TIMEOUT : timeout;
             timeUnit = timeUnit == null ? TimeUnit.SECONDS : timeUnit;
-            // 假定(TODO此处依赖假定)上面的warmup已经拉起了耗时启动的bash（如wsl），定时任务兜底强杀进程，waitFor等进程结果
             ThreadPoolFactory.getTimeoutScheduler().schedule(process::destroyForcibly, timeout, timeUnit);
             String out;
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                out = reader.readLine();
+                out = reader.lines().collect(Collectors.joining("\n"));
             }
             boolean exited = process.waitFor(timeout, timeUnit);
-            if (exited && out != null && out.toLowerCase().contains("gnu bash")) {
+            if (exited && out.toLowerCase().contains("gnu bash")) {
                 return true;
             }
             process.destroyForcibly();
