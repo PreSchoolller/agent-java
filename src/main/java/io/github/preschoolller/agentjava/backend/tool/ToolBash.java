@@ -45,7 +45,6 @@ public class ToolBash implements Tool {
 
     enum BashHead {
         L(List.of("bash")),
-        W(List.of("bash")),
         WSL(List.of("wsl", "bash")),
         GIT(List.of("C:\\Program Files\\Git\\bin\\bash.exe")),
         CUSTOM(null)
@@ -59,7 +58,6 @@ public class ToolBash implements Tool {
     }
 
     private static final List<BashHead> WINDOWS_BASH_HEADS = List.of(
-            BashHead.W,
             BashHead.WSL,
             BashHead.GIT
     );
@@ -89,8 +87,8 @@ public class ToolBash implements Tool {
         return """
                 在工作区执行bash命令。
                 如果agent运行环境（由工作区路径判断）非windows，bash为原生实现。
-                如果agent运行环境为Windows，则bash实现查找顺序(bash -> wsl bash -> git bash)。
-                由于上述三种bash实现的路径表示不一样，可先pwd判断格式再执行绝对路径命令书写。
+                如果agent运行环境为Windows，则bash实现查找顺序(wsl bash -> git bash)。
+                由于windows上两种种bash实现的路径表示不一样，可先pwd判断格式再执行绝对路径命令书写。
                 """;
     }
 
@@ -321,6 +319,9 @@ public class ToolBash implements Tool {
         processBuilder = new ProcessBuilder(bash);
         processBuilder.directory(new File(workSpace));
         processBuilder.redirectErrorStream(true);
+        if (BashHead.WSL.equals(bashHead)) {
+            processBuilder.environment().put("WSL_UTF8", "1");
+        }
         return processBuilder;
     }
 
@@ -335,7 +336,7 @@ public class ToolBash implements Tool {
             disk = "/" + root.toString().substring(0, 1).toLowerCase();
         }
         switch (bashHead) {
-            case W, WSL -> {
+            case WSL -> {
                 StringBuilder sb = new StringBuilder();
                 sb.append("/mnt");
                 sb.append(disk);
@@ -395,7 +396,6 @@ public class ToolBash implements Tool {
         }
         if (!define) {
             if (System.getProperty("os.name").toLowerCase().contains("win")) {
-                tryBash(BashHead.W.head, true, 0, null);
                 tryBash(BashHead.WSL.head, true, 0, null);
             }
             return;
@@ -434,6 +434,7 @@ public class ToolBash implements Tool {
         ArrayList<String> list = new ArrayList<>(head);
         list.add("--version");
         ProcessBuilder processBuilder = new ProcessBuilder(list);
+        processBuilder.environment().put("WSL_UTF8", "1");
         processBuilder.redirectErrorStream(true);
         try {
             Process process = processBuilder.start();
