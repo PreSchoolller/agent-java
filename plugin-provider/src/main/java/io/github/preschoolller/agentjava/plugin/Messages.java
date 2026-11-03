@@ -135,10 +135,13 @@ public class Messages implements Provider {
                     builder.addAssistantMessage(roleMessage.content());
                 }
                 case TOOL_RESULT -> {
+                    if (promptParams.getAgentMode() == AgentMode.CHAT) {
+                        continue; // 纯聊天请求不带工具，历史里的工具轮次一并跳过
+                    }
                     ToolUseBlockParam.Builder toolUseBlockParamBuilder = ToolUseBlockParam.builder();
                     toolUseBlockParamBuilder.id(roleMessage.callId());
                     toolUseBlockParamBuilder.name(roleMessage.toolName());
-                    Map<String, JsonValue> inputMap = null;
+                    Map<String, JsonValue> inputMap = new HashMap<>();
                     try {
                         inputMap = Constants.getObjectMapper().readValue(
                                 roleMessage.toolArguments(),
@@ -178,7 +181,7 @@ public class Messages implements Provider {
                 builder.addTool(toolBuilder.build());
             }
         }
-
+        builder.addSystemMessage(getSystemMessage(promptParams));
         builder.thinking(ThinkingConfigAdaptive.builder().build());
         builder.outputConfig(OutputConfig.builder()
                         .effort(RE_MAP.get(promptParams.getRe()))
@@ -188,6 +191,15 @@ public class Messages implements Provider {
                 .model(promptParams.getModel())
                 .maxTokens(8000)
                 .build();
+    }
+
+    private String getSystemMessage(PromptParams promptParams) {
+        String text = appSettings.getSystemPrompt();
+        String workspace = promptParams.getWorkspace();
+        if (promptParams.getAgentMode() != AgentMode.CHAT && workspace != null && !workspace.isBlank()) {
+            text = text + "\n\n当前工作区目录：" + workspace + "。工具调用中的相对路径以此为基准。";
+        }
+        return text;
     }
 
     @Override

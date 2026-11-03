@@ -45,12 +45,13 @@ public class ProviderFactory {
                     return providers.get(name);
                 }
             }
+            Logger.warn("found no provider implement /v1/messages, fall back to response");
         }
         return createResponseProvider();
     }
 
     private static void register(Provider provider) {
-        if (provider == null) {
+        if (provider == null || (provider.name() != null && provider.name().isBlank())) {
             Logger.info("null provider: ignore");
             return;
         }
