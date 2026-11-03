@@ -21,6 +21,10 @@ public class PromptParams {
      */
     private String workspace;
 
+    private String key;
+    private String backendUrl;
+    private String systemPrompt;
+
     private PromptParams() {}
 
     public String getModel() {
@@ -42,6 +46,18 @@ public class PromptParams {
 
     public String getWorkspace() {
         return workspace;
+    }
+
+    public String getBackendUrl() {
+        return backendUrl;
+    }
+
+    public String getKey() {
+        return key;
+    }
+
+    public String getSystemPrompt() {
+        return systemPrompt;
     }
 
     public static PromptParams.Builder builder() {
@@ -66,6 +82,9 @@ public class PromptParams {
             base.roleMessages = promptParams.roleMessages;
             base.agentMode = promptParams.agentMode;
             base.workspace = promptParams.workspace;
+            base.key = promptParams.key;
+            base.backendUrl = promptParams.backendUrl;
+            base.systemPrompt = promptParams.systemPrompt;
         }
 
         private final PromptParams base;
@@ -96,6 +115,21 @@ public class PromptParams {
 
         public Builder workspace(String workspace) {
             base.workspace = workspace;
+            return this;
+        }
+
+        public Builder key(String key) {
+            base.key = key;
+            return this;
+        }
+
+        public Builder backendUrl(String backendUrl) {
+            base.backendUrl = backendUrl;
+            return this;
+        }
+
+        public Builder systemPrompt(String systemPrompt) {
+            base.systemPrompt = systemPrompt;
             return this;
         }
     }

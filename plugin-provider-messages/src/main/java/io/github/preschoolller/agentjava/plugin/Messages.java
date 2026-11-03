@@ -25,16 +25,15 @@ import com.anthropic.models.messages.Tool;
 import com.anthropic.models.messages.ToolResultBlockParam;
 import com.anthropic.models.messages.ToolUseBlock;
 import com.anthropic.models.messages.ToolUseBlockParam;
-import com.anthropic.services.blocking.MessageService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
+import io.github.preschoolller.agentjava.backend.provider.common.KeyUrl;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
-import io.github.preschoolller.agentjava.backend.provider.common.RoleEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.provider.common.event.BaseEvent;
@@ -52,7 +51,6 @@ import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseD
 import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaStartEvent;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.tinylog.Logger;
 
 import java.util.HashMap;
@@ -61,13 +59,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * anthropic /v1/messages api
  */
 public class Messages implements Provider {
-    private volatile MessageService service;
     static final Map<ReasoningEffortEnum, OutputConfig.Effort> RE_MAP = Map.of(
             ReasoningEffortEnum.NO, OutputConfig.Effort.LOW,
             ReasoningEffortEnum.LOW, OutputConfig.Effort.LOW,
@@ -76,27 +74,16 @@ public class Messages implements Provider {
             ReasoningEffortEnum.ULTRA, OutputConfig.Effort.XHIGH,
             ReasoningEffortEnum.ON, OutputConfig.Effort.HIGH,
             ReasoningEffortEnum.OFF, OutputConfig.Effort.LOW);
+
     private enum Type {
         REASONING,
         RESPONSE,
         FUNCTION
     }
-    // TODO: AppSettings 耦合是不是可以去掉呢，直接由 PromptParams 传进来？？？
-    private static final AppSettings appSettings = AppSettings.get();
+
+    private static final Map<KeyUrl, AnthropicClient> clientPool = new ConcurrentHashMap<>();
 
     public Messages() {
-        reload();
-        AppSettings.get().addChangeListener(this::reload);
-    }
-
-    @Override
-    public void reload() {
-        AnthropicClient client = AnthropicOkHttpClient.builder()
-                .apiKey(appSettings.getKey())
-                .baseUrl(appSettings.getBackendUrl())
-                .build();
-
-        service = client.messages();
     }
 
     @Override
@@ -104,12 +91,25 @@ public class Messages implements Provider {
         return "messages-mine";
     }
 
+    private AnthropicClient getClient(KeyUrl keyUrl) {
+        AnthropicClient client = clientPool.get(keyUrl);
+        if (client != null) {
+            return client;
+        }
+        client = AnthropicOkHttpClient.builder()
+                .apiKey(keyUrl.key())
+                .baseUrl(keyUrl.backendUrl())
+                .build();
+        clientPool.putIfAbsent(keyUrl, client);
+        return client;
+    }
+
     @Override
     public ProviderBlockingTextResponse sendPrompt(PromptParams promptParams) {
-        MessageService messageService = service;
         promptParams = promptParams.toBuilder().agentMode(AgentMode.CHAT).build();
         MessageCreateParams createParams = buildParams(promptParams);
-        Message message = messageService.create(createParams);
+        KeyUrl keyUrl = new KeyUrl(promptParams.getKey(), promptParams.getBackendUrl());
+        Message message = getClient(keyUrl).messages().create(createParams);
 
         StringBuilder reasoingContent = new StringBuilder();
         StringBuilder text = new StringBuilder();
@@ -125,6 +125,7 @@ public class Messages implements Provider {
 
     MessageCreateParams buildParams(PromptParams promptParams) {
         MessageCreateParams.Builder builder = MessageCreateParams.builder();
+        builder.addSystemMessage(getSystemMessage(promptParams));
 
         for (PromptParams.RoleMessage roleMessage : promptParams.getRoleMessages()) {
             switch (roleMessage.role()) {
@@ -145,7 +146,8 @@ public class Messages implements Provider {
                     try {
                         inputMap = Constants.getObjectMapper().readValue(
                                 roleMessage.toolArguments(),
-                                new TypeReference<>() {}
+                                new TypeReference<>() {
+                                }
                         );
                     } catch (JsonProcessingException e) {
                         Logger.error(e, "parse tool arguments error, use null instead");
@@ -161,7 +163,8 @@ public class Messages implements Provider {
                     builder.addUserMessageOfContentBlockParams(
                             List.of(ContentBlockParam.ofToolResult(toolResultBlockParamBuilder.build())));
                 }
-                default -> {}
+                default -> {
+                }
             }
         }
 
@@ -176,15 +179,14 @@ public class Messages implements Provider {
                     tool.schema().forEach((k, v) -> parameters.put(k, JsonValue.from(v)));
                 }
                 toolBuilder.inputSchema(Tool.InputSchema.builder()
-                                .additionalProperties(parameters)
+                        .additionalProperties(parameters)
                         .build());
                 builder.addTool(toolBuilder.build());
             }
         }
-        builder.addSystemMessage(getSystemMessage(promptParams));
         builder.thinking(ThinkingConfigAdaptive.builder().build());
         builder.outputConfig(OutputConfig.builder()
-                        .effort(RE_MAP.get(promptParams.getRe()))
+                .effort(RE_MAP.get(promptParams.getRe()))
                 .build());
 
         return builder
@@ -194,7 +196,7 @@ public class Messages implements Provider {
     }
 
     private String getSystemMessage(PromptParams promptParams) {
-        String text = appSettings.getSystemPrompt();
+        String text = promptParams.getSystemPrompt();
         String workspace = promptParams.getWorkspace();
         if (promptParams.getAgentMode() != AgentMode.CHAT && workspace != null && !workspace.isBlank()) {
             text = text + "\n\n当前工作区目录：" + workspace + "。工具调用中的相对路径以此为基准。";
@@ -205,7 +207,6 @@ public class Messages implements Provider {
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
         Logger.info("/v1/messages start streaming");
-        MessageService messageService = service;
         MessageCreateParams createParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         AtomicBoolean shouldStop = new AtomicBoolean();
@@ -213,7 +214,8 @@ public class Messages implements Provider {
             Map<Long, ToolCall> indexToolCall = new HashMap<>();
             Map<Long, Type> indexType = new HashMap<>();
             ErrorMessageEvent error = null;
-            try (StreamResponse<RawMessageStreamEvent> streamEvents = messageService.createStreaming(createParams)) {
+            KeyUrl keyUrl = new KeyUrl(promptParams.getKey(), promptParams.getBackendUrl());
+            try (StreamResponse<RawMessageStreamEvent> streamEvents = getClient(keyUrl).messages().createStreaming(createParams)) {
                 streamEvents.stream()
                         .takeWhile(se -> !shouldStop.get())
                         .forEach(rawMessageStreamEvent -> visit(rawMessageStreamEvent, blockingQueue, indexType, indexToolCall));

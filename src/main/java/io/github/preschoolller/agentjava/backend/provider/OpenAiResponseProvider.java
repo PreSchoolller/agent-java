@@ -1,10 +1,7 @@
 package io.github.preschoolller.agentjava.backend.provider;
 
 import com.openai.client.OpenAIClient;
-import com.openai.client.OpenAIClientImpl;
-import com.openai.client.okhttp.OkHttpClient;
-import com.openai.core.ClientOptions;
-import com.openai.core.http.Headers;
+import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.core.http.StreamResponse;
 import com.openai.errors.OpenAIIoException;
 import com.openai.errors.OpenAIServiceException;
@@ -31,8 +28,8 @@ import com.openai.models.responses.ResponseReasoningTextDeltaEvent;
 import com.openai.models.responses.ResponseReasoningTextDoneEvent;
 import com.openai.models.responses.ResponseStreamEvent;
 import com.openai.models.responses.ResponseTextDeltaEvent;
-import com.openai.services.blocking.ResponseService;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
+import io.github.preschoolller.agentjava.backend.provider.common.KeyUrl;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
@@ -55,7 +52,6 @@ import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseD
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.jetbrains.annotations.NotNull;
 import org.tinylog.Logger;
 
@@ -65,15 +61,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 public class OpenAiResponseProvider implements Provider {
-    private volatile Headers headers;
-    private volatile OkHttpClient httpClient;
-    private volatile OpenAIClient openAIClient;
-    private volatile ClientOptions clientOptions;
-    private volatile ResponseService responseService;
     static final Map<ReasoningEffortEnum, ReasoningEffort> RE_MAP = Map.of(
             ReasoningEffortEnum.NO, ReasoningEffort.NONE,
             ReasoningEffortEnum.LOW, ReasoningEffort.LOW,
@@ -91,46 +83,30 @@ public class OpenAiResponseProvider implements Provider {
         return InstanceHolder.instance;
     }
 
+    private static final Map<KeyUrl, OpenAIClient> clientPool = new ConcurrentHashMap<>();
+
     private OpenAiResponseProvider() {
-        httpClient = OkHttpClient.builder().build();
-        headers = Headers
-                .builder()
-                .build();
-        clientOptions = ClientOptions
-                .builder()
-                .baseUrl(AppSettings.get().getBackendUrl())
-                .apiKey(AppSettings.get().getKey())
-                .headers(headers)
-                .httpClient(httpClient)
-                .build();
-        openAIClient = new OpenAIClientImpl(clientOptions);
-        responseService = openAIClient.responses();
-        AppSettings.get().addChangeListener(this::reload);
     }
 
-    @Override
-    public void reload() {
-        synchronized (this) {
-            clientOptions = clientOptions.toBuilder()
-                    .baseUrl(AppSettings.get().getBackendUrl())
-                    .apiKey(AppSettings.get().getKey())
-                    .headers(headers)
-                    .httpClient(httpClient)
-                    .build();
-            openAIClient = new OpenAIClientImpl(clientOptions);
-            responseService = openAIClient.responses();
+    static OpenAIClient getClient(KeyUrl keyUrl) {
+        OpenAIClient client = clientPool.get(keyUrl);
+        if (client != null) {
+            return client;
         }
+        client = OpenAIOkHttpClient.builder()
+                .apiKey(keyUrl.key())
+                .baseUrl(keyUrl.backendUrl())
+                .build();
+        clientPool.putIfAbsent(keyUrl, client);
+        return client;
     }
 
     @Override
     public ProviderBlockingTextResponse sendPrompt(PromptParams promptParams) {
-        ResponseService service;
-        synchronized (this) {
-            service = responseService;
-        }
         PromptParams chatParams = promptParams.toBuilder().agentMode(AgentMode.CHAT).build();
         ResponseCreateParams responseCreateParams = buildParams(chatParams);
-        Response response = service.create(responseCreateParams);
+        KeyUrl keyUrl = new KeyUrl(promptParams.getKey(), promptParams.getBackendUrl());
+        Response response = getClient(keyUrl).responses().create(responseCreateParams);
 
         return new ProviderBlockingTextResponse(getReasoningContent(response), getMessageContent(response));
     }
@@ -203,7 +179,7 @@ public class OpenAiResponseProvider implements Provider {
      * 基准——工具侧（Tool#execute）按同一目录解析，两边必须说同一个词。
      */
     private static ResponseInputItem.Message systemMessage(PromptParams promptParams) {
-        String text = AppSettings.get().getSystemPrompt();
+        String text = promptParams.getSystemPrompt();
         String workspace = promptParams.getWorkspace();
         if (promptParams.getAgentMode() != AgentMode.CHAT && workspace != null && !workspace.isBlank()) {
             text = text + "\n\n当前工作区目录：" + workspace + "。工具调用中的相对路径以此为基准。";
@@ -221,17 +197,14 @@ public class OpenAiResponseProvider implements Provider {
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
         Logger.info("--------------streaming start--------------");
-        ResponseService service;
-        synchronized (this) {
-            service = responseService;
-        }
         ResponseCreateParams responseCreateParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue);
         AtomicBoolean shouldStop = new AtomicBoolean(false);
         ThreadPoolFactory.getResponseExecutor().execute(() -> {
             List<ErrorMessageEvent> errors = new ArrayList<>();
-            try (StreamResponse<ResponseStreamEvent> response = service.createStreaming(responseCreateParams)) {
+            KeyUrl keyUrl = new KeyUrl(promptParams.getKey(), promptParams.getBackendUrl());
+            try (StreamResponse<ResponseStreamEvent> response = getClient(keyUrl).responses().createStreaming(responseCreateParams)) {
                 response.stream()
                         .takeWhile(responseStreamEvent -> !shouldStop.get())
                         .forEach(responseStreamEvent -> responseStreamEvent.accept(visitor));

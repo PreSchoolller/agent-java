@@ -169,7 +169,9 @@ public class Main {
             long outputTokens = 0;
             try {
                 PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
-                        .agentMode(mode).workspace(workspace);
+                        .agentMode(mode).workspace(workspace)
+                        .key(AppSettings.get().getKey())
+                        .backendUrl(AppSettings.get().getBackendUrl());
                 for (PromptParams.RoleMessage roleMessage : history) {
                     paramsBuilder.roleMessages(roleMessage);
                 }

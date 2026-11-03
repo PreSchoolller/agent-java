@@ -1,11 +1,6 @@
 package io.github.preschoolller.agentjava.backend.provider;
 
-import com.openai.client.OpenAIClient;
-import com.openai.client.OpenAIClientImpl;
-import com.openai.client.okhttp.OkHttpClient;
-import com.openai.core.ClientOptions;
 import com.openai.core.JsonValue;
-import com.openai.core.http.Headers;
 import com.openai.core.http.StreamResponse;
 import com.openai.errors.OpenAIIoException;
 import com.openai.errors.OpenAIServiceException;
@@ -21,8 +16,8 @@ import com.openai.models.chat.completions.ChatCompletionSystemMessageParam;
 import com.openai.models.chat.completions.ChatCompletionToolMessageParam;
 import com.openai.models.chat.completions.ChatCompletionUserMessageParam;
 import com.openai.models.completions.CompletionUsage;
-import com.openai.services.blocking.chat.ChatCompletionService;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
+import io.github.preschoolller.agentjava.backend.provider.common.KeyUrl;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
@@ -43,7 +38,6 @@ import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseD
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.tinylog.Logger;
 
 import java.util.ArrayList;
@@ -57,11 +51,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 public class OpenAiChatCompletionProvider implements Provider {
-    private volatile Headers headers;
-    private volatile OkHttpClient httpClient;
-    private volatile OpenAIClient openAIClient;
-    private volatile ClientOptions clientOptions;
-    private volatile ChatCompletionService chatCompletionService;
     static final Map<ReasoningEffortEnum, ReasoningEffort> RE_MAP = Map.of(
             ReasoningEffortEnum.NO, ReasoningEffort.NONE,
             ReasoningEffortEnum.LOW, ReasoningEffort.LOW,
@@ -80,45 +69,14 @@ public class OpenAiChatCompletionProvider implements Provider {
     }
 
     private OpenAiChatCompletionProvider() {
-        httpClient = OkHttpClient.builder().build();
-        headers = Headers
-                .builder()
-                .build();
-        clientOptions = ClientOptions
-                .builder()
-                .baseUrl(AppSettings.get().getBackendUrl())
-                .apiKey(AppSettings.get().getKey())
-                .headers(headers)
-                .httpClient(httpClient)
-                .build();
-        openAIClient = new OpenAIClientImpl(clientOptions);
-        chatCompletionService = openAIClient.chat().completions();
-        AppSettings.get().addChangeListener(this::reload);
-    }
-
-    @Override
-    public void reload() {
-        synchronized (this) {
-            clientOptions = clientOptions.toBuilder()
-                    .baseUrl(AppSettings.get().getBackendUrl())
-                    .apiKey(AppSettings.get().getKey())
-                    .headers(headers)
-                    .httpClient(httpClient)
-                    .build();
-            openAIClient = new OpenAIClientImpl(clientOptions);
-            chatCompletionService = openAIClient.chat().completions();
-        }
     }
 
     @Override
     public ProviderBlockingTextResponse sendPrompt(PromptParams promptParams) {
-        ChatCompletionService service;
-        synchronized (this) {
-            service = chatCompletionService;
-        }
         PromptParams chatParams = promptParams.toBuilder().agentMode(AgentMode.CHAT).build();
         ChatCompletionCreateParams chatCompletionCreateParams = buildParams(chatParams);
-        ChatCompletion chatCompletion = service.create(chatCompletionCreateParams);
+        KeyUrl keyUrl = new KeyUrl(promptParams.getKey(), promptParams.getBackendUrl());
+        ChatCompletion chatCompletion = OpenAiResponseProvider.getClient(keyUrl).chat().completions().create(chatCompletionCreateParams);
 
         return new ProviderBlockingTextResponse(getReasoningContent(chatCompletion), getMessageContent(chatCompletion));
     }
@@ -180,7 +138,7 @@ public class OpenAiChatCompletionProvider implements Provider {
     }
 
     private static ChatCompletionMessageParam systemMessage(PromptParams promptParams) {
-        String text = AppSettings.get().getSystemPrompt();
+        String text = promptParams.getSystemPrompt();
         String workspace = promptParams.getWorkspace();
         if (promptParams.getAgentMode() != AgentMode.CHAT && workspace != null && !workspace.isBlank()) {
             text = text + "\n\n当前工作区目录：" + workspace + "。工具调用中的相对路径以此为基准。";
@@ -193,10 +151,6 @@ public class OpenAiChatCompletionProvider implements Provider {
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
         Logger.info("--------------streaming start--------------");
-        ChatCompletionService service;
-        synchronized (this) {
-            service = chatCompletionService;
-        }
         ChatCompletionCreateParams chatCompletionCreateParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         Map<Integer, ToolCall> indexToolCall = new HashMap<>();
@@ -204,7 +158,9 @@ public class OpenAiChatCompletionProvider implements Provider {
         AtomicBoolean shouldStop = new AtomicBoolean(false);
         ThreadPoolFactory.getResponseExecutor().execute(() -> {
             List<ErrorMessageEvent> errors = new ArrayList<>();
-            try (StreamResponse<ChatCompletionChunk> response = service.createStreaming(chatCompletionCreateParams)) {
+            KeyUrl keyUrl = new KeyUrl(promptParams.getKey(), promptParams.getBackendUrl());
+            try (StreamResponse<ChatCompletionChunk> response = OpenAiResponseProvider.getClient(keyUrl)
+                    .chat().completions().createStreaming(chatCompletionCreateParams)) {
                 response.stream()
                         .takeWhile(chatCompletionChunk -> !shouldStop.get())
                         .forEach(chatCompletionChunk ->

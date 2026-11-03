@@ -11,8 +11,6 @@ public interface Provider {
      */
     default String name() {return "";}
 
-    void reload();
-
     ProviderBlockingTextResponse sendPrompt(PromptParams promptParams);
 
     ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams);
