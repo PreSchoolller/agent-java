@@ -1,2 +1,10 @@
 # 1. 通用规则放在最前面，设定默认行为
 * text=auto eol=lf
+
+# 2. 例外：Windows 生态的脚本统一 CRLF 行尾。
+#    注意 bat 还必须存成 GBK（cmd 按 GBK 解析，UTF-8 多字节会导致扫描错位）；
+#    ps1 则必须带 UTF-8 BOM（Windows PowerShell 5.1 无 BOM 会按 ANSI 读，中文乱码）。
+#    （同属性后写的生效，所以这些条目要放在通用规则之后）
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
