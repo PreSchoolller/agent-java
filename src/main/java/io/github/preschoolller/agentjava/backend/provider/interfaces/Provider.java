@@ -5,6 +5,11 @@ import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockin
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 
 public interface Provider {
+    /**
+     * api: [response, chatcompletion, messages]
+     * @return api + 个人标识
+     */
+    default String name() {return "";}
 
     void reload();
 

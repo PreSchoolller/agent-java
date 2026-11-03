@@ -1,5 +1,6 @@
 package io.github.preschoolller.agentjava.backend.maintenance;
 
+import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.backend.tool.ToolBash;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 
@@ -9,6 +10,7 @@ import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 public class WarmUpStuff {
     public static void warmup() {
         ToolManager.loadExternal();
+        ProviderFactory.loadExternal();
         ToolBash.exploreBash();
     }
 }
