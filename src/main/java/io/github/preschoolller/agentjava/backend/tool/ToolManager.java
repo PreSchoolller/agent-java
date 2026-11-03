@@ -17,10 +17,16 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
@@ -138,5 +144,31 @@ public class ToolManager {
         } catch (IOException e) {
             Logger.error("load plugin error for: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 目前规划：
+     * 1. 历史中用过的工具不受前端未勾选影响
+     * 2. enabled 为 null，默认全部；为空，则不返回结果（历史非空不受影响）
+     * @param history 历史中用到的工具名称
+     * @param enabled 前端勾选的工具名称
+     * @return 应当拼接进请求的工具列表
+     */
+    public static Collection<Tool> shouldRevealTools(Collection<String> history, Collection<String> enabled) {
+        if (enabled == null) {
+            return Collections.unmodifiableCollection(tools.values());
+        }
+        Set<String> names = new HashSet<>(enabled);
+        names.addAll(history);
+        List<Tool> result = new ArrayList<>();
+        for (String name : names) {
+            Tool tool = findByName(name);
+            if (tool instanceof BadTool) {
+                continue;
+            }
+            result.add(tool);
+            names.add(name);
+        }
+        return Collections.unmodifiableList(result);
     }
 }

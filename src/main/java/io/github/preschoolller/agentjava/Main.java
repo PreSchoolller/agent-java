@@ -70,8 +70,10 @@ public class Main {
     /** 工具执行阶段的等待上限：审批等待不计入（那个靠用户点击/停止结束），只防工具 I/O 卡死拖住整轮 */
     private static final long TOOL_EXECUTE_TIMEOUT_SECONDS = 60;
 
+    private static final AppSettings appSettings = AppSettings.get();
+
     public static void main(String[] args) {
-        Configuration.set("level", AppSettings.get().getLogLevel());
+        Configuration.set("level", appSettings.getLogLevel());
         
         SwingUtilities.invokeLater(() -> {
             Window window = new Window("Agent");
@@ -170,8 +172,10 @@ public class Main {
             try {
                 PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
                         .agentMode(mode).workspace(workspace)
-                        .key(AppSettings.get().getKey())
-                        .backendUrl(AppSettings.get().getBackendUrl());
+                        .key(appSettings.getKey())
+                        .backendUrl(appSettings.getBackendUrl())
+                        .systemPrompt(appSettings.getSystemPrompt())
+                        .enabledTools(appSettings.getEnabledTools());
                 for (PromptParams.RoleMessage roleMessage : history) {
                     paramsBuilder.roleMessages(roleMessage);
                 }

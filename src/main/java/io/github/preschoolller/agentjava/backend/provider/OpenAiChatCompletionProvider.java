@@ -42,9 +42,11 @@ import org.tinylog.Logger;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -84,6 +86,7 @@ public class OpenAiChatCompletionProvider implements Provider {
     private ChatCompletionCreateParams buildParams(PromptParams promptParams) {
         List<PromptParams.RoleMessage> roleMessages = promptParams.getRoleMessages();
         List<ChatCompletionMessageParam> allMessages = new ArrayList<>(roleMessages.size());
+        Set<String> historyTools = new HashSet<>();
         for (PromptParams.RoleMessage roleMessage : roleMessages) {
             switch (roleMessage.role()) {
                 case USER -> {
@@ -100,6 +103,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                     if (promptParams.getAgentMode() == AgentMode.CHAT) {
                         continue; // 纯聊天请求不带工具，历史里的工具轮次一并跳过
                     }
+                    historyTools.add(roleMessage.toolName());
                     allMessages.add(ChatCompletionMessageParam.ofAssistant(ChatCompletionAssistantMessageParam.builder()
                             .addToolCall(ChatCompletionMessageFunctionToolCall.builder()
                                     .id(roleMessage.callId())
@@ -131,7 +135,7 @@ public class OpenAiChatCompletionProvider implements Provider {
         if (promptParams.getAgentMode() == AgentMode.CHAT) {
             return builder.build(); // 纯聊天：不声明任何工具，模型调不了东西，审批/执行链路整个不参与
         }
-        for (Tool tool : ToolManager.tools.values()) {
+        for (Tool tool : ToolManager.shouldRevealTools(historyTools, promptParams.getEnabledTools())) {
             builder.addTool(ToolManager.getChatCompletionFunctionTool(tool));
         }
         return builder.build();

@@ -24,6 +24,7 @@ public class PromptParams {
     private String key;
     private String backendUrl;
     private String systemPrompt;
+    private List<String> enabledTools;
 
     private PromptParams() {}
 
@@ -60,6 +61,10 @@ public class PromptParams {
         return systemPrompt;
     }
 
+    public List<String> getEnabledTools() {
+        return enabledTools;
+    }
+
     public static PromptParams.Builder builder() {
         return new Builder();
     }
@@ -85,6 +90,7 @@ public class PromptParams {
             base.key = promptParams.key;
             base.backendUrl = promptParams.backendUrl;
             base.systemPrompt = promptParams.systemPrompt;
+            base.enabledTools = promptParams.enabledTools;
         }
 
         private final PromptParams base;
@@ -130,6 +136,11 @@ public class PromptParams {
 
         public Builder systemPrompt(String systemPrompt) {
             base.systemPrompt = systemPrompt;
+            return this;
+        }
+
+        public Builder enabledTools(List<String> enabledTools) {
+            base.enabledTools = enabledTools;
             return this;
         }
     }

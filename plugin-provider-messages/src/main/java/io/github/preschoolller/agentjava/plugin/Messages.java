@@ -54,9 +54,11 @@ import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import org.tinylog.Logger;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -126,7 +128,7 @@ public class Messages implements Provider {
     MessageCreateParams buildParams(PromptParams promptParams) {
         MessageCreateParams.Builder builder = MessageCreateParams.builder();
         builder.addSystemMessage(getSystemMessage(promptParams));
-
+        Set<String> historyTools = new HashSet<>();
         for (PromptParams.RoleMessage roleMessage : promptParams.getRoleMessages()) {
             switch (roleMessage.role()) {
                 case USER -> {
@@ -139,6 +141,7 @@ public class Messages implements Provider {
                     if (promptParams.getAgentMode() == AgentMode.CHAT) {
                         continue; // 纯聊天请求不带工具，历史里的工具轮次一并跳过
                     }
+                    historyTools.add(roleMessage.toolName());
                     ToolUseBlockParam.Builder toolUseBlockParamBuilder = ToolUseBlockParam.builder();
                     toolUseBlockParamBuilder.id(roleMessage.callId());
                     toolUseBlockParamBuilder.name(roleMessage.toolName());
@@ -169,7 +172,9 @@ public class Messages implements Provider {
         }
 
         if (!promptParams.getAgentMode().equals(AgentMode.CHAT)) {
-            for (io.github.preschoolller.agentjava.backend.tool.interfaces.Tool tool : ToolManager.tools.values()) {
+            for (io.github.preschoolller.agentjava.backend.tool.interfaces.Tool tool :
+                    ToolManager.shouldRevealTools(historyTools, promptParams.getEnabledTools())) {
+
                 Tool.Builder toolBuilder = Tool.builder();
                 toolBuilder.name(tool.name());
                 toolBuilder.description(tool.description());
