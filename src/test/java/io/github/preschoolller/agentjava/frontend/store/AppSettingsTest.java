@@ -205,16 +205,32 @@ class AppSettingsTest {
     void t09_activeProviderName() {
         Path settingsFile = file("settings.properties");
         AppSettings testSettings = AppSettings.at(settingsFile);
-        // Provider 单选名单（落 Profile.activeProviderName，后端 resolveActiveProvider 优先消费）：
-        // 默认未指定（null，后端回落默认）；落盘往返；空白=清除指定（与 null 同语义）
+        // Provider 分组单选（落 Profile.activeProviderNames，get/set 按**当前 apiType** 取值，
+        // 后端 getActiveProviderName 语义不变）：默认未指定（null，后端回落默认）；落盘往返；
+        // 各 API 类型独立；空白=清除指定（与 null 同语义）
         assertNull(testSettings.getActiveProviderName(), "未指定默认 null");
         testSettings.getActiveProfile().setActiveProviderName("messages-mine");
         testSettings.save();
         assertEquals("messages-mine", AppSettings.at(settingsFile).getActiveProviderName(), "provider 名落盘往返");
-        testSettings.getActiveProfile().setActiveProviderName("   ");
-        assertNull(testSettings.getActiveProfile().getActiveProviderName(), "空白清除指定");
-        testSettings.getActiveProfile().setActiveProviderName(" chat-completion-mine ");
-        assertEquals("chat-completion-mine", testSettings.getActiveProfile().getActiveProviderName(), "strip 落值");
+        // 换 API 类型：各自独立的选择互不覆盖
+        testSettings.getActiveProfile().setApiType(Profile.API_MESSAGES);
+        testSettings.getActiveProfile().setActiveProviderName("messages-mine");
+        testSettings.getActiveProfile().setApiType(Profile.API_CHAT_COMPLETION);
+        testSettings.getActiveProfile().setActiveProviderName("chat-completion-mine");
+        testSettings.save();
+        AppSettings reread = AppSettings.at(settingsFile);
+        assertEquals("chat-completion-mine", reread.getActiveProfile().getActiveProviderName(),
+                "chatcompletion 组的选择");
+        reread.getActiveProfile().setApiType(Profile.API_MESSAGES);
+        assertEquals("messages-mine", reread.getActiveProfile().getActiveProviderName(), "messages 组的选择独立");
+        reread.getActiveProfile().setApiType(Profile.API_RESPONSE);
+        assertEquals("messages-mine", reread.getActiveProfile().getActiveProviderName(),
+                "response 组是首次落的那条（旧单值键语义延续）");
+        // 空白清除当前类型；strip 落值
+        reread.getActiveProfile().setActiveProviderName("   ");
+        assertNull(reread.getActiveProfile().getActiveProviderName(), "空白清除指定");
+        reread.getActiveProfile().setActiveProviderName(" chat-completion-mine ");
+        assertEquals("chat-completion-mine", reread.getActiveProfile().getActiveProviderName(), "strip 落值");
     }
 
     @Test

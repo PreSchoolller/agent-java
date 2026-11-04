@@ -7,6 +7,7 @@ import io.github.preschoolller.agentjava.frontend.store.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 import io.github.preschoolller.agentjava.frontend.store.Message;
 import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
+import io.github.preschoolller.agentjava.frontend.store.Profile;
 import org.tinylog.Logger;
 
 import javax.swing.BorderFactory;
@@ -175,7 +176,7 @@ public class Window extends JFrame {
     private JButton sendButton;
     private JButton stopButton;
     /** 输入区右下角：本次对话的模型与思考强度（对话级选择，选项来自当前方案的模型列表） */
-    private JComboBox<String> modelCombo;
+    private JComboBox<Object> modelCombo;
     private JComboBox<String> effortCombo;
     /** 输入区左下角：权限模式（计划=只读规划 / 编辑=允许改文件 / 完全访问=不受限 / 纯聊天=不挂工具），后端执行循环消费 */
     private JComboBox<String> modeCombo;
@@ -2696,23 +2697,43 @@ public class Window extends JFrame {
         buttonHolder.add(sendButton);
         buttonHolder.add(stopButton);
 
-        // 输入框右下角一排：模型选择 + 思考强度 + 发送/停止
+        // 输入框右下角一排：模型选择 + 思考强度 + 发送/停止。
+        // 模型下拉跨方案：所有配置方案的目录模型都列出（ModelOption 带所属方案），
+        // 活动方案的模型显示裸名，其他方案带方案名后缀区分
         modelCombo = new JComboBox<>();
-        for (String model : AppSettings.get().getModels()) {
-            modelCombo.addItem(model);
+        String activeProfileName = AppSettings.get().getActiveProfileName();
+        for (String profileName : AppSettings.get().getProfileNames()) {
+            Profile profile = AppSettings.get().getProfile(profileName);
+            if (profile == null) {
+                continue;
+            }
+            for (String model : profile.getModels()) {
+                modelCombo.addItem(new ModelOption(profileName, model));
+            }
         }
-        modelCombo.setSelectedItem(AppSettings.get().getModel());
+        // 初选：活动方案的默认模型；被删/改名找不到时落第一项
+        String activeModel = AppSettings.get().getModel();
+        for (int i = 0; i < modelCombo.getItemCount(); i++) {
+            if (modelCombo.getItemAt(i) instanceof ModelOption option
+                    && option.profileName().equals(activeProfileName) && option.modelName().equals(activeModel)) {
+                modelCombo.setSelectedItem(option);
+                break;
+            }
+        }
         if (modelCombo.getSelectedItem() == null && modelCombo.getItemCount() > 0) {
             modelCombo.setSelectedIndex(0);
         }
         modelCombo.setPreferredSize(new Dimension(180, 26));
-        modelCombo.setToolTipText("本次对话使用的模型（可选列表在设置面板里维护）");
+        modelCombo.setToolTipText("本次对话使用的模型（所有配置方案的模型；跨方案选择随选随用）");
         effortCombo = new JComboBox<>(new String[]{"关闭", "低", "中", "高", "超高"});
         effortCombo.setSelectedIndex(3);
         effortCombo.setPreferredSize(new Dimension(90, 26));
         effortCombo.setToolTipText("思考强度");
         Ui.styleComboBox(modelCombo);
         Ui.styleComboBox(effortCombo);
+        // 渲染器在 styleComboBox 之后挂（它会给非 ModelOption 项换默认渲染）：活动方案的模型
+        // 显示裸名，其他方案带方案名后缀区分
+        modelCombo.setRenderer(renderModelOption(AppSettings.get().getActiveProfileName()));
         // 模型元数据里的"默认推理等级"接出：选中模型变化时思考强度带出该模型的默认值
         //（元数据没设 = 跟随当前选择，不动）
         modelCombo.addActionListener(e -> syncEffortToModelDefault());
@@ -2791,9 +2812,50 @@ public class Window extends JFrame {
         return inputScroll == null ? INPUT_MIN_HEIGHT : inputScroll.getPreferredSize().height;
     }
 
-    /** 输入区当前选中的模型（对话级设置） */
+    /**
+     * 模型下拉项：所属配置方案名 + 模型名。下拉跨方案列出所有配置的模型，方案名用于
+     * 区分同名模型和跨方案路由（Main 拿 profile 名决定请求走哪套连接，见 streamReply wip 注释）。
+     */
+    public record ModelOption(String profileName, String modelName) {
+        @Override
+        public String toString() {
+            return modelName + "（" + profileName + "）"; // 兜底文本：渲染器之外的场景（可编辑编辑器等）
+        }
+    }
+
+    /** 输入区当前选中的模型名（对话级设置；跨方案选择也返回裸模型名） */
     public String getSelectedModel() {
-        return (String) modelCombo.getSelectedItem();
+        return modelCombo.getSelectedItem() instanceof ModelOption option ? option.modelName() : null;
+    }
+
+    /** 输入区当前选中模型所属的配置方案名（跨方案路由用） */
+    public String getSelectedModelProfile() {
+        return modelCombo.getSelectedItem() instanceof ModelOption option ? option.profileName() : null;
+    }
+
+    /**
+     * 模型下拉渲染器工厂：活动方案的模型显示裸名，其他方案显示「model（profile）」。
+     * 样式镜像 Ui.styleComboBox 的默认渲染（它整体会换 renderer，这里在其之后覆盖挂载）。
+     */
+    private javax.swing.ListCellRenderer<Object> renderModelOption(String activeProfileName) {
+        return new javax.swing.DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
+                                                                   int index, boolean selected, boolean focus) {
+                String text = value instanceof ModelOption option
+                        ? (option.profileName().equals(activeProfileName)
+                                ? option.modelName()
+                                : option.modelName() + "（" + option.profileName() + "）")
+                        : String.valueOf(value);
+                javax.swing.JLabel label = (javax.swing.JLabel) super.getListCellRendererComponent(
+                        list, text, index, selected, focus);
+                label.setFont(Ui.FONT_PLAIN);
+                label.setForeground(Ui.TEXT);
+                label.setBackground(selected ? Ui.MENU_SELECTED : Ui.MENU_BG);
+                label.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
+                return label;
+            }
+        };
     }
 
     /** 输入区当前选中的思考强度 */
@@ -2807,7 +2869,7 @@ public class Window extends JFrame {
      * 初次构建也调用一次：模型下拉初选完成时监听器尚未注册（注册在 setSelectedItem 之后）。
      */
     private void syncEffortToModelDefault() {
-        ModelMeta meta = AppSettings.get().getModelMeta((String) modelCombo.getSelectedItem());
+        ModelMeta meta = AppSettings.get().findModelMeta(getSelectedModel());
         if (meta == null || meta.normalizedReasoning().isEmpty()) {
             return;
         }

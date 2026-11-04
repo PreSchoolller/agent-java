@@ -153,6 +153,11 @@ public class Main {
         // 之后仓库与下拉框可能被 EDT 修改，后台线程只读这份不可变数据
         List<PromptParams.RoleMessage> history = buildRoleMessages(conversation);
         String model = window.getSelectedModel();
+        // wip(多配置路由)：输入区模型下拉已跨方案列出所有配置的模型（Window.ModelOption 带所属方案，
+        // window.getSelectedModelProfile() 可取到），选中其他方案的模型时本轮应走那套配置——
+        // 接线路径：AppSettings.findProfileOwningModel(model) 找到所属方案，key/backendUrl/systemPrompt
+        // 从该方案快照；provider 的分派（该方案的 apiType 决定走哪个实现）也要跟着方案走。
+        // 下面四个读取暂保持"活动方案"不变，等后端接线。
         ReasoningEffortEnum re = window.getSelectedEffort(); // 模型与思考强度取输入区右下角的选择（对话级设置）
         AgentMode mode = window.getSelectedMode(); // 权限模式快照：本轮中途改下拉框不影响已发出的请求
         // 纯聊天不挂工具，工作区无所谓（保持 null：不建目录、系统提示词不注入）

@@ -111,9 +111,10 @@ public class ProviderFactory {
         return Collections.unmodifiableMap(poolOf(api));
     }
 
-    /** 设置页保存后调用：作废当前 API 类型的 active 缓存，下次 createProvider 按落盘名单重新解析 */
+    /** 设置页保存后调用：作废全部 active 缓存（Provider 页按 API 类型分组落盘，任何组都可能变了），
+     *  下次 createProvider 按落盘名单重新解析 */
     public static void invalidateActiveProvider() {
-        ACTIVE_PROVIDERS.remove(apiOf(appSettings.getApiType()));
+        ACTIVE_PROVIDERS.clear();
     }
 
     public static Provider setActiveProvider(Provider provider) {

@@ -225,6 +225,34 @@ public final class AppSettings {
         return null;
     }
 
+    /** 跨方案找模型元数据（输入区下拉已跨方案列模型，思考强度带出用）；同名取先注册的方案，找不到 null */
+    public ModelMeta findModelMeta(String model) {
+        if (model == null) {
+            return null;
+        }
+        for (Profile profile : profiles.values()) {
+            for (ModelMeta meta : profile.getModelMetas()) {
+                if (meta.getName().equals(model)) {
+                    return meta;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 拥有该模型名的方案（输入区跨方案选模型后，请求应路由到它）；没有方案拥有返回 null */
+    public Profile findProfileOwningModel(String model) {
+        if (model == null) {
+            return null;
+        }
+        for (Profile profile : profiles.values()) {
+            if (profile.containsModel(model)) {
+                return profile;
+            }
+        }
+        return null;
+    }
+
     public String getModel() {
         return getActiveProfile().getModel();
     }
@@ -574,8 +602,9 @@ public final class AppSettings {
             metasJson.append(']');
             properties.setProperty(prefix + "modelsMeta", metasJson.toString());
             properties.setProperty(prefix + "apiType", profile.getApiType());
-            if (profile.getActiveProviderName() != null) { // 缺键=未指定，后端取默认
-                properties.setProperty(prefix + "activeProviderName", profile.getActiveProviderName());
+            // 每个 API 类型的 provider 选择单独一键（Provider 页分组单选；缺键=该类型未指定）
+            for (Map.Entry<String, String> providerEntry : profile.getActiveProviderNames().entrySet()) {
+                properties.setProperty(prefix + "activeProvider." + providerEntry.getKey(), providerEntry.getValue());
             }
             properties.setProperty(prefix + "temperature", String.valueOf(profile.getTemperature()));
             properties.setProperty(prefix + "maxTokens", String.valueOf(profile.getMaxTokens()));
@@ -698,9 +727,15 @@ public final class AppSettings {
         }
         // apiType 缺省（老文件）时保持字段默认 response；非法值在 setApiType 里回落
         profile.setApiType(properties.getProperty(prefix + "apiType", profile.getApiType()));
-        // activeProviderName 缺省（老文件）保持 null=未指定；空白值当未指定洗掉
-        String providerName = properties.getProperty(prefix + "activeProviderName");
-        profile.setActiveProviderName(providerName == null || providerName.isBlank() ? null : providerName);
+        // 各 API 类型的 provider 选择：activeProvider.<apiType> 键逐个读；空白值丢弃
+        Map<String, String> providerNames = new LinkedHashMap<>();
+        for (String apiType : Profile.API_TYPES) {
+            String providerName = properties.getProperty(prefix + "activeProvider." + apiType);
+            if (providerName != null && !providerName.isBlank()) {
+                providerNames.put(apiType, providerName);
+            }
+        }
+        profile.setActiveProviderNames(providerNames);
         profile.setTemperature(parseDouble(properties.getProperty(prefix + "temperature"), profile.getTemperature()));
         profile.setMaxTokens(parseInt(properties.getProperty(prefix + "maxTokens"), profile.getMaxTokens()));
         profile.setSystemPrompt(properties.getProperty(prefix + "systemPrompt", profile.getSystemPrompt()));

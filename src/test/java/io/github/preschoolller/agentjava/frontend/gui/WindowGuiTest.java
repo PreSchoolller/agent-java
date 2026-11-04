@@ -252,9 +252,13 @@ class WindowGuiTest {
         captureDialogGated("window-5-settings.png", "设置",
                 "设置面板默认页=模型服务：后端地址/模型目录两条/温度等参数表单。改动请只看不保存——「保存」会写进你机器的真实偏好。");
 
-        // —— 设置面板分页断言（计划外）：默认页=模型服务；两枚胶囊来回切，各自页内控件在/不在。
+        // —— 设置面板分页断言（计划外）：默认页=模型服务；胶囊来回切，各自页内控件在/不在。
         //  用 uiHasShowingTextAnyWindow：CardLayout 隐藏页的组件仍在容器树里，不带显隐过滤会误报 ——
-        assertTrue(uiHasShowingTextAnyWindow("配置方案") && uiHasShowingTextAnyWindow("API 类型"), "默认页=模型服务页");
+        // 模型服务页=方案卡片手风琴：活动方案默认展开（「收起」钮在），表单（后端地址/API 类型）随卡显示
+        assertTrue(uiHasShowingTextAnyWindow("收起") && uiHasShowingTextAnyWindow("API 类型"),
+                "默认页=模型服务页（活动方案卡默认展开）");
+        assertTrue(uiHasShowingTextAnyWindow("默认") && uiHasShowingTextAnyWindow("新建"),
+                "方案卡片罗列（默认方案卡 + 页顶新建钮）");
         assertFalse(uiHasShowingTextAnyWindow("正文字号"), "模型服务页不含全局项");
         edt(() -> uiClickAnyWindow("通用"));
         Thread.sleep(400);
@@ -263,22 +267,25 @@ class WindowGuiTest {
         assertTrue(uiHasShowingTextAnyWindow("审核到来时播放系统提示音")
                 && uiHasShowingTextAnyWindow("审核到来时弹系统通知（托盘气泡）")
                 && uiHasShowingTextAnyWindow("审核到来时窗口抢到前台"), "通用页审核通知三开关在");
-        assertFalse(uiHasShowingTextAnyWindow("配置方案"), "通用页不含配置方案控件");
+        assertFalse(uiHasShowingTextAnyWindow("后端地址"), "通用页不含模型服务页控件");
         captureDialogGated("window-5b-settings-general.png", "设置", "通用页：正文字号/主题/日志等级 + 审核通知三开关的表单形态。");
-        // Provider 页：回归环境不跑 WarmUpStuff.loadExternal，注册池为空 → 断言兜底提示形态；
-        // 真实应用的注册行（responses-mine 等）由截图目检兜底
+        // Provider 页：分组单选（按 API 类型三组）。回归环境不跑 WarmUpStuff.loadExternal，
+        // 注册池为空 → 断言组头与各组兜底提示；真实应用的注册行由截图目检兜底
         edt(() -> uiClickAnyWindow("Provider"));
         Thread.sleep(400);
-        assertFalse(uiHasShowingTextAnyWindow("配置方案"), "Provider 页不含模型服务页控件");
+        assertFalse(uiHasShowingTextAnyWindow("后端地址"), "Provider 页不含模型服务页控件");
         assertFalse(uiHasShowingTextAnyWindow("正文字号"), "Provider 页不含通用页控件");
-        assertTrue(uiHasShowingTextAnyWindow("未拿到该 API 类型下的 Provider 列表（注册表不可用或没有注册）"),
-                "Provider 页注册表空时给兜底提示");
+        assertTrue(uiHasShowingTextAnyWindow("response · OpenAI Responses")
+                && uiHasShowingTextAnyWindow("chatcompletion · OpenAI Chat Completions")
+                && uiHasShowingTextAnyWindow("messages · Anthropic Messages"), "Provider 页三个 API 分组头在");
+        assertEquals(3, countShowingTextAnyWindow("该类型下暂无注册的 Provider（注册表不可用或没有注册）"),
+                "注册池空时每组给兜底提示");
         captureDialogGated("window-5e-settings-providers.png", "设置",
-                "Provider 页：当前方案 API 类型下注册的 provider 单选（回归环境注册池为空显示兜底提示；真实应用显示 responses-mine 等单选行）。");
+                "Provider 页：全部注册 provider 按 API 类型分组单选（回归环境注册池为空显示各组兜底提示；真实应用显示 responses-mine 等单选行）。");
         // 工具页：注册表直连读（ToolCatalog 包 catch(Throwable)），切页断言只看不依赖注册表可见性的两侧
         edt(() -> uiClickAnyWindow("工具"));
         Thread.sleep(400);
-        assertFalse(uiHasShowingTextAnyWindow("配置方案") && uiHasShowingTextAnyWindow("正文字号"),
+        assertFalse(uiHasShowingTextAnyWindow("后端地址") && uiHasShowingTextAnyWindow("正文字号"),
                 "工具页不含其他页控件");
         // bash 转文件正则行（用户点名）：工具页第二张卡；行为说明是 HTML 折行文案，
         // 全等断言够不着，由 5d 截图目检兜底
@@ -287,7 +294,7 @@ class WindowGuiTest {
                 "工具页：ToolManager 注册的工具逐条一行，勾选框=声明给模型（本次跑全量依赖，是真实注册行）。勾选态看看就好，别点「保存」。");
         edt(() -> uiClickAnyWindow("模型服务"));
         Thread.sleep(400);
-        assertTrue(uiHasShowingTextAnyWindow("配置方案"), "切回模型服务页");
+        assertTrue(uiHasShowingTextAnyWindow("后端地址"), "切回模型服务页");
         // 展开首条：参数区出现（收起态只有名字行）——目录的参数行随"展开/收起"钮切换
         edt(() -> uiClickAnyWindow("展开"));
         Thread.sleep(300);
@@ -1361,7 +1368,12 @@ class WindowGuiTest {
     /** 全部顶层窗口里是否有"显示中"的全等文本标签/按钮（设置分页断言用：CardLayout 隐藏页
      *  的组件仍在树里，uiHasTextAnyWindow 不看显隐会把非当前页也报成"在"） */
     private static boolean uiHasShowingTextAnyWindow(String text) throws Exception {
-        boolean[] found = new boolean[1];
+        return countShowingTextAnyWindow(text) > 0;
+    }
+
+    /** 所有窗口里"显示中"组件的精确文本命中数（AbstractButton/JLabel；Provider 页三组同文案提示计数用） */
+    private static int countShowingTextAnyWindow(String text) throws Exception {
+        int[] count = new int[1];
         edt(() -> {
             for (java.awt.Window window : java.awt.Window.getWindows()) {
                 List<Component> all = new ArrayList<>();
@@ -1370,18 +1382,16 @@ class WindowGuiTest {
                     if (component.isShowing()) {
                         if (component instanceof javax.swing.AbstractButton button
                                 && text.equals(button.getText())) {
-                            found[0] = true;
-                            return;
-                        }
-                        if (component instanceof javax.swing.JLabel label && text.equals(label.getText())) {
-                            found[0] = true;
-                            return;
+                            count[0]++;
+                        } else if (component instanceof javax.swing.JLabel label
+                                && text.equals(label.getText())) {
+                            count[0]++;
                         }
                     }
                 }
             }
         });
-        return found[0];
+        return count[0];
     }
 
     /** 显示中的按钮（全等文本）是否完整落在主窗范围内（窄窗口审批按钮被裁的回归断言用） */

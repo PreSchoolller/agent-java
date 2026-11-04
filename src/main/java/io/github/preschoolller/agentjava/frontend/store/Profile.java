@@ -1,7 +1,9 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /** 一套后端请求配置（模型方案）。名字存在 AppSettings 的 Map 键里，这里只放参数本身。 */
 public class Profile {
@@ -19,8 +21,9 @@ public class Profile {
     /** 可选模型目录（带元数据），model 是其中的默认项（输入区下拉的选项来源） */
     private List<ModelMeta> models = new ArrayList<>(List.of(new ModelMeta("default")));
     private String apiType = API_RESPONSE;
-    /** 该方案 API 类型下使用的 provider 名（设置页 Provider 单选落盘）；null=未指定，后端取默认 */
-    private String activeProviderName;
+    /** 每个 API 类型下选用的 provider 名（Provider 页分组单选落盘）；getActiveProviderName
+     *  按**当前 apiType** 取值——后端拿到的语义仍是"当前类型的选择"，无需感知多组存储 */
+    private Map<String, String> activeProviderNames = new LinkedHashMap<>();
     private double temperature = 0.7;
     private int maxTokens = 2048;
     private String systemPrompt = "";
@@ -39,7 +42,7 @@ public class Profile {
             copy.models.add(meta.copy());
         }
         copy.apiType = apiType;
-        copy.activeProviderName = activeProviderName;
+        copy.activeProviderNames = new LinkedHashMap<>(activeProviderNames);
         copy.temperature = temperature;
         copy.maxTokens = maxTokens;
         copy.systemPrompt = systemPrompt;
@@ -75,14 +78,36 @@ public class Profile {
         this.apiType = API_TYPES.contains(apiType) ? apiType : API_RESPONSE;
     }
 
+    /** 当前 API 类型下选用的 provider 名；未指定返回 null（后端回落默认） */
     public String getActiveProviderName() {
-        return activeProviderName;
+        return activeProviderNames.get(apiType);
     }
 
-    /** null/空白=清除指定（后端回落默认 provider）；名字是否在注册表里由后端解析时兜底 */
+    /** 当前 API 类型的 provider 选择；null/空白=清除该类型下的指定。名字是否在注册表里由后端解析时兜底 */
     public void setActiveProviderName(String activeProviderName) {
-        this.activeProviderName = activeProviderName == null || activeProviderName.isBlank()
-                ? null : activeProviderName.strip();
+        if (activeProviderName == null || activeProviderName.isBlank()) {
+            activeProviderNames.remove(apiType);
+        } else {
+            activeProviderNames.put(apiType, activeProviderName.strip());
+        }
+    }
+
+    /** 全部 API 类型的 provider 选择（只读视图；落盘/深拷贝用） */
+    public Map<String, String> getActiveProviderNames() {
+        return Map.copyOf(activeProviderNames);
+    }
+
+    /** 整体替换各 API 类型的 provider 选择（load 恢复用）；空白值丢弃 */
+    public void setActiveProviderNames(Map<String, String> names) {
+        activeProviderNames.clear();
+        if (names != null) {
+            for (Map.Entry<String, String> entry : names.entrySet()) {
+                if (entry.getKey() != null && API_TYPES.contains(entry.getKey())
+                        && entry.getValue() != null && !entry.getValue().isBlank()) {
+                    activeProviderNames.put(entry.getKey(), entry.getValue().strip());
+                }
+            }
+        }
     }
 
     public List<String> getModels() {
