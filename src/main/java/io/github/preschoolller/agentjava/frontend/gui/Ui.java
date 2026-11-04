@@ -446,13 +446,24 @@ final class Ui {
                     protected JScrollPane createScroller() {
                         JScrollPane scroller = super.createScroller();
                         styleScrollPane(scroller);
+                        // 踩坑 #19 同款：scroller 不设背景就是 Metal 默认白底，从透明轨道
+                        // 里露出来（"滑条背景发白"）；再叠上它自带的浅灰 ScrollPane 边框
+                        // 就是"弹出框白边条"——popup 自身的复合边框已完整，这层是多余的
+                        scroller.setBackground(MENU_BG);
+                        scroller.getViewport().setBackground(MENU_BG);
+                        scroller.setBorder(BorderFactory.createEmptyBorder());
                         return scroller;
                     }
                 };
                 popup.setBorder(BorderFactory.createCompoundBorder(
                         BorderFactory.createLineBorder(POPUP_BORDER),
                         BorderFactory.createEmptyBorder(3, 3, 3, 3)));
+                // BasicComboPopup 构造时关了不透明性（setBackground 等于白设），
+                // 3px 内衬带透出的是底下重量级窗口 contentPane 的 Metal 默认 #EEEEEE——
+                // 这就是"弹出框白边条"的来源；列表自身也是 #EEEEEE，一并设掉
+                popup.setOpaque(true);
                 popup.setBackground(MENU_BG);
+                popup.getList().setBackground(MENU_BG);
                 return popup;
             }
 
