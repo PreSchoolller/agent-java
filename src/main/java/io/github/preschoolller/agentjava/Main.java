@@ -58,8 +58,7 @@ public class Main {
     /**
      * 会话级 agent 循环锁（id → 本轮链的取消令牌）：不同会话各自并行，同一会话同一时刻最多一轮。
      * UI 的生成态置灰是第一道，这里是后端兜底；令牌随工具续轮传递，整条链结束才移除条目。
-     * 旧版全 app 共用一个 AtomicBoolean，续轮间隙输入解锁后新请求会把旧轮的取消位复位，
-     * 旧轮收尾时误判"没取消"再续一轮——并行请求就是这么来的，现在各会话各拿各的令牌。
+     * 各会话各拿各的令牌，续轮间隙不会串轮。
      */
     private static final Map<String, AtomicBoolean> RUNNING = new ConcurrentHashMap<>();
 
@@ -371,7 +370,7 @@ public class Main {
             Thread.currentThread().interrupt();
             return false;
         } catch (InvocationTargetException e) {
-            // requestApproval 在 EDT 上抛了异常（提醒/重绘层），不再让它伪装成用户拒绝
+            // requestApproval 在 EDT 上抛了异常（提醒/重绘层），按未批准处理而非用户拒绝
             Logger.error("审批自动拒绝：EDT 异常 {}", e.getCause() == null ? "" : e.getCause().toString());
             return false;
         }
@@ -438,7 +437,7 @@ public class Main {
 
     /**
      * 会话绑定的工作区落定成绝对路径：没绑过的用默认（~/.agentjava/workspace），顺手把目录建出来
-     * （没有 write 工具的现在用不上，但相对路径读它下面的文件前目录先在着总没错）。建失败只打日志，
+     * （没有 write 工具时用不上，但相对路径读它下面的文件前目录先在着总没错）。建失败只打日志，
      * 工具执行时会自然报错，不在这里拦请求。
      */
     private static String resolveWorkspace(Conversation conversation) {

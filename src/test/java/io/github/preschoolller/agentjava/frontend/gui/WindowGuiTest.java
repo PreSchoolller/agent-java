@@ -210,7 +210,7 @@ class WindowGuiTest {
         edt(() -> WINDOW.setGenerating(false));
         Thread.sleep(200);
         assertTrue(uiHasLabelContaining("就绪") && uiHasLabelContaining("tokens 输入 120"),
-                "回到就绪后用量仍在（不再被状态刷新冲掉）");
+                "回到就绪后用量仍在（不被状态刷新冲掉）");
     }
 
     @Test
@@ -230,9 +230,8 @@ class WindowGuiTest {
     @Order(6)
     void s06_settingsDialogPagination() throws Exception {
         // —— 截图 5：设置面板 ——
-        // 模型目录先钉成两条（内存改动不落盘，同主题偏好同款）：行删除钮"打开即可用"
-        //（目录>1 的规则接替原模型列表删除钮）与展开参数区断言依赖确定形状——
-        // 曾经 modelRow 写死 setEnabled(false) 把初始可用态按灭（踩坑 #25），这里钉死
+        // 模型目录先钉成两条（内存改动不落盘，同主题偏好同款）：行删除钮"目录>1 可删"
+        // 与展开参数区断言依赖确定形状，初始可用态这里钉死
         oldMetas = AppSettings.get().getProfile(pinnedProfileName = AppSettings.get().getProfileNames().get(0)).getModelMetas();
         oldModel = AppSettings.get().getProfile(pinnedProfileName).getModel();
         ModelMeta shotA = new ModelMeta("model-a");
@@ -411,7 +410,7 @@ class WindowGuiTest {
         Thread.sleep(300);
         assertTrue(uiHasLabelContaining("已思考") && uiHasLabelContaining("秒"),
                 "断流后 finish() 兜底把思考区收成已思考一行（不会永停思考中）");
-        assertFalse(uiHasLabelContaining("思考中"), "收尾后不再显示思考中");
+        assertFalse(uiHasLabelContaining("思考中"), "收尾后不显示思考中");
         Message brokenMessage = lastMessage();
         assertTrue("".equals(brokenMessage.text()) && brokenMessage.thinking() != null
                         && brokenMessage.thinking().contains("正文还没到就断流"),
@@ -835,8 +834,8 @@ class WindowGuiTest {
     @Test
     @Order(19)
     void s19_inputHeightGrow() throws Exception {
-        // —— 输入框高度自适应（计划外）：多行先增高，到上限（240）后不再长、由内部滚动接管
-        //  （长内容曾只能看见首两行，新打的字"藏在视口外"），清空回落到初始高度 ——
+        // —— 输入框高度自适应（计划外）：多行先增高，到上限（240）停止增高、由内部滚动接管
+        //  （否则长内容只能看见首两行，新打的字"藏在视口外"），清空回落到初始高度 ——
         edt(() -> WINDOW.getInputTextArea().setText("第一行\n第二行\n第三行"));
         Thread.sleep(300);
         int grownHeight = WINDOW.getInputPreferredHeight();
@@ -847,8 +846,8 @@ class WindowGuiTest {
         }
         edt(() -> WINDOW.getInputTextArea().setText(manyLines.toString()));
         Thread.sleep(400);
-        assertEquals(240, WINDOW.getInputPreferredHeight(), "触帽后不再增高（内部滚动接管）");
-        captureGated("window-21-input-grow.png", "输入框触帽内滚：多行输入到 240 上限后不再增高、内部滚动接管。请顺手试：真实打几行字看高度自适应（下一个会清空回落初始高 48）。");
+        assertEquals(240, WINDOW.getInputPreferredHeight(), "触帽后停止增高（内部滚动接管）");
+        captureGated("window-21-input-grow.png", "输入框触帽内滚：多行输入到 240 上限停止增高、内部滚动接管。请顺手试：真实打几行字看高度自适应（下一个会清空回落初始高 48）。");
         edt(() -> WINDOW.getInputTextArea().setText(""));
         Thread.sleep(400);
         assertEquals(48, WINDOW.getInputPreferredHeight(), "清空后回落到初始高度（不只长不缩）");
@@ -860,7 +859,7 @@ class WindowGuiTest {
     void s20_bgPeekOutputFullHeight() throws Exception {
         // —— 后台任务"查看输出"快照窗口（用户报"有点矮，看着费劲"）：快照在场时结果滚动区
         //    给与终态结果同一顶帽（TOOL_RESULT_CAP=520）的完整高度，且卡片高度按
-        //    "终态文本 + 快照段"的显示全文测量（旧实现只量终态文本，快照把滚动区压成卡高下限） ——
+        //    "终态文本 + 快照段"的显示全文测量（只量终态文本的话快照会把滚动区压成卡高下限） ——
         StringBuilder snapshot = new StringBuilder();
         for (int i = 1; i <= 60; i++) {
             snapshot.append("build output line ").append(i).append("：模拟后台任务持续输出的日志行\n");
@@ -911,7 +910,7 @@ class WindowGuiTest {
         });
         assertTrue(scrollHeight[0] >= 400, "快照全文入卡且滚动区与终态结果同顶帽（实测 " + scrollHeight[0] + "）");
         captureGated("window-22-bg-peek.png",
-                "后台任务「查看输出」：快照展开后结果滚动区给满高度（不再被预览帽/卡高下限压扁），内部滚动看全量输出。");
+                "后台任务「查看输出」：快照展开后结果滚动区给满高度（不被预览帽/卡高下限压扁），内部滚动看全量输出。");
     }
 
     /**

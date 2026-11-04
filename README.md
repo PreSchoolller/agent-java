@@ -16,7 +16,7 @@ mvn exec:java
 本地数据地址
 ```
 ~/.agentjava/
-├── history.json         # 会话索引（只存元数据：标题/时间/置顶/工作区），启动只读它
+├── history.json         # 会话索引（只存元数据：标题/时间/置顶/工作区/上次模型方案），启动只读它
 ├── settings.properties  # 应用设置
 ├── workspace/           # 默认工作区（新建对话不选工作区时，工具的相对路径落这里）
 └── sessions/            # 单会话消息文件，文件名即会话 id（首次打开该会话才读）
@@ -41,17 +41,24 @@ mvn exec:java
 - AI 回复 Markdown 渲染：标题/列表/引用/表格/代码块（高亮底 + 复制）/diff 增删行着色/任务勾选，`<think>` 推理块
   单独成块展示（默认收起显示已思考时长，点击展开），链接可点击跳转，流式逐段渲染（120ms 节流），可中断；
   消息文本可划词选中 Ctrl+C 复制
-- 设置面板：分「通用 / 模型服务」两页（顶部胶囊标签切换）；模型服务页管理多套「配置方案」
-  （地址 / Key / API 类型 / 温度 / 最大 Tokens / 系统提示词）+ 模型目录：每个模型一条可展开行，
-  编辑名字 / 上下文窗口 / 最大输出 / 默认推理等级（选中时输入区思考强度自动带出）/ 输入能力
-  （文本、图片），保存即热生效（后端监听变更重建 client）；通用页管主题（深浅、可跟随系统）
-  与日志等级（TinyLog，改后重启生效）；
-  API 类型可选 response（当前实现）/ chatcompletion / messages（后端待支持）
-- 输入区：左下权限模式（计划 / 编辑 / 完全访问 / 纯聊天），右下模型与思考强度按对话选择，
-  底部胶囊显示生成状态与 token 用量/耗时，Esc 停止生成；输入框高度随内容增高，
-  到上限后变内部滚动（光标自动跟着打字位置走），回车发送 / Shift·Ctrl+回车换行
+- 设置面板：分「通用 / 模型服务 / Provider / 工具」四页（顶部胶囊标签切换）；
+  模型服务页把所有「配置方案」（地址 / Key / API 类型 / 温度 / 最大 Tokens / 系统提示词）
+  罗列成手风琴卡片，点开编辑、打开面板时全部收起，保存才提交；每个方案挂模型目录：
+  每个模型一条可展开行，编辑名字 / 上下文窗口 / 最大输出 / 默认推理等级 / 输入能力
+  （文本、图片）；Provider 页按 API 类型分组列出全部实现（内置 + SPI 插件），同组单选
+  当前使用的 provider；工具页勾选随请求下发的工具名单；保存即热生效（后端监听变更重建
+  client）；通用页管主题（深浅、可跟随系统）、正文字号与日志等级（TinyLog，改后重启生效）。
+  API 类型可选 response / chatcompletion（都已实现）；messages 有注册表占位，
+  无实现时自动回落 response
+- 输入区：左下权限模式（计划 / 编辑 / 完全访问 / 纯聊天），右下模型下拉汇总所有方案的
+  所有模型（统一带「模型（方案名）」后缀），思考强度按模型记忆；模型选择跟会话走
+  （history.json 记录，切回会话自动恢复），底部胶囊显示生成状态与 token 用量/耗时，
+  Esc 停止生成；输入框高度随内容增高，到上限后变内部滚动（光标自动跟着打字位置走），
+  回车发送 / Shift·Ctrl+回车换行
 - 托盘常驻：关闭按钮可配置为最小化到托盘，右键菜单 / 双击恢复
-- 后端：OpenAI Responses API（`backend/provider`），通过 `Provider` 接口对接，工厂创建
+- 后端：`backend/provider` 经 `Provider` 接口对接多种 API 类型（OpenAI Responses /
+  OpenAI Chat Completions 内置），支持 SPI 插件扩展（`scripts/install-plugin.ps1/.sh`
+  一键安装新 provider），同 API 类型多个实现时由 Provider 页单选决定
 
 ## 结构
 
@@ -59,13 +66,16 @@ mvn exec:java
 src/main/java/io/github/preschoolller/agentjava/
 ├── Main.java            # 接线：把输入回调接到 Provider，流式回填窗口
 ├── frontend/
-│   ├── gui/             # Swing 界面（AI 生成）：Window / Sidebar / MarkdownRenderer / Ui / Theme ...
-│   └── store/           # 会话与设置持久化（AI 生成）：ConversationStore / AppSettings / Profile
+│   ├── gui/             # Swing 界面（AI 生成）：Window / Sidebar / SettingsDialog / MarkdownRenderer / Ui / Theme ...
+│   └── store/           # 会话与设置持久化（AI 生成）：ConversationStore / AppSettings / Profile / Conversation
 └── backend/
-    ├── tool/            # 本人练手区：ToolManager + Tool 接口（只读/额外审批能力）+ ToolRead 等
-    └── provider/        # 本人练手区：Provider 接口 + OpenAiProvider（Responses API）+ 工厂
-        ├── common/      # PromptParams / ProviderResponse / ReasoningEffortEnum / AgentMode
-        └── interfaces/  # Provider
+    ├── tool/            # 本人练手区：ToolManager + Tool 接口（只读/额外审批能力）+ ToolRead / ToolBash 等
+    └── provider/        # 本人练手区：Provider SPI + 内置实现 + 工厂
+        ├── OpenAiResponseProvider.java         # OpenAI Responses API
+        ├── OpenAiChatCompletionProvider.java   # OpenAI Chat Completions API
+        ├── ProviderFactory.java                # 按 API 类型分注册表 + active provider 解析 + SPI 插件加载
+        ├── common/      # PromptParams / ProviderResponse / ReasoningEffortEnum / AgentMode ...
+        └── interfaces/  # Provider SPI 接口（插件实现入口）
 ```
 
 前后端的边界就两个方法：`frontend` 把用户输入和输入区选择（模型/思考强度/权限模式）
@@ -76,14 +86,14 @@ src/main/java/io/github/preschoolller/agentjava/
 `foragent/` 是给 AI（和人）看的前端交接文档，改前端前必读：
 
 - **组件计划.md** —— 前端做了什么/还欠什么，改动要在这里登记状态；
-- **踩坑记录.md** —— Swing/工程真实踩过的 28 个坑（EDT 线程、首选宽反馈循环、z-order、
-  假 exited……），改到对应模块先扫雷；
+- **踩坑记录.md** —— Swing/工程真实踩过的 33 个坑（EDT 线程、首选宽反馈循环、z-order、
+  假 exited、测试污染用户配置……），改到对应模块先扫雷；
 - **src/test/** —— JUnit 5 回归测试：纯逻辑单测（持久化往返/配置方案/Markdown 解析）+
   GUI 回归 `WindowGuiTest`（有序用例，出 28 张截图 + UI 断言）：
 
 ```bash
 mvn test
-# 纯逻辑 20 例 + GUI 19 例（无托盘环境托盘段自动跳过），截图落在 target/regression/ 下
+# 纯逻辑 + GUI 共 73 例（无托盘环境托盘段自动跳过），截图落在 target/regression/ 下
 ```
 
 GUI 回归另带**交互巡检向导**（默认关）：`-Dgui.interactive=true` 时每个观察点截图后弹

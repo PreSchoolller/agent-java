@@ -216,8 +216,7 @@ public class SettingsDialog extends JDialog {
         tabsPanel.add(new TabButton("Provider", TAB_PROVIDERS));
         tabsPanel.add(new TabButton("工具", TAB_TOOLS));
 
-        // 两页内容（CardLayout 切换）：每页各自套滚动容器——原先是两卡同屏共用一份
-        // groupsScroll（装不下出滚动条的挤压重排修法），分页后短页不再继承长页的滚动空间。
+        // 两页内容（CardLayout 切换）：每页各自套滚动容器，短页不继承长页的滚动空间。
         // 页高取两者较大者：切换标签时对话框尺寸不变，行也不被挤压重排
         pageLayout = new CardLayout();
         pagesPanel = new JPanel(pageLayout);
@@ -705,10 +704,9 @@ public class SettingsDialog extends JDialog {
     }
 
     /**
-     * 页面外层：宽度始终跟随视口（横向永不裁）。原先视图按自己的首选宽（约 532）
-     * 保持横宽，视口 484 时右缘直接被裁 ~48px——字段右端、"删除"按钮被硬切；
-     * 跟随后多余宽度由卡片里的 GridBag 压缩到加权列上：自动换行的文本区按视口
-     * 宽重排，下拉/输入框填充可用宽，不再出现"内容画到视口外"。
+     * 页面外层：宽度始终跟随视口（横向永不裁）。跟随后多余宽度由卡片里的
+     * GridBag 压缩到加权列上：自动换行的文本区按视口宽重排，下拉/输入框填充
+     * 可用宽，内容不会画到视口外。
      * 高度不跟随：页面超高照常出竖向滚动条（横向滚动条策略 NEVER 也不可见）。
      */
     private static final class TrackablePage extends JPanel implements Scrollable {
@@ -841,7 +839,7 @@ public class SettingsDialog extends JDialog {
     }
 
     /** 目录整体重建：条目按工作副本顺序生成；行删除钮">1 可删"只在这里算（踩坑 #25 同款：
-     *  状态只留一个写者，不再有第二处会改删除钮可用态） */
+     *  状态只留一个写者，删除钮可用态没有第二处修改点） */
     private void rebuildCatalogPanel() {
         if (catalogPanel == null) {
             // 构造期顺序：loadSelectedProfile 先于目录 UI 建（catalogBlock）——此时数据副本

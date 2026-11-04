@@ -234,7 +234,7 @@ class AppSettingsTest {
     void t10_bashFilePattern() throws Exception {
         Path settingsFile = file("settings.properties");
         AppSettings testSettings = AppSettings.at(settingsFile);
-        // 默认未配置（null）：bash 工具只按超长阈值转文件，不再拿 "something" 字面量乱匹配
+        // 默认未配置（null）：bash 工具只按超长阈值转文件，不拿字面量乱匹配
         assertNull(testSettings.getBashFilePattern(), "未配置默认 null");
         // 合法正则：设值 + 落盘往返
         testSettings.setBashFilePattern("(here-?doc|<<)");
@@ -246,7 +246,7 @@ class AppSettingsTest {
             testSettings.setBashFilePattern(bad);
         }
         assertEquals("(here-?doc|<<)", testSettings.getBashFilePattern(), "非法/不安全正则不设值");
-        // 空白=清除配置，且清除后落盘不再写键
+        // 空白=清除配置，且清除后落盘不写键
         testSettings.setBashFilePattern("   ");
         assertNull(testSettings.getBashFilePattern(), "空白清除配置");
         testSettings.save();

@@ -234,7 +234,7 @@ public class Sidebar extends JPanel {
 
     /** 按仓库最新状态 + 当前搜索词重建会话列表并高亮当前会话。
      *  行结构=工作区分组头+组内会话（主区的工作区显示条移除后侧栏是工作区唯一可见处）：
-     *  组序按组内最近会话时间倒序（最近使用在上，与原先全局排序同精神），
+     *  组序按组内最近会话时间倒序（最近使用在上），
      *  组内仍是置顶优先+最近在前；先按搜索词过滤再分组，命中才会带着自己所属组出现 */
     public void refresh() {
         refreshingList = true;
@@ -728,7 +728,7 @@ public class Sidebar extends JPanel {
 
         private SizingLabel() {
             super("", SwingConstants.LEFT);
-            setOpaque(true); // 原先继承的 DefaultListCellRenderer 本就 opaque，选中底色靠它画
+            setOpaque(true); // 选中底色靠 opaque 背景画
         }
 
         @Override

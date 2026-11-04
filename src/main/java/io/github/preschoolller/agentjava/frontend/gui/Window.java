@@ -94,7 +94,7 @@ import java.util.function.Supplier;
  * 左侧 Sidebar（可折叠的历史会话面板，左上角汉堡按钮折叠/展开，底部设置入口）；
  * 右侧主区：中部瀑布流（每张白色圆角卡片是一条消息，可滚动）、
  * 输入框（圆角输入区，回车发送，Shift+回车换行）、底部居中的实时数据小胶囊。
- * 层次感靠浅灰主区/侧栏 + 白色卡片体现，不再使用手绘图里的彩色粗边框。
+ * 层次感靠浅灰主区/侧栏 + 白色卡片体现。
  *
  * 后端接入方式：
  * onInputSubmitted((conversation, text) -> ...) 在用户回车后拿到文本（输入已自动画成卡片），
@@ -191,7 +191,7 @@ public class Window extends JFrame {
     };
 
     /** 底部两枚分立胶囊：状态（就绪/生成中…，跟生成态刷新走）与用量（tokens/耗时，只被
-     *  setUsageInfo 覆盖——生成结束刷回"就绪"不再冲掉上一轮的用量数据） */
+     *  setUsageInfo 覆盖——生成结束刷回"就绪"时上一轮的用量数据保留） */
     private Ui.RoundPanel statusPill;
     private JLabel statusLabel;
     private Ui.RoundPanel usagePill;
@@ -457,7 +457,7 @@ public class Window extends JFrame {
 
             @Override
             public void onNewConversationInWorkspace(String workspace) {
-                createInWorkspace(workspace); // 组头加号：null=默认工作区组，直接按组绑定建，不再弹窗
+                createInWorkspace(workspace); // 组头加号：null=默认工作区组，直接按组绑定建，不弹窗
             }
 
             @Override
@@ -724,7 +724,6 @@ public class Window extends JFrame {
     /**
      * 关闭行为（P2-3）：不用 EXIT_ON_CLOSE——会话与设置都是即改即存，点关闭要么直接退出、
      * 要么（勾了"关闭时最小化到托盘"且系统支持）隐藏窗口挂托盘，生成中的回复在后台继续。
-     * Main 不再覆盖默认关闭操作。
      */
     private void initCloseBehavior() {
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
@@ -1566,8 +1565,7 @@ public class Window extends JFrame {
         Message message = messageCard.message;
         boolean expanded = expandedToolCalls.contains(toolKey(message));
         // 头部三段式：WEST 箭头+角色标+工具名 / CENTER 参数摘要 / EAST 状态徽标+审批按钮。
-        // 原来一行 FlowLayout 从左排到底，参数摘要长的时候窗口一窄，徽标和"允许/拒绝"就被
-        // 推出行外裁掉，点不到只能拉宽窗口。BorderLayout 的 EAST/WEST 按各自首选宽定位、
+        // BorderLayout 的 EAST/WEST 按各自首选宽定位、
         // 永不裁剪，被盖住也是后 add 的 EAST 盖在上面（z-order 顶）——按钮永远完整可见可点，
         // 空间不足先让位的是中间的参数摘要（CENTER 区域宽度= 卡宽-两端首选宽）。
         JPanel leftGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
@@ -2425,8 +2423,8 @@ public class Window extends JFrame {
         private final StringBuilder pending = new StringBuilder();
         private final Timer flushTimer = new Timer(120, e -> flush());
         private boolean finished;
-        /** 独立思考缓冲：全文 + 脏标记 + 闭合状态。计时不再扫描正文里的思考标记——
-         *  两个事件点就够：第一段思考增量到达（起点）、思考闭合（终点） */
+        /** 独立思考缓冲：全文 + 脏标记 + 闭合状态。计时靠两个事件点：
+         *  第一段思考增量到达（起点）、思考闭合（终点） */
         private final StringBuilder thinking = new StringBuilder();
         private boolean thinkingDirty;
         /** 没开始思考前视为已结束：空思考区整块隐藏，隐式收尾也不误触发 */
@@ -2793,7 +2791,7 @@ public class Window extends JFrame {
         inputScroll.setPreferredSize(new Dimension(0, INPUT_MIN_HEIGHT));
         inputBox.add(inputScroll, BorderLayout.CENTER);
         inputBox.add(controlsRow, BorderLayout.SOUTH);
-        // 改窗口宽度时折行位置变了，高度要按新宽度重算（老布局下长内容会算短显不全）
+        // 改窗口宽度时折行位置变了，高度要按新宽度重算
         inputBox.addComponentListener(new ComponentAdapter() {
             @Override
             public void componentResized(ComponentEvent e) {
@@ -2803,7 +2801,7 @@ public class Window extends JFrame {
     }
 
     /**
-     * 输入框高度跟随内容（计划外）：多行先增高，到 INPUT_MAX_HEIGHT 后不再长——视口比正文窄,
+     * 输入框高度跟随内容（计划外）：多行先增高，到 INPUT_MAX_HEIGHT 停止增高——视口比正文窄,
      * 纵向滚动条按需出场，光标打字自动把视口拉到自己位置（JTextPane + 滚动容器的默认行为）。
      * 高度用与用户卡片同款的 measureTextHeight 测（折行宽=输入框宽-左右内衬，MeasureCache 命中
      * 免重测），+墨迹余量防 emoji 裁底；空文本回落 INPUT_MIN_HEIGHT。在 EDT 上调用。
