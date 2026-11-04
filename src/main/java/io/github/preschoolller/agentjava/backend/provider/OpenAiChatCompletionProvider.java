@@ -74,6 +74,16 @@ public class OpenAiChatCompletionProvider implements Provider {
     }
 
     @Override
+    public String name() {
+        return "chat-completion-mine";
+    }
+
+    @Override
+    public Api implement() {
+        return Api.CHAT_COMPLETION;
+    }
+
+    @Override
     public ProviderBlockingTextResponse sendPrompt(PromptParams promptParams) {
         PromptParams chatParams = promptParams.toBuilder().agentMode(AgentMode.CHAT).build();
         ChatCompletionCreateParams chatCompletionCreateParams = buildParams(chatParams);

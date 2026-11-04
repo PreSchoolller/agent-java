@@ -12,6 +12,7 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.ServiceLoader;
@@ -21,7 +22,19 @@ import java.util.stream.Stream;
 
 public class ProviderFactory {
 
-    private static volatile Map<String, Provider> providers = new ConcurrentHashMap<>();
+    private static final Map<String, Provider> RESPONSES_PROVIDERS = new ConcurrentHashMap<>();
+    private static final Map<String, Provider> CHAT_COMPLETION_PROVIDERS = new ConcurrentHashMap<>();
+    private static final Map<String, Provider> MESSAGES_PROVIDERS = new ConcurrentHashMap<>();
+
+    /**
+     * @key: Provider.Api
+     * @value: Provider, implement() 必须与 key 对应
+     */
+    private static final Map<Provider.Api, Provider> ACTIVE_PROVIDERS = new ConcurrentHashMap<>();
+
+    private static final AppSettings appSettings = AppSettings.get();
+
+    private ProviderFactory() {}
 
     public static Provider createResponseProvider() {
         return OpenAiResponseProvider.getInstance();
@@ -32,33 +45,79 @@ public class ProviderFactory {
     }
 
     public static Provider createProvider() {
-        String apiType = AppSettings.get().getApiType();
-        if (Profile.API_RESPONSE.equals(apiType)) {
-            return createResponseProvider();
+        String apiType = appSettings.getApiType();
+        if (apiType == null || apiType.isBlank()) {
+            apiType = Profile.API_RESPONSE;
         }
-        if (Profile.API_CHAT_COMPLETION.equals(apiType)) {
-            return createChatCompletionProvider();
-        }
-        if (Profile.API_MESSAGES.equals(apiType)) {
-            for (String name : providers.keySet()) {
-                if (name.startsWith(Profile.API_MESSAGES)) {
-                    return providers.get(name);
-                }
+        switch (apiType) {
+            case Profile.API_RESPONSE -> {
+                Provider activeResponses = resolveActiveProvider(Provider.Api.RESPONSES);
+                return activeResponses == null ? createResponseProvider() : activeResponses;
             }
-            Logger.warn("found no provider implement /v1/messages, fall back to response");
+            case Profile.API_CHAT_COMPLETION -> {
+                Provider activeChatCompletion = resolveActiveProvider(Provider.Api.CHAT_COMPLETION);
+                return activeChatCompletion == null ? createChatCompletionProvider() : activeChatCompletion;
+            }
+            case Profile.API_MESSAGES -> {
+                Provider activeMessages = resolveActiveProvider(Provider.Api.MESSAGES);
+                if (activeMessages != null) {
+                    return activeMessages;
+                }
+                Logger.warn("found no provider implement /v1/messages, fall back to response");
+            }
         }
         return createResponseProvider();
     }
 
+    private static Provider resolveActiveProvider(Provider.Api api) {
+        Provider provider = ACTIVE_PROVIDERS.get(api);
+        if (provider != null) {
+            return provider;
+        }
+        switch (api) {
+            case RESPONSES -> {
+                return RESPONSES_PROVIDERS.isEmpty() ? null : setActiveProvider(RESPONSES_PROVIDERS.get(Collections.min(RESPONSES_PROVIDERS.keySet())));
+            }
+            case CHAT_COMPLETION -> {
+                return CHAT_COMPLETION_PROVIDERS.isEmpty() ? null : setActiveProvider(CHAT_COMPLETION_PROVIDERS.get(Collections.min(CHAT_COMPLETION_PROVIDERS.keySet())));
+            }
+            case MESSAGES -> {
+                return MESSAGES_PROVIDERS.isEmpty() ? null : setActiveProvider(MESSAGES_PROVIDERS.get(Collections.min(MESSAGES_PROVIDERS.keySet())));
+            }
+            default -> {
+                return null;
+            }
+        }
+    }
+
+    public static Provider setActiveProvider(Provider provider) {
+        if (provider == null || provider.implement() == null) {
+            Logger.warn("trying set active provider with wrong type");
+            return null;
+        }
+        Provider value = ACTIVE_PROVIDERS.computeIfAbsent(provider.implement(), key -> provider);
+        if (value.equals(provider)) {
+            return value;
+        }
+        return ACTIVE_PROVIDERS.computeIfPresent(provider.implement(), (key, old) -> provider);
+    }
+
     private static void register(Provider provider) {
-        if (provider == null || (provider.name() != null && provider.name().isBlank())) {
+        if (provider == null || provider.name() == null || provider.name().isBlank() || provider.implement() == null) {
             Logger.info("null provider: ignore");
             return;
         }
-        providers.put(provider.name(), provider);
+        switch (provider.implement()) {
+            case RESPONSES -> RESPONSES_PROVIDERS.put(provider.name(), provider);
+            case CHAT_COMPLETION -> CHAT_COMPLETION_PROVIDERS.put(provider.name(), provider);
+            case MESSAGES -> MESSAGES_PROVIDERS.put(provider.name(), provider);
+            default -> throw new IllegalArgumentException("unsupported implementation");
+        }
     }
 
     public static void loadExternal() {
+        register(createResponseProvider());
+        register(createChatCompletionProvider());
         try {
             Files.createDirectories(Constants.PLUGIN_DIR);
         } catch (IOException e) {

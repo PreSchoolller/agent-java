@@ -98,6 +98,16 @@ public class OpenAiResponseProvider implements Provider {
     }
 
     @Override
+    public String name() {
+        return "responses-mine";
+    }
+
+    @Override
+    public Api implement() {
+        return Api.RESPONSES;
+    }
+
+    @Override
     public ProviderBlockingTextResponse sendPrompt(PromptParams promptParams) {
         PromptParams chatParams = promptParams.toBuilder().agentMode(AgentMode.CHAT).build();
         ResponseCreateParams responseCreateParams = buildParams(chatParams);

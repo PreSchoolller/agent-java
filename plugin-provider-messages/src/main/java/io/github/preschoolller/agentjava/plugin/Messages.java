@@ -93,6 +93,11 @@ public class Messages implements Provider {
         return "messages-mine";
     }
 
+    @Override
+    public Api implement() {
+        return Api.MESSAGES;
+    }
+
     private AnthropicClient getClient(KeyUrl keyUrl) {
         return clientPool.computeIfAbsent(keyUrl, ku -> AnthropicOkHttpClient.builder()
                 .apiKey(keyUrl.key())
