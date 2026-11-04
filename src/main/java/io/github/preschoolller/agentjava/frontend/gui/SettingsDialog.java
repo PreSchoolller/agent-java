@@ -345,6 +345,11 @@ public class SettingsDialog extends JDialog {
 
         JButton toggle = Ui.button(expanded ? "收起" : "展开");
         toggle.setPreferredSize(new Dimension(58, 26));
+        // 钉死最小尺寸：JButton 默认最小宽=纯文本宽（"展开"24px），而 GridBag 在卡片首选宽
+        // 超过容器时会整卡改按 getMinimumSize 摆（ArrangeGrid：parent.width < getMinSize
+        // 则 getLayoutInfo(MINSIZE)），长方案名/长 URL 的卡会把同排按钮全压成文本小钮；
+        // min=pref 后最小尺寸分支里按钮仍是 58x26，压缩由可折行的摘要列吸收
+        toggle.setMinimumSize(new Dimension(58, 26));
         toggle.addActionListener(e -> expandProfile(name));
         JLabel nameLabel = new JLabel(name);
         nameLabel.setFont(new Font("微软雅黑", Font.BOLD, 13));

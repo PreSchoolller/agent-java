@@ -86,7 +86,7 @@ src/main/java/io/github/preschoolller/agentjava/
 `foragent/` 是给 AI（和人）看的前端交接文档，改前端前必读：
 
 - **组件计划.md** —— 前端做了什么/还欠什么，改动要在这里登记状态；
-- **踩坑记录.md** —— Swing/工程真实踩过的 33 个坑（EDT 线程、首选宽反馈循环、z-order、
+- **踩坑记录.md** —— Swing/工程真实踩过的 34 个坑（EDT 线程、首选宽反馈循环、z-order、
   假 exited、测试污染用户配置……），改到对应模块先扫雷；
 - **src/test/** —— JUnit 5 回归测试：纯逻辑单测（持久化往返/配置方案/Markdown 解析）+
   GUI 回归 `WindowGuiTest`（有序用例，出 28 张截图 + UI 断言）：

@@ -24,6 +24,7 @@ import javax.swing.JTextPane;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import javax.swing.plaf.basic.BasicComboBoxUI;
+import javax.swing.plaf.basic.BasicComboPopup;
 import javax.swing.plaf.basic.BasicMenuItemUI;
 import javax.swing.plaf.basic.BasicScrollBarUI;
 import javax.swing.plaf.basic.BasicSplitPaneDivider;
@@ -438,13 +439,20 @@ final class Ui {
         combo.setUI(new BasicComboBoxUI() {
             @Override
             protected ComboPopup createPopup() {
-                ComboPopup popup = super.createPopup();
-                if (popup instanceof JComponent component) {
-                    component.setBorder(BorderFactory.createCompoundBorder(
-                            BorderFactory.createLineBorder(POPUP_BORDER),
-                            BorderFactory.createEmptyBorder(3, 3, 3, 3)));
-                    component.setBackground(MENU_BG);
-                }
+                // 弹出列表的滚动条换成现代细滚动条（createScroller 在 BasicComboPopup 上，
+                // 不覆写就是 Metal 白凸条，深色下突兀）
+                BasicComboPopup popup = new BasicComboPopup(comboBox) {
+                    @Override
+                    protected JScrollPane createScroller() {
+                        JScrollPane scroller = super.createScroller();
+                        styleScrollPane(scroller);
+                        return scroller;
+                    }
+                };
+                popup.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(POPUP_BORDER),
+                        BorderFactory.createEmptyBorder(3, 3, 3, 3)));
+                popup.setBackground(MENU_BG);
                 return popup;
             }
 
@@ -494,10 +502,17 @@ final class Ui {
         });
     }
 
-    /** 把滚动面板的纵横滚动条都换成现代细滚动条 */
+    /** 把滚动面板的纵横滚动条都换成现代细滚动条（横向可能为 null：JDK 17 的
+     *  BasicComboPopup.createScroller 显式 setHorizontalScrollBar(null)） */
     static void styleScrollPane(JScrollPane pane) {
-        styleScrollBar(pane.getVerticalScrollBar());
-        styleScrollBar(pane.getHorizontalScrollBar());
+        JScrollBar vsb = pane.getVerticalScrollBar();
+        if (vsb != null) {
+            styleScrollBar(vsb);
+        }
+        JScrollBar hsb = pane.getHorizontalScrollBar();
+        if (hsb != null) {
+            styleScrollBar(hsb);
+        }
     }
 
     /** 现代滚动条：无箭头按钮、透明轨道、圆角细拇指，悬停加深 */
