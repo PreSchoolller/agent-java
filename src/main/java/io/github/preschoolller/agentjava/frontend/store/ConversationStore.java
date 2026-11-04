@@ -362,6 +362,11 @@ public class ConversationStore {
         if (conversation.getWorkspace() != null) {
             map.put("workspace", conversation.getWorkspace()); // null（默认工作区）不写键
         }
+        if (conversation.getModelName() != null) {
+            // 会话级模型记忆（输入区下拉恢复用）；缺键（旧文件/没发过消息）= 未记录
+            map.put("model", conversation.getModelName());
+            map.put("modelProfile", conversation.getModelProfile());
+        }
         return map;
     }
 
@@ -430,6 +435,13 @@ public class ConversationStore {
                 Object workspace = map.get("workspace"); // 缺键（旧文件/默认工作区）= null
                 if (workspace != null && !String.valueOf(workspace).isBlank()) {
                     conversation.setWorkspace(String.valueOf(workspace));
+                }
+                Object modelName = map.get("model"); // 会话级模型记忆：缺键（旧文件/没发过消息）= 未记录
+                if (modelName != null && !String.valueOf(modelName).isBlank()) {
+                    Object modelProfile = map.get("modelProfile");
+                    conversation.setModelOption(
+                            modelProfile == null ? null : String.valueOf(modelProfile),
+                            String.valueOf(modelName));
                 }
                 // 按需加载：启动只读元数据，消息挂回读钩子，首次触达该会话消息时才读单会话文件。
                 // 消息只认单会话文件（文件名=会话 id）——旧格式内嵌消息不迁移，读到坏文件按无消息处理

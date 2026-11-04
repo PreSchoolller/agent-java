@@ -44,22 +44,21 @@ public class ProviderFactory {
         return OpenAiChatCompletionProvider.getInstance();
     }
 
-    public static Provider createProvider() {
-        String apiType = appSettings.getApiType();
+    public static Provider createProvider(String apiType) {
         if (apiType == null || apiType.isBlank()) {
             apiType = Profile.API_RESPONSE;
         }
         switch (apiType) {
             case Profile.API_RESPONSE -> {
-                Provider activeResponses = resolveActiveProvider(Provider.Api.RESPONSES);
+                Provider activeResponses = resolveActiveProvider(Provider.Api.RESPONSES, apiType);
                 return activeResponses == null ? createResponseProvider() : activeResponses;
             }
             case Profile.API_CHAT_COMPLETION -> {
-                Provider activeChatCompletion = resolveActiveProvider(Provider.Api.CHAT_COMPLETION);
+                Provider activeChatCompletion = resolveActiveProvider(Provider.Api.CHAT_COMPLETION, apiType);
                 return activeChatCompletion == null ? createChatCompletionProvider() : activeChatCompletion;
             }
             case Profile.API_MESSAGES -> {
-                Provider activeMessages = resolveActiveProvider(Provider.Api.MESSAGES);
+                Provider activeMessages = resolveActiveProvider(Provider.Api.MESSAGES, apiType);
                 if (activeMessages != null) {
                     return activeMessages;
                 }
@@ -69,7 +68,7 @@ public class ProviderFactory {
         return createResponseProvider();
     }
 
-    private static Provider resolveActiveProvider(Provider.Api api) {
+    private static Provider resolveActiveProvider(Provider.Api api, String apiType) {
         Provider provider = ACTIVE_PROVIDERS.get(api);
         if (provider != null) {
             return provider;
@@ -78,9 +77,9 @@ public class ProviderFactory {
         if (pool.isEmpty()) {
             return null;
         }
-        // 优先用当前方案落盘的 provider 名（设置页 Provider 单选）；名字失效（插件被删/改名）
-        // 或未指定时回落字典序最小——与设置页的默认预选一致
-        String preferred = appSettings.getActiveProviderName();
+        // 优先用全局落盘的 provider 名（设置页 Provider 单选，per-apiType 不随方案）；名字失效
+        // （插件被删/改名）或未指定时回落字典序最小——与设置页的默认预选一致
+        String preferred = appSettings.getActiveProviderName(apiType);
         Provider chosen = preferred == null ? null : pool.get(preferred);
         if (chosen == null) {
             chosen = pool.get(Collections.min(pool.keySet()));

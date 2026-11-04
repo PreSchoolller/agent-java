@@ -11,6 +11,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,11 +22,11 @@ import java.util.regex.PatternSyntaxException;
 
 /**
  * 应用设置（单例）：持久化到 ~/.agentjava/settings.properties。
- * 结构：若干套命名配置方案（Profile，后端请求参数）+ 当前方案名 + 全局 UI 偏好（正文字号）。
- * 落盘格式：profileNames（逗号连接保持顺序）、activeProfile、profile.&lt;名&gt;.&lt;字段&gt; 前缀键；
+ * 结构：若干套命名配置方案（Profile，后端请求参数）+ 各 API 类型的 provider 选择 + 全局 UI 偏好（正文字号）。
+ * 落盘格式：profileNames（逗号连接保持顺序）、profile.&lt;名&gt;.&lt;字段&gt; 前缀键、activeProvider.&lt;apiType&gt;；
  * v1 之前的平面键（backendUrl/model/...）在 load 时自动迁移进"默认"方案，下次 save 覆写消失。
- * 设置面板（SettingsDialog）编辑方案，后端通过 getActiveProfile()/getBackendUrl() 等委托方法
- * 拿到当前方案的参数，监听 fireChanged 感知变化。
+ * 没有活动方案概念：用哪套配置由输入区选中的模型所属方案决定（跨方案路由见 Main.streamReply）。
+ * 设置面板（SettingsDialog）编辑方案，监听 fireChanged 感知变化。
  * 测试用 AppSettings.at(Path) 拿独立实例（不走单例、不碰真实配置文件）。
  */
 public final class AppSettings {
@@ -38,7 +39,6 @@ public final class AppSettings {
 
     private final Path file;
     private final Map<String, Profile> profiles = new LinkedHashMap<>();
-    private String activeProfileName = DEFAULT_PROFILE_NAME;
     /** 消息卡片正文字号（全局 UI 偏好，不属于任何方案） */
     private int contentFontSize = 16;
     /** 配色主题（全局 UI 偏好）："light" / "dark" / "system"（跟随系统，Ui.resolveTheme 解析） */
@@ -70,6 +70,9 @@ public final class AppSettings {
     /** 转文件正则的长度帽：文件名启发式用不了多长，超长只可能是在塞回溯炸弹 */
     private static final int BASH_PATTERN_MAX_LENGTH = 256;
 
+    /** 各 API 类型下选用的 provider 名（Provider 页分组单选落盘，全局不随方案）；缺键=未指定，后端回落默认 */
+    private Map<String, String> activeProviderNames = new HashMap<>();
+
     private AppSettings(Path file) {
         this.file = file;
         load();
@@ -100,33 +103,13 @@ public final class AppSettings {
 
     // —— 方案管理 ——
 
-    /** 当前方案；名字对不上时兜底取第一个（配置文件被手工改过的情况） */
-    public Profile getActiveProfile() {
-        Profile profile = profiles.get(activeProfileName);
-        if (profile != null) {
-            return profile;
-        }
-        return profiles.values().iterator().next();
-    }
-
-    public String getActiveProfileName() {
-        return activeProfileName;
-    }
-
-    /** 全部方案名，保持列表顺序（侧栏下拉按这个顺序展示） */
+    /** 全部方案名，保持列表顺序（输入区模型下拉按这个顺序展开） */
     public List<String> getProfileNames() {
         return List.copyOf(profiles.keySet());
     }
 
     public Profile getProfile(String name) {
         return profiles.get(name);
-    }
-
-    /** 当前方案名（切换方案；后端下一次请求起生效） */
-    public void setActiveProfileName(String name) {
-        if (profiles.containsKey(name)) {
-            activeProfileName = name;
-        }
     }
 
     /** 新建方案（复制 source 的参数），名字已存在时返回 false */
@@ -145,9 +128,6 @@ public final class AppSettings {
             return false;
         }
         profiles.remove(name);
-        if (name.equals(activeProfileName)) {
-            activeProfileName = profiles.keySet().iterator().next();
-        }
         return true;
     }
 
@@ -167,14 +147,11 @@ public final class AppSettings {
         }
         profiles.clear();
         profiles.putAll(reordered);
-        if (oldName.equals(activeProfileName)) {
-            activeProfileName = normalized;
-        }
         return true;
     }
 
-    /** 整体替换方案集合并设定当前方案（设置面板保存时提交工作副本用），随后落盘并通知监听 */
-    public void applyProfiles(Map<String, Profile> replacement, String newActiveName) {
+    /** 整体替换方案集合（设置面板保存时提交工作副本用），随后落盘并通知监听 */
+    public void applyProfiles(Map<String, Profile> replacement) {
         if (replacement.isEmpty()) {
             return;
         }
@@ -182,9 +159,6 @@ public final class AppSettings {
         for (Map.Entry<String, Profile> entry : replacement.entrySet()) {
             profiles.put(entry.getKey(), entry.getValue().copy());
         }
-        activeProfileName = profiles.containsKey(newActiveName)
-                ? newActiveName
-                : profiles.keySet().iterator().next();
         save();
         fireChanged();
     }
@@ -198,32 +172,7 @@ public final class AppSettings {
         return copy;
     }
 
-    // —— 后端参数委托方法：直接读当前方案，接入后端的代码不用关心方案切换 ——
-
-    public String getBackendUrl() {
-        return getActiveProfile().getBackendUrl();
-    }
-
-    public String getKey() {
-        return getActiveProfile().getKey();
-    }
-
-    public List<String> getModels() {
-        return getActiveProfile().getModels();
-    }
-
-    /** 活动方案里按名字找模型元数据（输入区"默认推理等级"带出用）；找不到返回 null */
-    public ModelMeta getModelMeta(String model) {
-        if (model == null) {
-            return null;
-        }
-        for (ModelMeta meta : getActiveProfile().getModelMetas()) {
-            if (meta.getName().equals(model)) {
-                return meta;
-            }
-        }
-        return null;
-    }
+    // —— 跨方案查询：没有活动方案概念，用哪套配置由调用方按业务决定（如输入区选中的模型） ——
 
     /** 跨方案找模型元数据（输入区下拉已跨方案列模型，思考强度带出用）；同名取先注册的方案，找不到 null */
     public ModelMeta findModelMeta(String model) {
@@ -253,29 +202,26 @@ public final class AppSettings {
         return null;
     }
 
-    public String getModel() {
-        return getActiveProfile().getModel();
+    /** 各 API 类型下选用的 provider 名（Provider 页分组单选落盘，全局不随方案）；缺键=未指定，后端回落默认 */
+    public String getActiveProviderName(String apiType) {
+        return activeProviderNames.get(apiType);
     }
 
-    public double getTemperature() {
-        return getActiveProfile().getTemperature();
+    /** 全部 API 类型的 provider 选择（只读视图） */
+    public Map<String, String> getActiveProviderNames() {
+        return Map.copyOf(activeProviderNames);
     }
 
-    public int getMaxTokens() {
-        return getActiveProfile().getMaxTokens();
-    }
-
-    public String getSystemPrompt() {
-        return getActiveProfile().getSystemPrompt();
-    }
-
-    public String getApiType() {
-        return getActiveProfile().getApiType();
-    }
-
-    /** 当前方案 API 类型下使用的 provider 名；null=未指定（后端回落默认） */
-    public String getActiveProviderName() {
-        return getActiveProfile().getActiveProviderName();
+    /** 设置某 API 类型下的 provider 选择；null/空白=清除该类型的指定。名字是否在注册表里由后端解析时兜底 */
+    public void setActiveProviderName(String apiType, String name) {
+        if (apiType == null || !Profile.API_TYPES.contains(apiType)) {
+            return; // 未知类型丢弃：落盘只认三种已知类型
+        }
+        if (name == null || name.isBlank()) {
+            activeProviderNames.remove(apiType);
+        } else {
+            activeProviderNames.put(apiType, name.strip());
+        }
     }
 
     // —— 全局 UI 偏好 ——
@@ -583,7 +529,6 @@ public final class AppSettings {
     public synchronized void save() {
         Properties properties = new Properties();
         properties.setProperty("profileNames", String.join(",", profiles.keySet()));
-        properties.setProperty("activeProfile", activeProfileName);
         for (Map.Entry<String, Profile> entry : profiles.entrySet()) {
             String prefix = "profile." + entry.getKey() + ".";
             Profile profile = entry.getValue();
@@ -602,10 +547,6 @@ public final class AppSettings {
             metasJson.append(']');
             properties.setProperty(prefix + "modelsMeta", metasJson.toString());
             properties.setProperty(prefix + "apiType", profile.getApiType());
-            // 每个 API 类型的 provider 选择单独一键（Provider 页分组单选；缺键=该类型未指定）
-            for (Map.Entry<String, String> providerEntry : profile.getActiveProviderNames().entrySet()) {
-                properties.setProperty(prefix + "activeProvider." + providerEntry.getKey(), providerEntry.getValue());
-            }
             properties.setProperty(prefix + "temperature", String.valueOf(profile.getTemperature()));
             properties.setProperty(prefix + "maxTokens", String.valueOf(profile.getMaxTokens()));
             properties.setProperty(prefix + "systemPrompt", profile.getSystemPrompt());
@@ -618,6 +559,10 @@ public final class AppSettings {
         properties.setProperty("approvalBringToFront", String.valueOf(approvalBringToFront));
         if (enabledTools != null) {
             properties.setProperty("enabledTools", String.join(",", enabledTools));
+        }
+        // 各 API 类型的 provider 选择（全局，不随方案；Provider 页分组单选）：缺键=该类型未指定
+        for (Map.Entry<String, String> providerEntry : activeProviderNames.entrySet()) {
+            properties.setProperty("activeProvider." + providerEntry.getKey(), providerEntry.getValue());
         }
 
         properties.setProperty("windowWidth", String.valueOf(windowWidth));
@@ -673,6 +618,14 @@ public final class AppSettings {
         String patternRaw = properties.getProperty("bashFilePattern");
         bashFilePattern = patternRaw != null && !"something".equals(patternRaw.strip())
                 && isValidBashFilePattern(patternRaw) ? patternRaw.strip() : null;
+        // 各 API 类型的 provider 选择（全局，不随方案）：缺键/空白=未指定
+        activeProviderNames = new HashMap<>();
+        for (String apiType : Profile.API_TYPES) {
+            String providerName = properties.getProperty("activeProvider." + apiType);
+            if (providerName != null && !providerName.isBlank()) {
+                activeProviderNames.put(apiType, providerName.strip());
+            }
+        }
         logLevel = properties.getProperty("logLevel");
         if (logLevel == null || !allowLevels.contains(logLevel)) {
             logLevel = "info";
@@ -690,10 +643,6 @@ public final class AppSettings {
             if (profiles.isEmpty()) {
                 profiles.put(DEFAULT_PROFILE_NAME, new Profile());
             }
-            String active = properties.getProperty("activeProfile");
-            activeProfileName = active != null && profiles.containsKey(active)
-                    ? active
-                    : profiles.keySet().iterator().next();
         }
     }
 
@@ -727,15 +676,6 @@ public final class AppSettings {
         }
         // apiType 缺省（老文件）时保持字段默认 response；非法值在 setApiType 里回落
         profile.setApiType(properties.getProperty(prefix + "apiType", profile.getApiType()));
-        // 各 API 类型的 provider 选择：activeProvider.<apiType> 键逐个读；空白值丢弃
-        Map<String, String> providerNames = new LinkedHashMap<>();
-        for (String apiType : Profile.API_TYPES) {
-            String providerName = properties.getProperty(prefix + "activeProvider." + apiType);
-            if (providerName != null && !providerName.isBlank()) {
-                providerNames.put(apiType, providerName);
-            }
-        }
-        profile.setActiveProviderNames(providerNames);
         profile.setTemperature(parseDouble(properties.getProperty(prefix + "temperature"), profile.getTemperature()));
         profile.setMaxTokens(parseInt(properties.getProperty(prefix + "maxTokens"), profile.getMaxTokens()));
         profile.setSystemPrompt(properties.getProperty(prefix + "systemPrompt", profile.getSystemPrompt()));
@@ -752,7 +692,6 @@ public final class AppSettings {
         profile.setMaxTokens(parseInt(properties.getProperty("maxTokens"), profile.getMaxTokens()));
         profile.setSystemPrompt(properties.getProperty("systemPrompt", profile.getSystemPrompt()));
         profiles.put(DEFAULT_PROFILE_NAME, profile);
-        activeProfileName = DEFAULT_PROFILE_NAME;
     }
 
     /** 方案名约束：去首尾空白、非空、不含逗号（逗号是 profileNames 的分隔符）；非法返回 null */

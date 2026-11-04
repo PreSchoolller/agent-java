@@ -60,8 +60,8 @@ import java.util.function.Function;
  * 「模型服务」= 全部配置方案罗列成卡片、展开折叠（方案名/摘要 + 重命名/删除在卡头，新建在页顶）：
  * 展开哪张卡，共享的参数表单就移进哪张卡（后端地址/Key/API 类型/默认模型/温度/最大 Tokens/系统提示词
  * + 模型目录：每个模型一条可展开行，编辑名字/上下文窗口/最大输出/默认推理等级/输入能力，落 Profile.modelsMeta）；
- * 「Provider」= 全部注册 provider 按 API 类型分组单选（各类型独立落 Profile.activeProviderNames，
- * 请求走方案当前 apiType 那组的选择，后端 resolveActiveProvider 优先消费）；
+ * 「Provider」= 全部注册 provider 按 API 类型分组单选（全局落 AppSettings.activeProviderNames，不随方案；
+ * 请求走模型所属方案 apiType 那组的选择，后端 resolveActiveProvider 优先消费）；
  * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）
  * + bash 转文件正则（落 AppSettings.bashFilePattern：命中即写临时文件执行，替代 base64 管道）。
  * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
@@ -145,9 +145,7 @@ public class SettingsDialog extends JDialog {
         super(owner, "设置", modal);
 
         working = settings.copyProfiles();
-        selectedName = working.containsKey(settings.getActiveProfileName())
-                ? settings.getActiveProfileName()
-                : working.keySet().iterator().next();
+        selectedName = null; // 打开面板全部收起，点开哪张卡再编辑哪个
 
         temperatureSpinner = new JSpinner(new SpinnerNumberModel(0.0, 0.0, 2.0, 0.1));
         maxTokensSpinner = new JSpinner(new SpinnerNumberModel(64, 64, 1048576, 64));
@@ -450,9 +448,9 @@ public class SettingsDialog extends JDialog {
 
     /**
      * Provider 页：全部注册的 provider 按 API 类型分组罗列，组内单选，各类型的选择独立落
-     * Profile（activeProviderNames map，getActiveProviderName 按方案当前 apiType 取——后端
-     * 语义不变）。组内未指定时预选字典序第一个，与后端回落行为对齐。列表经 ProviderCatalog
-     * 读桥取（同 ToolCatalog 模式，失败退空列表给提示）。
+     * AppSettings（全局，不随方案——请求走模型所属方案的 apiType 那组）。组内未指定时预选
+     * 字典序第一个，与后端回落行为对齐。列表经 ProviderCatalog 读桥取（同 ToolCatalog 模式，
+     * 失败退空列表给提示）。
      */
     private JPanel buildProvidersPage() {
         JPanel groups = new JPanel();
@@ -489,7 +487,6 @@ public class SettingsDialog extends JDialog {
 
     /** 建 Provider 分组单选区：每个 API 类型一组（组头=类型名，组内单选互斥），打开时建一次 */
     private void buildProviderGroups() {
-        Profile profile = working.get(selectedName);
         for (String apiType : Profile.API_TYPES) {
             JPanel groupPanel = new JPanel(new GridBagLayout());
             groupPanel.setOpaque(false);
@@ -516,12 +513,12 @@ public class SettingsDialog extends JDialog {
                 gbc.gridy = 1;
                 groupPanel.add(empty, gbc);
             } else {
-                // 预选=该类型落盘的名字；未指定/失效回落字典序最小（与后端解析一致）
-                Map<String, String> stored = profile == null ? Map.of() : profile.getActiveProviderNames();
+                // 预选=该类型落盘的名字（全局存 AppSettings，不随方案）；未指定/失效回落字典序最小（与后端解析一致）
+                String stored = settings.getActiveProviderName(apiType);
                 String preselect = providers.get(0).name();
                 for (ProviderCatalog.ProviderInfo info : providers) {
-                    if (info.name().equals(stored.get(apiType))) {
-                        preselect = stored.get(apiType);
+                    if (info.name().equals(stored)) {
+                        preselect = stored;
                         break;
                     }
                 }
@@ -1162,21 +1159,6 @@ public class SettingsDialog extends JDialog {
         profile.setBackendUrl(backendUrlField.getText().strip());
         profile.setKey(keyField.getText().strip());
         profile.setApiType((String) apiTypeCombo.getSelectedItem());
-        // Provider 分组单选：每组收集选中名整体写回（注册表全空/列表没拿到时不动原值，
-        // 避免把已有选择洗净）；非当前 apiType 组的选择也存，切类型后即生效
-        int providerRadioCount = providerRadioGroups.values().stream().mapToInt(List::size).sum();
-        if (providerRadioCount > 0) {
-            Map<String, String> providerNames = new LinkedHashMap<>();
-            for (Map.Entry<String, List<JRadioButton>> group : providerRadioGroups.entrySet()) {
-                for (JRadioButton radio : group.getValue()) {
-                    if (radio.isSelected()) {
-                        providerNames.put(group.getKey(), (String) radio.getClientProperty("providerName"));
-                        break;
-                    }
-                }
-            }
-            profile.setActiveProviderNames(providerNames);
-        }
         // 模型目录从条目工作副本收集（名字空白行忽略——重命名中间态兜底）；默认项不在目录里
         // 落到第一个（Profile 统一兜底），上下文/最大输出/推理等级/输入能力随元数据一起落盘
         List<ModelMeta> metas = new ArrayList<>();
@@ -1194,7 +1176,7 @@ public class SettingsDialog extends JDialog {
         profile.setSystemPrompt(systemPromptArea.getText());
     }
 
-    /** 新建方案：复制当前展开方案（全部收起时复制活动方案）的参数作为起点 */
+    /** 新建方案：复制当前展开方案（全部收起时复制第一个）的参数作为起点 */
     private void addProfile() {
         String name = promptText("新建方案", "方案名称（复制当前方案参数）", suggestProfileName(),
                 value -> {
@@ -1211,7 +1193,7 @@ public class SettingsDialog extends JDialog {
             return;
         }
         flushFormIntoSelected();
-        String baseName = selectedName != null ? selectedName : settings.getActiveProfileName();
+        String baseName = selectedName != null ? selectedName : working.keySet().iterator().next();
         working.put(name, working.containsKey(baseName)
                 ? working.get(baseName).copy() : working.values().iterator().next().copy());
         selectedName = name;
@@ -1281,10 +1263,8 @@ public class SettingsDialog extends JDialog {
             bashPatternField.requestFocusInWindow();
             return;
         }
-        // 当前展开方案的表单值先落回工作副本（全部收起时没有表单可落，方案保持原值）；
-        // 活动方案=保存时展开的那个（与旧"下拉选中即活动"的语义一致），全部收起保持原活动方案
+        // 当前展开方案的表单值先落回工作副本（全部收起时没有表单可落，方案保持原值）
         flushFormIntoSelected();
-        String targetProfileName = selectedName != null ? selectedName : settings.getActiveProfileName();
         settings.setContentFontSize(((Number) fontSizeSpinner.getValue()).intValue());
         settings.setUiTheme(switch (themeCombo.getSelectedIndex()) {
             case 0 -> "system";
@@ -1310,9 +1290,21 @@ public class SettingsDialog extends JDialog {
         settings.setLogLevel((String) logLevelCombo.getSelectedItem());
         // 空白=清除配置；setter 内还有一道合法性校验（防御其他调用方）
         settings.setBashFilePattern(bashPatternField.getText());
-        settings.applyProfiles(working, targetProfileName); // 内部落盘 + fireChanged
-        // 保存的方案即活动方案：作废 active 缓存让下次 createProvider 按新落盘名字重新解析
-        // （不重启即时生效；重启则 resolveActiveProvider 从落盘值恢复，无需这步）
+        // Provider 分组单选：每组收集选中名写回全局（AppSettings.activeProvider.<apiType>，不随方案）。
+        // 注册表没拿到的组（单选列表为空）跳过不动原值，避免把已有选择洗净
+        for (Map.Entry<String, List<JRadioButton>> providerGroup : providerRadioGroups.entrySet()) {
+            if (providerGroup.getValue().isEmpty()) {
+                continue;
+            }
+            for (JRadioButton radio : providerGroup.getValue()) {
+                if (radio.isSelected()) {
+                    settings.setActiveProviderName(providerGroup.getKey(), (String) radio.getClientProperty("providerName"));
+                    break;
+                }
+            }
+        }
+        settings.applyProfiles(working); // 内部落盘 + fireChanged
+        // 作废 active 缓存让下次 createProvider 重新解析（不重启即时生效；重启则从落盘值恢复）
         ProviderFactory.invalidateActiveProvider();
         saved = true;
         dispose();

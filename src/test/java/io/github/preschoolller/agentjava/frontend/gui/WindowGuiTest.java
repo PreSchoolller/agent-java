@@ -83,6 +83,8 @@ class WindowGuiTest {
     private static SettingsDialog dialogHolder;
     private static List<ModelMeta> oldMetas;
     private static String oldModel;
+    /** s06 钉模型目录的方案（测试环境的第一个方案；设置里已无活动方案概念） */
+    private static String pinnedProfileName;
     private static String wsPath;
     private static Path storePath;
 
@@ -231,34 +233,40 @@ class WindowGuiTest {
         // 模型目录先钉成两条（内存改动不落盘，同主题偏好同款）：行删除钮"打开即可用"
         //（目录>1 的规则接替原模型列表删除钮）与展开参数区断言依赖确定形状——
         // 曾经 modelRow 写死 setEnabled(false) 把初始可用态按灭（踩坑 #25），这里钉死
-        oldMetas = AppSettings.get().getActiveProfile().getModelMetas();
-        oldModel = AppSettings.get().getActiveProfile().getModel();
+        oldMetas = AppSettings.get().getProfile(pinnedProfileName = AppSettings.get().getProfileNames().get(0)).getModelMetas();
+        oldModel = AppSettings.get().getProfile(pinnedProfileName).getModel();
         ModelMeta shotA = new ModelMeta("model-a");
         shotA.setCtxWindow("256K");
         shotA.setMaxOutput("32K");
         shotA.setReasoning("HIGH");
         ModelMeta shotB = new ModelMeta("model-b");
         shotB.setImage(true);
-        AppSettings.get().getActiveProfile().setModelMetas(List.of(shotA, shotB));
-        AppSettings.get().getActiveProfile().setModel("model-a");
+        AppSettings.get().getProfile(pinnedProfileName).setModelMetas(List.of(shotA, shotB));
+        AppSettings.get().getProfile(pinnedProfileName).setModel("model-a");
         edt(() -> {
             dialogHolder = new SettingsDialog(WINDOW, false);
             dialogHolder.setVisible(true);
         });
         Thread.sleep(600);
+        // 打开面板全部收起：只有卡片名字行 + 页顶新建钮，没有展开表单
+        assertTrue(uiHasShowingTextAnyWindow("默认") && uiHasShowingTextAnyWindow("新建"),
+                "方案卡片罗列（默认方案卡 + 页顶新建钮）");
+        assertFalse(uiHasShowingTextAnyWindow("收起") && uiHasShowingTextAnyWindow("后端地址"),
+                "打开面板全部收起（无展开表单）");
+        captureDialogGated("window-5-settings.png", "设置",
+                "设置面板默认页=模型服务：全部方案罗列成卡片、默认收起。改动请只看不保存——「保存」会写进你机器的真实偏好。");
+
+        // 展开首条：参数表单（后端地址/API 类型/模型目录）随之载入，目录两条 → 行删除钮可用
+        edt(() -> uiClickAnyWindow("展开"));
+        Thread.sleep(300);
+        assertTrue(uiHasShowingTextAnyWindow("收起") && uiHasShowingTextAnyWindow("API 类型"),
+                "展开后表单随卡显示");
         boolean[] modelDeleteEnabled = new boolean[1];
         edt(() -> modelDeleteEnabled[0] = dialogHolder.isModelRowDeleteEnabled(0));
-        assertTrue(modelDeleteEnabled[0], "打开设置行删除钮即可用（目录两条）");
-        captureDialogGated("window-5-settings.png", "设置",
-                "设置面板默认页=模型服务：后端地址/模型目录两条/温度等参数表单。改动请只看不保存——「保存」会写进你机器的真实偏好。");
+        assertTrue(modelDeleteEnabled[0], "展开后行删除钮即可用（目录两条）");
 
         // —— 设置面板分页断言（计划外）：默认页=模型服务；胶囊来回切，各自页内控件在/不在。
         //  用 uiHasShowingTextAnyWindow：CardLayout 隐藏页的组件仍在容器树里，不带显隐过滤会误报 ——
-        // 模型服务页=方案卡片手风琴：活动方案默认展开（「收起」钮在），表单（后端地址/API 类型）随卡显示
-        assertTrue(uiHasShowingTextAnyWindow("收起") && uiHasShowingTextAnyWindow("API 类型"),
-                "默认页=模型服务页（活动方案卡默认展开）");
-        assertTrue(uiHasShowingTextAnyWindow("默认") && uiHasShowingTextAnyWindow("新建"),
-                "方案卡片罗列（默认方案卡 + 页顶新建钮）");
         assertFalse(uiHasShowingTextAnyWindow("正文字号"), "模型服务页不含全局项");
         edt(() -> uiClickAnyWindow("通用"));
         Thread.sleep(400);
@@ -294,8 +302,9 @@ class WindowGuiTest {
                 "工具页：ToolManager 注册的工具逐条一行，勾选框=声明给模型（本次跑全量依赖，是真实注册行）。勾选态看看就好，别点「保存」。");
         edt(() -> uiClickAnyWindow("模型服务"));
         Thread.sleep(400);
-        assertTrue(uiHasShowingTextAnyWindow("后端地址"), "切回模型服务页");
-        // 展开首条：参数区出现（收起态只有名字行）——目录的参数行随"展开/收起"钮切换
+        assertTrue(uiHasShowingTextAnyWindow("后端地址"), "切回模型服务页（展开态保持）");
+        // 展开首条目录行：参数区出现（收起态只有名字行）——目录的参数行随"展开/收起"钮切换
+        //（卡片级此时已是展开态，钮文本为「收起」，这声「展开」命中的是目录条目行）
         edt(() -> uiClickAnyWindow("展开"));
         Thread.sleep(300);
         assertTrue(uiHasShowingTextAnyWindow("上下文") && uiHasShowingTextAnyWindow("最大输出"),
@@ -306,8 +315,8 @@ class WindowGuiTest {
                 "模型服务页展开首条目录：上下文/最大输出/推理等级/输入能力的参数区随「展开」钮打开。");
         edt(() -> dialogHolder.dispose());
         // 还原模型目录（改动只在内存，给后续深色/托盘段留原样）
-        AppSettings.get().getActiveProfile().setModelMetas(oldMetas);
-        AppSettings.get().getActiveProfile().setModel(oldModel);
+        AppSettings.get().getProfile(pinnedProfileName).setModelMetas(oldMetas);
+        AppSettings.get().getProfile(pinnedProfileName).setModel(oldModel);
     }
 
     @Test

@@ -28,6 +28,10 @@ public class Conversation {
     /** 工作区（规范化的绝对路径）：本会话里 agent 工具的相对路径基准；null = 默认工作区
      *  （AppSettings.defaultWorkspace——默认位置以后可换，没绑过的会话跟着走） */
     private String workspace;
+    /** 本会话最后使用的模型（裸模型名 + 所属方案名）：输入区下拉的会话级记忆，
+     *  切回会话/重启后恢复选中；null = 没记录（没发过消息的会话），随会话落盘 history */
+    private String modelName;
+    private String modelProfile;
     private final List<Message> messages = new ArrayList<>();
     /** 消息是否已在内存。新建/分叉出来的会话天然为 true；从索引装载的为 false，首次触达时经 loader 补齐 */
     private boolean loaded;
@@ -111,6 +115,21 @@ public class Conversation {
 
     public void setWorkspace(String workspace) {
         this.workspace = workspace;
+    }
+
+    public String getModelName() {
+        return modelName;
+    }
+
+    public String getModelProfile() {
+        return modelProfile;
+    }
+
+    /** 记录本会话使用的模型（发送/重新生成时盖戳）；不 touch——元数据记忆不改变侧栏排序，
+     *  落盘跟着同一会话随后的消息写一起走 */
+    public void setModelOption(String profileName, String modelName) {
+        this.modelProfile = profileName;
+        this.modelName = modelName;
     }
 
     /** 返回实时消息列表（未加载时先读盘补齐）；请勿在遍历时增删 */

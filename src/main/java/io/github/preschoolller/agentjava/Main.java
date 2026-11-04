@@ -29,6 +29,7 @@ import io.github.preschoolller.agentjava.frontend.gui.Window;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.Message;
+import io.github.preschoolller.agentjava.frontend.store.Profile;
 import org.tinylog.Logger;
 import org.tinylog.configuration.Configuration;
 
@@ -82,7 +83,7 @@ public class Main {
 
             // 回调触发时本轮用户消息已入库（Window.submitInput 先画卡再回调），
             // 历史快照直接取整个会话，无需单独传问题文本
-            window.onInputSubmitted((conversation, text) -> startAgentLoop(window, conversation, ProviderFactory.createProvider()));
+            window.onInputSubmitted((conversation, text) -> startAgentLoop(window, conversation));
 
             // 重新生成：先抢会话锁再删旧回答，然后带全量历史重新请求
             window.onRegenerate(conversation -> {
@@ -91,7 +92,7 @@ public class Main {
                     return; // 该会话已在生成（理论上不可达：生成中按钮隐藏），不动仓库
                 }
                 window.getStore().removeLastMessage(conversation.getId());
-                streamReply(window, conversation, ProviderFactory.createProvider(), token);
+                streamReply(window, conversation, token);
             });
 
             window.onStopRequested(() -> {
@@ -134,12 +135,12 @@ public class Main {
         return RUNNING.putIfAbsent(conversationId, token) == null ? token : null;
     }
 
-    private static void startAgentLoop(Window window, Conversation conversation, Provider provider) {
+    private static void startAgentLoop(Window window, Conversation conversation) {
         AtomicBoolean token = tryAcquire(conversation.getId());
         if (token == null) {
             return; // 该会话已在生成：正常情况 UI 已拦，这里是后端兜底
         }
-        streamReply(window, conversation, provider, token);
+        streamReply(window, conversation, token);
     }
 
     /**
@@ -147,24 +148,32 @@ public class Main {
      * 队列毒丸后等工具收尾，有工具结果就带着同一个取消令牌续下一轮，没有（或已停止）就释放会话锁。
      * 生成的会话不必在前台：卡片经会话 id 定向落库，用户切走再切回由 Window 的 rebind 重新上屏。
      */
-    private static void streamReply(Window window, Conversation conversation, Provider provider, AtomicBoolean cancelled) {
+    private static void streamReply(Window window, Conversation conversation, AtomicBoolean cancelled) {
         window.setConversationGenerating(conversation.getId(), true);
         // 历史快照与模型/强度/模式选择都在 EDT 上取（此时本轮 AI 占位卡还没建），
         // 之后仓库与下拉框可能被 EDT 修改，后台线程只读这份不可变数据
         List<PromptParams.RoleMessage> history = buildRoleMessages(conversation);
         String model = window.getSelectedModel();
-        // wip(多配置路由)：输入区模型下拉已跨方案列出所有配置的模型（Window.ModelOption 带所属方案，
-        // window.getSelectedModelProfile() 可取到），选中其他方案的模型时本轮应走那套配置——
-        // 接线路径：AppSettings.findProfileOwningModel(model) 找到所属方案，key/backendUrl/systemPrompt
-        // 从该方案快照；provider 的分派（该方案的 apiType 决定走哪个实现）也要跟着方案走。
-        // 下面四个读取暂保持"活动方案"不变，等后端接线。
+        // 多配置路由：输入区模型下拉跨方案列出所有配置的模型（Window.ModelOption 带所属方案），
+        // 选中哪个方案的模型，本轮就走那套配置——key/backendUrl/systemPrompt 从该方案快照，
+        // provider 按该方案的 apiType 分派（provider 名全局存 AppSettings，per-apiType）
+        String selectedProfile = window.getSelectedModelProfile();
+        Profile profile = selectedProfile == null ? null : appSettings.getProfile(selectedProfile);
+        if (profile == null) {
+            profile = appSettings.findProfileOwningModel(model); // 下拉没带所属方案时按模型名反查
+        }
+        if (profile == null) {
+            // 模型不属于任何方案（理论不可达）的最后兜底：第一个方案（load 保证至少一个）
+            profile = appSettings.getProfile(appSettings.getProfileNames().get(0));
+        }
+        Provider provider = ProviderFactory.createProvider(profile.getApiType());
         ReasoningEffortEnum re = window.getSelectedEffort(); // 模型与思考强度取输入区右下角的选择（对话级设置）
         AgentMode mode = window.getSelectedMode(); // 权限模式快照：本轮中途改下拉框不影响已发出的请求
         // 纯聊天不挂工具，工作区无所谓（保持 null：不建目录、系统提示词不注入）
         String workspace = AgentMode.CHAT == mode ? null : resolveWorkspace(conversation);
-        String key = appSettings.getKey();
-        String backendUrl = appSettings.getBackendUrl();
-        String systemPrompt = appSettings.getSystemPrompt();
+        String key = profile.getKey();
+        String backendUrl = profile.getBackendUrl();
+        String systemPrompt = profile.getSystemPrompt();
         List<String> enabledTools = appSettings.getEnabledTools();
         Window.AiStream stream = window.addAiMessage(conversation.getId(), "");
         long roundStartNanos = System.nanoTime(); // 本轮耗时（含 HTTP 建流），胶囊上展示用
@@ -235,7 +244,7 @@ public class Main {
                                 AtomicBoolean token = tryAcquire(convId);
                                 if (token != null) {
                                     PENDING_BG_DELIVERY.remove(convId);
-                                    streamReply(window, conversation, provider, token);
+                                    streamReply(window, conversation, token);
                                 }
                             }
                         }));
@@ -280,7 +289,7 @@ public class Main {
                 }
                 if (!cancelled.get() && !toolCalls.isEmpty()) {
                     // 工具续轮：同一个取消令牌、同一把会话锁，生成态保持到整条链结束
-                    SwingUtilities.invokeLater(() -> streamReply(window, conversation, provider, cancelled));
+                    SwingUtilities.invokeLater(() -> streamReply(window, conversation, cancelled));
                 } else {
                     // 双参 remove：条目还是本轮令牌才清（防御性的对称）
                     RUNNING.remove(conversation.getId(), cancelled);
@@ -293,7 +302,7 @@ public class Main {
                     }
                     if (bgToken != null) {
                         final AtomicBoolean continueToken = bgToken;
-                        SwingUtilities.invokeLater(() -> streamReply(window, conversation, provider, continueToken));
+                        SwingUtilities.invokeLater(() -> streamReply(window, conversation, continueToken));
                     } else {
                         SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), false));
                         if (!cancelled.get() && (inputTokens > 0 || outputTokens > 0)) {

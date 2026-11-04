@@ -175,7 +175,7 @@ public class Window extends JFrame {
     private JScrollPane inputScroll;
     private JButton sendButton;
     private JButton stopButton;
-    /** 输入区右下角：本次对话的模型与思考强度（对话级选择，选项来自当前方案的模型列表） */
+    /** 输入区右下角：本次对话的模型与思考强度（对话级选择，选项来自所有配置方案的模型目录） */
     private JComboBox<Object> modelCombo;
     private JComboBox<String> effortCombo;
     /** 输入区左下角：权限模式（计划=只读规划 / 编辑=允许改文件 / 完全访问=不受限 / 纯聊天=不挂工具），后端执行循环消费 */
@@ -1327,6 +1327,7 @@ public class Window extends JFrame {
         waterfallRowCount = 0;
         // 草稿按会话取回：上次没发完的文本还在（setText 会触发 DocumentListener 写回同值，无碍）
         inputTextArea.setText(draftsByConversation.getOrDefault(conversation.getId(), ""));
+        restoreConversationModel(conversation); // 模型下拉跟回会话记忆（该会话上次用的模型）
         if (conversation.isEmpty()) {
             GridBagConstraints gbc = rowConstraints(false);
             gbc.fill = GridBagConstraints.NONE;
@@ -1350,6 +1351,32 @@ public class Window extends JFrame {
         waterfallPanel.repaint();
         refreshGeneratingUi(); // 输入区状态跟随目标会话：切到生成中的会话要置灰并出停止按钮
         inputTextArea.requestFocusInWindow();
+    }
+
+    /** 把输入区当前选中的模型盖到会话的记忆字段上（发送/重新生成时调；随本会话随后的消息写一起落盘） */
+    private void stampConversationModel(Conversation conversation) {
+        if (getSelectedModel() != null && getSelectedModelProfile() != null) {
+            conversation.setModelOption(getSelectedModelProfile(), getSelectedModel());
+        }
+    }
+
+    /** 会话级模型记忆恢复：记录的（方案，模型）还在下拉里就选中它——setSelectedItem 触发监听器
+     *  顺带带出该模型的思考强度默认值；没记录或已失效（方案/模型被删）保持当前选中不动 */
+    private void restoreConversationModel(Conversation conversation) {
+        if (conversation.getModelName() == null) {
+            return;
+        }
+        for (int i = 0; i < modelCombo.getItemCount(); i++) {
+            if (!(modelCombo.getItemAt(i) instanceof ModelOption option)
+                    || !option.modelName().equals(conversation.getModelName())
+                    || !option.profileName().equals(conversation.getModelProfile())) {
+                continue;
+            }
+            if (!option.equals(modelCombo.getSelectedItem())) {
+                modelCombo.setSelectedItem(option);
+            }
+            return;
+        }
     }
 
     /** 把进行中的流式句柄重新挂到重建后的卡片上（按消息同一性匹配）；只处理当前会话的 */
@@ -2040,6 +2067,7 @@ public class Window extends JFrame {
         refreshRegenerateButtons();
         waterfallPanel.revalidate();
         if (regenerateHandler != null) {
+            stampConversationModel(store.getActive()); // 重新生成同样按当前选中的模型盖戳
             regenerateHandler.accept(store.getActive());
         }
     }
@@ -2583,6 +2611,7 @@ public class Window extends JFrame {
         if (text.isEmpty() || isGenerating(displayedConvId)) {
             return;
         }
+        stampConversationModel(store.getActive()); // 先盖戳再入库：模型记忆随本次消息一起落盘
         addUserMessage(text);
         inputTextArea.setText("");
         if (inputHandler != null) {
@@ -2699,9 +2728,8 @@ public class Window extends JFrame {
 
         // 输入框右下角一排：模型选择 + 思考强度 + 发送/停止。
         // 模型下拉跨方案：所有配置方案的目录模型都列出（ModelOption 带所属方案），
-        // 活动方案的模型显示裸名，其他方案带方案名后缀区分
+        // 统一显示「model（profile）」，跨方案同名模型不混淆
         modelCombo = new JComboBox<>();
-        String activeProfileName = AppSettings.get().getActiveProfileName();
         for (String profileName : AppSettings.get().getProfileNames()) {
             Profile profile = AppSettings.get().getProfile(profileName);
             if (profile == null) {
@@ -2711,16 +2739,8 @@ public class Window extends JFrame {
                 modelCombo.addItem(new ModelOption(profileName, model));
             }
         }
-        // 初选：活动方案的默认模型；被删/改名找不到时落第一项
-        String activeModel = AppSettings.get().getModel();
-        for (int i = 0; i < modelCombo.getItemCount(); i++) {
-            if (modelCombo.getItemAt(i) instanceof ModelOption option
-                    && option.profileName().equals(activeProfileName) && option.modelName().equals(activeModel)) {
-                modelCombo.setSelectedItem(option);
-                break;
-            }
-        }
-        if (modelCombo.getSelectedItem() == null && modelCombo.getItemCount() > 0) {
+        // 初选：第一项（没有活动方案概念，选中项本身即"本轮用哪套配置"的状态）
+        if (modelCombo.getItemCount() > 0) {
             modelCombo.setSelectedIndex(0);
         }
         modelCombo.setPreferredSize(new Dimension(180, 26));
@@ -2731,9 +2751,8 @@ public class Window extends JFrame {
         effortCombo.setToolTipText("思考强度");
         Ui.styleComboBox(modelCombo);
         Ui.styleComboBox(effortCombo);
-        // 渲染器在 styleComboBox 之后挂（它会给非 ModelOption 项换默认渲染）：活动方案的模型
-        // 显示裸名，其他方案带方案名后缀区分
-        modelCombo.setRenderer(renderModelOption(AppSettings.get().getActiveProfileName()));
+        // 渲染器在 styleComboBox 之后挂（它会给非 ModelOption 项换默认渲染）
+        modelCombo.setRenderer(renderModelOption());
         // 模型元数据里的"默认推理等级"接出：选中模型变化时思考强度带出该模型的默认值
         //（元数据没设 = 跟随当前选择，不动）
         modelCombo.addActionListener(e -> syncEffortToModelDefault());
@@ -2834,18 +2853,16 @@ public class Window extends JFrame {
     }
 
     /**
-     * 模型下拉渲染器工厂：活动方案的模型显示裸名，其他方案显示「model（profile）」。
+     * 模型下拉渲染器工厂：统一显示「model（profile）」，跨方案同名模型不混淆。
      * 样式镜像 Ui.styleComboBox 的默认渲染（它整体会换 renderer，这里在其之后覆盖挂载）。
      */
-    private javax.swing.ListCellRenderer<Object> renderModelOption(String activeProfileName) {
+    private javax.swing.ListCellRenderer<Object> renderModelOption() {
         return new javax.swing.DefaultListCellRenderer() {
             @Override
             public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
                                                                    int index, boolean selected, boolean focus) {
                 String text = value instanceof ModelOption option
-                        ? (option.profileName().equals(activeProfileName)
-                                ? option.modelName()
-                                : option.modelName() + "（" + option.profileName() + "）")
+                        ? option.modelName() + "（" + option.profileName() + "）"
                         : String.valueOf(value);
                 javax.swing.JLabel label = (javax.swing.JLabel) super.getListCellRendererComponent(
                         list, text, index, selected, focus);
