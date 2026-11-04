@@ -447,15 +447,15 @@ public final class AppSettings {
 
     /**
      * 已勾选的工具名列表：设置面板"工具"页的勾选结果（落盘 enabledTools，逗号连接）。
-     * 未配置过（null）时语义为全部启用，当场经 ToolCatalog 反射取注册表全名——
-     * 注册表拿不出来（裸类路径回归，踩坑 #26 语义）时退空列表，调用方按空=未配置兜底。
-     * 已配置时返回存值副本（含显式空列表=全不启用，调用方原样消费即可）。
+     * 未配置过（null）时语义为全部启用，透传 null
+     * 空列表表示全部禁用，历史用过的为保持一致性后端仍然启用
+     * @return nullable
      */
     public List<String> getEnabledTools() {
         if (enabledTools != null) {
             return List.copyOf(enabledTools);
         }
-        return ToolCatalog.registeredNames();
+        return null;
     }
 
     /** 某个工具当前是否勾选：未配置视为全部启用 */

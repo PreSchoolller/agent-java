@@ -94,16 +94,10 @@ public class Messages implements Provider {
     }
 
     private AnthropicClient getClient(KeyUrl keyUrl) {
-        AnthropicClient client = clientPool.get(keyUrl);
-        if (client != null) {
-            return client;
-        }
-        client = AnthropicOkHttpClient.builder()
+        return clientPool.computeIfAbsent(keyUrl, ku -> AnthropicOkHttpClient.builder()
                 .apiKey(keyUrl.key())
                 .baseUrl(keyUrl.backendUrl())
-                .build();
-        clientPool.putIfAbsent(keyUrl, client);
-        return client;
+                .build());
     }
 
     @Override

@@ -167,7 +167,6 @@ public class ToolManager {
                 continue;
             }
             result.add(tool);
-            names.add(name);
         }
         return Collections.unmodifiableList(result);
     }

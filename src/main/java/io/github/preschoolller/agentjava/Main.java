@@ -157,6 +157,10 @@ public class Main {
         AgentMode mode = window.getSelectedMode(); // 权限模式快照：本轮中途改下拉框不影响已发出的请求
         // 纯聊天不挂工具，工作区无所谓（保持 null：不建目录、系统提示词不注入）
         String workspace = AgentMode.CHAT == mode ? null : resolveWorkspace(conversation);
+        String key = appSettings.getKey();
+        String backendUrl = appSettings.getBackendUrl();
+        String systemPrompt = appSettings.getSystemPrompt();
+        List<String> enabledTools = appSettings.getEnabledTools();
         Window.AiStream stream = window.addAiMessage(conversation.getId(), "");
         long roundStartNanos = System.nanoTime(); // 本轮耗时（含 HTTP 建流），胶囊上展示用
         CompletableFuture.runAsync(() -> {
@@ -171,11 +175,8 @@ public class Main {
             long outputTokens = 0;
             try {
                 PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
-                        .agentMode(mode).workspace(workspace)
-                        .key(appSettings.getKey())
-                        .backendUrl(appSettings.getBackendUrl())
-                        .systemPrompt(appSettings.getSystemPrompt())
-                        .enabledTools(appSettings.getEnabledTools());
+                        .agentMode(mode).workspace(workspace).key(key).backendUrl(backendUrl)
+                        .systemPrompt(systemPrompt).enabledTools(enabledTools);
                 for (PromptParams.RoleMessage roleMessage : history) {
                     paramsBuilder.roleMessages(roleMessage);
                 }

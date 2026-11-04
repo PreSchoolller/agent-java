@@ -91,16 +91,10 @@ public class OpenAiResponseProvider implements Provider {
     }
 
     static OpenAIClient getClient(KeyUrl keyUrl) {
-        OpenAIClient client = clientPool.get(keyUrl);
-        if (client != null) {
-            return client;
-        }
-        client = OpenAIOkHttpClient.builder()
-                .apiKey(keyUrl.key())
-                .baseUrl(keyUrl.backendUrl())
-                .build();
-        clientPool.putIfAbsent(keyUrl, client);
-        return client;
+        return clientPool.computeIfAbsent(keyUrl, ku -> OpenAIOkHttpClient.builder()
+                .apiKey(ku.key())
+                .baseUrl(ku.backendUrl())
+                .build());
     }
 
     @Override
