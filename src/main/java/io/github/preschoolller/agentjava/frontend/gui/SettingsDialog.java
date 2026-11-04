@@ -1,13 +1,16 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
+import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
+import io.github.preschoolller.agentjava.frontend.store.ProviderCatalog;
 import io.github.preschoolller.agentjava.frontend.store.ToolCatalog;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.ButtonGroup;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
@@ -15,6 +18,7 @@ import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JRadioButton;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JTextArea;
@@ -51,10 +55,12 @@ import java.util.function.Function;
 
 /**
  * 设置面板（模态对话框）：编辑 AppSettings 并持久化。
- * 顶部标签页分三页（胶囊切页，当前页主题色实心）：
+ * 顶部标签页分四页（胶囊切页，当前页主题色实心）：
  * 「通用」= 全局对话体验（主题/正文字号/关闭按钮/审核通知）；
  * 「模型服务」= 配置方案的全部参数（方案管理/后端地址/Key/API 类型/默认模型/温度/最大 Tokens/系统提示词
  * + 模型目录：每个模型一条可展开行，编辑名字/上下文窗口/最大输出/默认推理等级/输入能力，落 Profile.modelsMeta）；
+ * 「Provider」= 当前方案 API 类型下的 provider 单选（落 Profile.activeProviderName，
+ * 后端 resolveActiveProvider 优先消费）；
  * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）
  * + bash 转文件正则（落 AppSettings.bashFilePattern：命中即写临时文件执行，替代 base64 管道）。
  * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
@@ -103,6 +109,11 @@ public class SettingsDialog extends JDialog {
     private final Map<ModelMeta, Boolean> expandedStates = new IdentityHashMap<>();
     /** 工具页的勾选框（按注册表顺序建；保存时按 clientProperty 里的工具名收集勾选结果） */
     private final List<JCheckBox> toolCheckBoxes = new ArrayList<>();
+    /** Provider 页的单选钮（随工作方案 API 类型重建；保存时按 clientProperty 里的 provider 名收集） */
+    private final List<JRadioButton> providerRadios = new ArrayList<>();
+    private final ButtonGroup providerGroup = new ButtonGroup();
+    /** Provider 单选行的容器（换 API 类型/换方案时整体重建） */
+    private JPanel providerListPanel;
     /** bash 转文件正则（工具页）：命令文本命中即改写临时文件执行，替代 base64 管道；
      *  非空时必须是合法且安全的正则（AppSettings.isValidBashFilePattern），保存前拦截 */
     private final JTextField bashPatternField = new JTextField();
@@ -116,9 +127,10 @@ public class SettingsDialog extends JDialog {
     private final JTextArea systemPromptArea = new JTextArea(6, 24);
     private boolean saved;
 
-    /** 标签页 id：通用（全局对话体验）/ 模型服务（配置方案参数）/ 工具（注册表勾选名单）；默认页=模型服务 */
+    /** 标签页 id：通用（全局对话体验）/ 模型服务（配置方案参数）/ Provider（单选实现）/ 工具（注册表勾选名单）；默认页=模型服务 */
     private static final String TAB_GENERAL = "general";
     private static final String TAB_PROFILE = "profile";
+    private static final String TAB_PROVIDERS = "providers";
     private static final String TAB_TOOLS = "tools";
     private String currentTab = TAB_PROFILE;
     private JPanel tabsPanel;
@@ -186,8 +198,9 @@ public class SettingsDialog extends JDialog {
         Ui.styleSpinner(fontSizeSpinner);
         Ui.styleComboBox(profileCombo);
         Ui.styleComboBox(apiTypeCombo);
-        apiTypeCombo.setToolTipText("后端 API 协议：response=OpenAI Responses（当前实现）；"
-                + "chatcompletion=OpenAI Chat Completions、messages=Anthropic Messages 待后端支持");
+        apiTypeCombo.setToolTipText("后端 API 协议：response=OpenAI Responses、"
+                + "chatcompletion=OpenAI Chat Completions、messages=Anthropic Messages；"
+                + "该类型下用哪个 Provider 在「Provider」页选择");
         apiTypeCombo.setPreferredSize(new Dimension(150, 30));
         Ui.styleComboBox(themeCombo);
         themeCombo.setPreferredSize(new Dimension(150, 30));
@@ -206,6 +219,7 @@ public class SettingsDialog extends JDialog {
         tabsPanel.setBorder(BorderFactory.createEmptyBorder(0, 18, 4, 18));
         tabsPanel.add(new TabButton("通用", TAB_GENERAL));
         tabsPanel.add(new TabButton("模型服务", TAB_PROFILE));
+        tabsPanel.add(new TabButton("Provider", TAB_PROVIDERS));
         tabsPanel.add(new TabButton("工具", TAB_TOOLS));
 
         // 两页内容（CardLayout 切换）：每页各自套滚动容器——原先是两卡同屏共用一份
@@ -216,8 +230,11 @@ public class SettingsDialog extends JDialog {
         pagesPanel.setOpaque(false);
         pagesPanel.add(wrapPage(buildGeneralPage()), TAB_GENERAL);
         pagesPanel.add(wrapPage(buildProfilePage()), TAB_PROFILE);
+        pagesPanel.add(wrapPage(buildProvidersPage()), TAB_PROVIDERS);
         pagesPanel.add(wrapPage(buildToolsPage()), TAB_TOOLS);
         pageLayout.show(pagesPanel, currentTab);
+        // API 类型改动实时反映到 Provider 页的单选列表（loadSelectedProfile 里的重建覆盖换方案场景）
+        apiTypeCombo.addActionListener(e -> rebuildProviderPanel());
 
         JButton saveButton = Ui.primaryButton("保存");
         JButton cancelButton = Ui.button("取消");
@@ -330,6 +347,100 @@ public class SettingsDialog extends JDialog {
         groups.add(backendCard);
         groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
         return groups;
+    }
+
+    /**
+     * Provider 页：当前方案 API 类型（模型服务页的 API 类型下拉，取工作副本实时值）下注册的
+     * provider 逐条单选，落 Profile.activeProviderName（后端 resolveActiveProvider 优先用它，
+     * 失效/未指定回落字典序最小——所以未指定时预选第一个，和后端行为对齐）。列表经
+     * ProviderCatalog 读桥取（同 ToolCatalog 模式，失败退空列表给提示）；换 API 类型或换
+     * 方案时单选区整体重建。
+     */
+    private JPanel buildProvidersPage() {
+        JPanel groups = new JPanel();
+        groups.setLayout(new BoxLayout(groups, BoxLayout.Y_AXIS));
+        groups.setBackground(Ui.BG);
+        groups.setBorder(BorderFactory.createEmptyBorder(6, 18, 4, 18));
+
+        JPanel card = Ui.card(Ui.CARD_BG);
+        card.setLayout(new GridBagLayout());
+        JLabel hint = new JLabel("<html><div style='width:330px'><span style='color:"
+                + Ui.hex(Ui.TEXT_SECONDARY) + "'>当前方案 API 类型（模型服务页）下注册的 Provider，"
+                + "单选其一发送请求；列表来自插件注册表，未指定时后端取第一个（字典序）</span></div></html>");
+        hint.setFont(Ui.FONT_PLAIN);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(10, 14, 6, 14);
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        card.add(hint, gbc);
+
+        providerListPanel = new JPanel(new GridBagLayout());
+        providerListPanel.setOpaque(false);
+        gbc.insets = new Insets(0, 0, 0, 0);
+        gbc.gridy = 1;
+        card.add(providerListPanel, gbc);
+        rebuildProviderPanel();
+        groups.add(card);
+        groups.add(Box.createVerticalGlue());
+        return groups;
+    }
+
+    /** 按当前 API 类型重建单选区：预选=方案落盘名字（失效/未指定时第一个）；注册表空给兜底提示 */
+    private void rebuildProviderPanel() {
+        if (providerListPanel == null) {
+            return; // 构造期 loadSelectedProfile 先于页面创建
+        }
+        for (JRadioButton radio : providerRadios) {
+            providerGroup.remove(radio);
+        }
+        providerRadios.clear();
+        providerListPanel.removeAll();
+
+        Profile profile = working.get(selectedName);
+        String apiType = apiTypeCombo.getSelectedItem() instanceof String selected && !selected.isBlank()
+                ? selected
+                : (profile != null ? profile.getApiType() : Profile.API_RESPONSE);
+        List<ProviderCatalog.ProviderInfo> providers = ProviderCatalog.registered(apiType);
+        if (providers.isEmpty()) {
+            JLabel empty = new JLabel("未拿到该 API 类型下的 Provider 列表（注册表不可用或没有注册）");
+            empty.setFont(Ui.FONT_PLAIN);
+            empty.setForeground(Ui.TEXT_SECONDARY);
+            GridBagConstraints gbc = new GridBagConstraints();
+            gbc.insets = new Insets(10, 14, 10, 14);
+            gbc.anchor = GridBagConstraints.WEST;
+            providerListPanel.add(empty, gbc);
+        } else {
+            String stored = profile == null ? null : profile.getActiveProviderName();
+            String preselect = providers.get(0).name(); // 后端回落语义：字典序最小
+            for (ProviderCatalog.ProviderInfo info : providers) {
+                if (info.name().equals(stored)) {
+                    preselect = stored;
+                    break;
+                }
+            }
+            GridBagConstraints gbc = new GridBagConstraints();
+            gbc.insets = new Insets(4, 14, 4, 14);
+            gbc.anchor = GridBagConstraints.WEST;
+            gbc.weightx = 1;
+            gbc.fill = GridBagConstraints.HORIZONTAL;
+            int row = 0;
+            for (ProviderCatalog.ProviderInfo info : providers) {
+                JRadioButton radio = new JRadioButton(info.name());
+                radio.putClientProperty("providerName", info.name());
+                radio.setToolTipText(info.className() + "：该 API 类型下发送请求的 provider 实现");
+                Ui.styleRadioButton(radio);
+                radio.setSelected(info.name().equals(preselect));
+                providerGroup.add(radio);
+                providerRadios.add(radio);
+                gbc.gridy = row++;
+                providerListPanel.add(radio, gbc);
+            }
+        }
+        providerListPanel.revalidate();
+        providerListPanel.repaint();
     }
 
     /**
@@ -982,6 +1093,7 @@ public class SettingsDialog extends JDialog {
         temperatureSpinner.setValue(profile.getTemperature());
         maxTokensSpinner.setValue(profile.getMaxTokens());
         systemPromptArea.setText(profile.getSystemPrompt());
+        rebuildProviderPanel(); // 换方案：Provider 单选区跟着方案的 API 类型和落盘名字重建
     }
 
     /** 新建方案：复制当前方案参数作为起点 */
@@ -1064,6 +1176,17 @@ public class SettingsDialog extends JDialog {
         profile.setBackendUrl(backendUrlField.getText().strip());
         profile.setKey(keyField.getText().strip());
         profile.setApiType((String) apiTypeCombo.getSelectedItem());
+        // Provider 单选：注册表空（列表没拿到）时不动原值，避免把已有选择洗净
+        if (!providerRadios.isEmpty()) {
+            String chosenProvider = null;
+            for (JRadioButton radio : providerRadios) {
+                if (radio.isSelected()) {
+                    chosenProvider = (String) radio.getClientProperty("providerName");
+                    break;
+                }
+            }
+            profile.setActiveProviderName(chosenProvider);
+        }
         // 模型目录从条目工作副本收集（名字空白行忽略——重命名中间态兜底）；默认项不在目录里
         // 落到第一个（Profile 统一兜底），上下文/最大输出/推理等级/输入能力随元数据一起落盘
         List<ModelMeta> metas = new ArrayList<>();
@@ -1105,6 +1228,9 @@ public class SettingsDialog extends JDialog {
         // 空白=清除配置；setter 内还有一道合法性校验（防御其他调用方）
         settings.setBashFilePattern(bashPatternField.getText());
         settings.applyProfiles(working, selectedName); // 内部落盘 + fireChanged
+        // 保存的方案即活动方案：作废 active 缓存让下次 createProvider 按新落盘名字重新解析
+        // （不重启即时生效；重启则 resolveActiveProvider 从落盘值恢复，无需这步）
+        ProviderFactory.invalidateActiveProvider();
         saved = true;
         dispose();
     }

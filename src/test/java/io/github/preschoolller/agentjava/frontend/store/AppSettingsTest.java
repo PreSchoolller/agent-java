@@ -202,7 +202,23 @@ class AppSettingsTest {
     }
 
     @Test
-    void t09_bashFilePattern() throws Exception {
+    void t09_activeProviderName() {
+        Path settingsFile = file("settings.properties");
+        AppSettings testSettings = AppSettings.at(settingsFile);
+        // Provider 单选名单（落 Profile.activeProviderName，后端 resolveActiveProvider 优先消费）：
+        // 默认未指定（null，后端回落默认）；落盘往返；空白=清除指定（与 null 同语义）
+        assertNull(testSettings.getActiveProviderName(), "未指定默认 null");
+        testSettings.getActiveProfile().setActiveProviderName("messages-mine");
+        testSettings.save();
+        assertEquals("messages-mine", AppSettings.at(settingsFile).getActiveProviderName(), "provider 名落盘往返");
+        testSettings.getActiveProfile().setActiveProviderName("   ");
+        assertNull(testSettings.getActiveProfile().getActiveProviderName(), "空白清除指定");
+        testSettings.getActiveProfile().setActiveProviderName(" chat-completion-mine ");
+        assertEquals("chat-completion-mine", testSettings.getActiveProfile().getActiveProviderName(), "strip 落值");
+    }
+
+    @Test
+    void t10_bashFilePattern() throws Exception {
         Path settingsFile = file("settings.properties");
         AppSettings testSettings = AppSettings.at(settingsFile);
         // 默认未配置（null）：bash 工具只按超长阈值转文件，不再拿 "something" 字面量乱匹配

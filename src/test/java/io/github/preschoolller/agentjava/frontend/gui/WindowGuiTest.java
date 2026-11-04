@@ -265,6 +265,16 @@ class WindowGuiTest {
                 && uiHasShowingTextAnyWindow("审核到来时窗口抢到前台"), "通用页审核通知三开关在");
         assertFalse(uiHasShowingTextAnyWindow("配置方案"), "通用页不含配置方案控件");
         captureDialogGated("window-5b-settings-general.png", "设置", "通用页：正文字号/主题/日志等级 + 审核通知三开关的表单形态。");
+        // Provider 页：回归环境不跑 WarmUpStuff.loadExternal，注册池为空 → 断言兜底提示形态；
+        // 真实应用的注册行（responses-mine 等）由截图目检兜底
+        edt(() -> uiClickAnyWindow("Provider"));
+        Thread.sleep(400);
+        assertFalse(uiHasShowingTextAnyWindow("配置方案"), "Provider 页不含模型服务页控件");
+        assertFalse(uiHasShowingTextAnyWindow("正文字号"), "Provider 页不含通用页控件");
+        assertTrue(uiHasShowingTextAnyWindow("未拿到该 API 类型下的 Provider 列表（注册表不可用或没有注册）"),
+                "Provider 页注册表空时给兜底提示");
+        captureDialogGated("window-5e-settings-providers.png", "设置",
+                "Provider 页：当前方案 API 类型下注册的 provider 单选（回归环境注册池为空显示兜底提示；真实应用显示 responses-mine 等单选行）。");
         // 工具页：注册表直连读（ToolCatalog 包 catch(Throwable)），切页断言只看不依赖注册表可见性的两侧
         edt(() -> uiClickAnyWindow("工具"));
         Thread.sleep(400);

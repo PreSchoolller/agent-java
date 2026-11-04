@@ -13,6 +13,7 @@ import javax.swing.JList;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
+import javax.swing.JRadioButton;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
@@ -652,6 +653,47 @@ final class Ui {
         box.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         box.setIcon(checkBoxIcon(false));
         box.setSelectedIcon(checkBoxIcon(true));
+    }
+
+    /** 单选按钮：样式同 styleCheckBox（颜色现场读镜像），图标为圆形+选中实心点 */
+    static void styleRadioButton(JRadioButton radio) {
+        radio.setOpaque(false);
+        radio.setFont(FONT_PLAIN);
+        radio.setForeground(TEXT); // 默认黑字，深色下隐形（踩坑 #19）
+        radio.setFocusPainted(false);
+        radio.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        radio.setIcon(radioButtonIcon(false));
+        radio.setSelectedIcon(radioButtonIcon(true));
+    }
+
+    private static Icon radioButtonIcon(boolean selected) {
+        int size = 15;
+        return new Icon() {
+            @Override
+            public int getIconWidth() {
+                return size;
+            }
+
+            @Override
+            public int getIconHeight() {
+                return size;
+            }
+
+            @Override
+            public void paintIcon(Component c, Graphics g, int x, int y) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(selected ? ACCENT : INPUT_BG);
+                g2.fillOval(x, y, size - 1, size - 1);
+                g2.setColor(selected ? ACCENT : BORDER_STRONG);
+                g2.drawOval(x, y, size - 1, size - 1);
+                if (selected) {
+                    g2.setColor(Color.WHITE);
+                    g2.fillOval(x + 4, y + 4, size - 8, size - 8);
+                }
+                g2.dispose();
+            }
+        };
     }
 
     private static Icon checkBoxIcon(boolean checked) {

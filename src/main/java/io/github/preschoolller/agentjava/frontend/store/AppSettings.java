@@ -245,6 +245,11 @@ public final class AppSettings {
         return getActiveProfile().getApiType();
     }
 
+    /** 当前方案 API 类型下使用的 provider 名；null=未指定（后端回落默认） */
+    public String getActiveProviderName() {
+        return getActiveProfile().getActiveProviderName();
+    }
+
     // —— 全局 UI 偏好 ——
 
     public int getContentFontSize() {
@@ -569,6 +574,9 @@ public final class AppSettings {
             metasJson.append(']');
             properties.setProperty(prefix + "modelsMeta", metasJson.toString());
             properties.setProperty(prefix + "apiType", profile.getApiType());
+            if (profile.getActiveProviderName() != null) { // 缺键=未指定，后端取默认
+                properties.setProperty(prefix + "activeProviderName", profile.getActiveProviderName());
+            }
             properties.setProperty(prefix + "temperature", String.valueOf(profile.getTemperature()));
             properties.setProperty(prefix + "maxTokens", String.valueOf(profile.getMaxTokens()));
             properties.setProperty(prefix + "systemPrompt", profile.getSystemPrompt());
@@ -690,6 +698,9 @@ public final class AppSettings {
         }
         // apiType 缺省（老文件）时保持字段默认 response；非法值在 setApiType 里回落
         profile.setApiType(properties.getProperty(prefix + "apiType", profile.getApiType()));
+        // activeProviderName 缺省（老文件）保持 null=未指定；空白值当未指定洗掉
+        String providerName = properties.getProperty(prefix + "activeProviderName");
+        profile.setActiveProviderName(providerName == null || providerName.isBlank() ? null : providerName);
         profile.setTemperature(parseDouble(properties.getProperty(prefix + "temperature"), profile.getTemperature()));
         profile.setMaxTokens(parseInt(properties.getProperty(prefix + "maxTokens"), profile.getMaxTokens()));
         profile.setSystemPrompt(properties.getProperty(prefix + "systemPrompt", profile.getSystemPrompt()));

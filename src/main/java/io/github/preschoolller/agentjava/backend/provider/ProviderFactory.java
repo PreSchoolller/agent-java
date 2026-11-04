@@ -74,20 +74,46 @@ public class ProviderFactory {
         if (provider != null) {
             return provider;
         }
-        switch (api) {
-            case RESPONSES -> {
-                return RESPONSES_PROVIDERS.isEmpty() ? null : setActiveProvider(RESPONSES_PROVIDERS.get(Collections.min(RESPONSES_PROVIDERS.keySet())));
-            }
-            case CHAT_COMPLETION -> {
-                return CHAT_COMPLETION_PROVIDERS.isEmpty() ? null : setActiveProvider(CHAT_COMPLETION_PROVIDERS.get(Collections.min(CHAT_COMPLETION_PROVIDERS.keySet())));
-            }
-            case MESSAGES -> {
-                return MESSAGES_PROVIDERS.isEmpty() ? null : setActiveProvider(MESSAGES_PROVIDERS.get(Collections.min(MESSAGES_PROVIDERS.keySet())));
-            }
-            default -> {
-                return null;
-            }
+        Map<String, Provider> pool = poolOf(api);
+        if (pool.isEmpty()) {
+            return null;
         }
+        // 优先用当前方案落盘的 provider 名（设置页 Provider 单选）；名字失效（插件被删/改名）
+        // 或未指定时回落字典序最小——与设置页的默认预选一致
+        String preferred = appSettings.getActiveProviderName();
+        Provider chosen = preferred == null ? null : pool.get(preferred);
+        if (chosen == null) {
+            chosen = pool.get(Collections.min(pool.keySet()));
+        }
+        return setActiveProvider(chosen);
+    }
+
+    /** API 类型 → 注册池 */
+    private static Map<String, Provider> poolOf(Provider.Api api) {
+        return switch (api) {
+            case RESPONSES -> RESPONSES_PROVIDERS;
+            case CHAT_COMPLETION -> CHAT_COMPLETION_PROVIDERS;
+            case MESSAGES -> MESSAGES_PROVIDERS;
+        };
+    }
+
+    /** Profile.API_* 常量 → Provider.Api；未知值（老文件兜底链之外的意外值）当 response */
+    public static Provider.Api apiOf(String apiType) {
+        return switch (apiType) {
+            case Profile.API_CHAT_COMPLETION -> Provider.Api.CHAT_COMPLETION;
+            case Profile.API_MESSAGES -> Provider.Api.MESSAGES;
+            default -> Provider.Api.RESPONSES;
+        };
+    }
+
+    /** 指定 API 类型的注册池只读视图（设置页 ProviderCatalog 读桥用） */
+    public static Map<String, Provider> providersOf(Provider.Api api) {
+        return Collections.unmodifiableMap(poolOf(api));
+    }
+
+    /** 设置页保存后调用：作废当前 API 类型的 active 缓存，下次 createProvider 按落盘名单重新解析 */
+    public static void invalidateActiveProvider() {
+        ACTIVE_PROVIDERS.remove(apiOf(appSettings.getApiType()));
     }
 
     public static Provider setActiveProvider(Provider provider) {
