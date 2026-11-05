@@ -51,8 +51,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class Main {
 
@@ -139,46 +137,78 @@ public class Main {
         if (regenerate) {
             window.getStore().removeLastMessage(conversation.getId());
         }
-        PrePareParams preParaParams = getPrePareParams(conversation);
-        // 期望这里是唯一调用 loop 的地方
-        loop(conversation, token, preParaParams);
+        PrepareParams prepareParams = getPrepareParams(conversation);
+        // 首轮快照在此备好；后台结果补偿续链在 loop 尾部另起
+        loop(conversation, token, prepareParams);
     }
 
     /**
-     * 一轮流式回复（agent 循环的单轮）：后台线程从事件队列取增量 → EDT 上回填 →
-     * 队列毒丸后等工具收尾，有工具结果就带着同一个取消令牌续下一轮，没有（或已停止）就释放会话锁。
+     * 整条 agent 链（后台线程跑）：首轮用 startAgentLoop 在 EDT 上备好的快照，之后每轮 doStream；
+     * 工具结果到齐由 doStream requestContinue 续轮（同一个取消令牌、同一把会话锁，生成态保持到整条链结束），
+     * 无续轮诉求时链收束：清生成态、放会话锁，再查后台结果补偿标记决定是否补一轮。
      * 生成的会话不必在前台：卡片经会话 id 定向落库，用户切走再切回由 Window 的 rebind 重新上屏。
      */
-    private static void loop(Conversation conversation, AtomicBoolean cancelled, PrePareParams firstRoundParams) {
+    private static void loop(Conversation conversation, AtomicBoolean cancelled, PrepareParams firstRoundParams) {
         CompletableFuture.runAsync(() -> {
-            AtomicReference<PrePareParams> preParaParams = new AtomicReference<>(firstRoundParams);
-            // 期望若要续轮 loops + 1
+            PrepareParams prepareParams = firstRoundParams;
             LoopControl loopControl = new LoopControl();
-            // 期望这里是唯一调用 doStream 的地方
-            while (loopControl.needContinue()) {
-                if (loopControl.continueLoop() > 1) {
-                    try {
-                        SwingUtilities.invokeAndWait(() -> preParaParams.set(getPrePareParams(conversation)));
-                        doStream(window, conversation, cancelled, preParaParams.get(), loopControl);
-                    } catch (InterruptedException e) {
-                        LOG.error("agent loop interrupted", e);
-                    } catch (Throwable e) {
-                        LOG.error("agent loop exception", e);
+            // 这里是唯一调用 doStream 的地方
+            while (loopControl.hasMoreRounds()) {
+                int round = loopControl.nextRound();
+                try {
+                    if (round > 1) {
+                        prepareParams = snapshotOnEdt(conversation); // 续轮重取快照：工具结果/后台结果已进历史
                     }
+                    doStream(window, conversation, cancelled, prepareParams, loopControl);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    LOG.error("agent loop interrupted", e);
+                    break; // 被中断：放弃续轮，已生成部分照常落库
+                } catch (Throwable e) {
+                    LOG.error("agent loop exception", e);
+                    break; // 快照/流式异常：放弃续轮，避免失败快照反复重试
                 }
             }
             // 双参 remove：条目还是本轮令牌才清（防御性的对称）
             RUNNING.remove(conversation.getId(), cancelled);
+            SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), false));
+            // 后台结果补偿（顺序关键：先放锁再查标记——bg 回调抢锁失败必然发生在放锁之前，
+            // 本查必然能看见它留的标记）。生成期间送达的结果在链释放、会话已空闲时补一轮
+            // 让模型消化；用户主动停止的链丢弃标记（结果已在历史里，随下一条用户消息自然带上）
+            if (PENDING_BG_DELIVERY.remove(conversation.getId()) && !cancelled.get()) {
+                AtomicBoolean bgToken = tryAcquire(conversation.getId());
+                if (bgToken != null) {
+                    try {
+                        loop(conversation, bgToken, snapshotOnEdt(conversation));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        RUNNING.remove(conversation.getId(), bgToken);
+                        LOG.error("后台结果补偿轮被中断", e);
+                    } catch (Throwable e) {
+                        RUNNING.remove(conversation.getId(), bgToken); // 快照失败：放锁，结果随下一条用户消息走
+                        LOG.error("后台结果补偿轮启动失败", e);
+                    }
+                }
+                // 抢锁失败：新链已持有会话，其快照必然包含该结果（注入先于标记），不会漏消化
+            }
         });
     }
 
+    /** 续轮前在 EDT 上重取快照（历史/模型/权限模式都可能与首轮不同），勿进行耗时操作 */
+    private static PrepareParams snapshotOnEdt(Conversation conversation)
+            throws InterruptedException, InvocationTargetException {
+        PrepareParams[] holder = new PrepareParams[1];
+        SwingUtilities.invokeAndWait(() -> holder[0] = getPrepareParams(conversation));
+        return holder[0];
+    }
+
     /**
-     * EDT 上取历史快照，勿进行耗时操作
-     * @param conversation Conversation
-     * @return PrePareParams
+     * EDT 上取历史快照，勿进行耗时操作。快照即消费：已注入历史的后台结果随快照进上下文，
+     * 补偿标记在此清除——whenBackgroundTaskDone 先记再抢，抢到锁的链负责消化（对称收口）
      */
-    private static PrePareParams getPrePareParams(Conversation conversation) {
+    private static PrepareParams getPrepareParams(Conversation conversation) {
         window.setConversationGenerating(conversation.getId(), true);
+        PENDING_BG_DELIVERY.remove(conversation.getId());
         // 历史快照与模型/强度/模式选择都在 EDT 上取（此时本轮 AI 占位卡还没建），
         // 之后仓库与下拉框可能被 EDT 修改，后台线程只读这份不可变数据
         List<PromptParams.RoleMessage> history = buildRoleMessages(conversation);
@@ -208,13 +238,17 @@ public class Main {
         PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
                 .agentMode(mode).workspace(workspace).key(key).backendUrl(backendUrl)
                 .systemPrompt(systemPrompt).enabledTools(enabledTools);
-        return new PrePareParams(history, provider, stream, paramsBuilder);
+        return new PrepareParams(history, provider, stream, paramsBuilder);
     }
 
-    private record PrePareParams(List<PromptParams.RoleMessage> history, Provider provider, Window.AiStream stream, PromptParams.Builder paramsBuilder) {
+    private record PrepareParams(List<PromptParams.RoleMessage> history, Provider provider, Window.AiStream stream, PromptParams.Builder paramsBuilder) {
     }
 
-    private static void doStream(Window window, Conversation conversation, AtomicBoolean cancelled, PrePareParams preParaParams, LoopControl loopControl) {
+    /**
+     * 一轮流式回复（agent 循环的单轮）：后台线程从事件队列取增量 → EDT 上回填 →
+     * 队列毒丸后等工具收尾，有工具结果就 requestContinue 续下一轮（同一个取消令牌、同一把会话锁）。
+     */
+    private static void doStream(Window window, Conversation conversation, AtomicBoolean cancelled, PrepareParams prepareParams, LoopControl loopControl) {
         BlockingQueue<BaseEvent> events = null;
         AtomicBoolean shouldStopBackend = null;
         List<CompletableFuture<Void>> toolCalls = new ArrayList<>();
@@ -222,15 +256,15 @@ public class Main {
         Map<String, String> callIdByItemId = new HashMap<>();
         Map<String, StringBuilder> argsByCallId = new HashMap<>();
         Set<String> doneCalls = new HashSet<>();
-        Window.AiStream stream = preParaParams.stream;
+        Window.AiStream stream = prepareParams.stream;
         try {
-            PromptParams.Builder paramsBuilder = preParaParams.paramsBuilder;
-            for (PromptParams.RoleMessage roleMessage : preParaParams.history) {
+            PromptParams.Builder paramsBuilder = prepareParams.paramsBuilder;
+            for (PromptParams.RoleMessage roleMessage : prepareParams.history) {
                 paramsBuilder.roleMessages(roleMessage);
             }
             PromptParams promptParams = paramsBuilder.build();
             long roundStartNanos = System.nanoTime(); // 本轮耗时（含 HTTP 建流），胶囊上展示用
-            ProviderStreamingResponse providerStreamingResponse = preParaParams.provider.sendPromptStreaming(promptParams);
+            ProviderStreamingResponse providerStreamingResponse = prepareParams.provider.sendPromptStreaming(promptParams);
             events = providerStreamingResponse.blockingQueue();
             shouldStopBackend = providerStreamingResponse.shouldStop();
             BaseEvent event;
@@ -284,7 +318,10 @@ public class Main {
                     SwingUtilities.invokeLater(() -> window.addNotifyMessage("Error: " + error.message()));
                 }
             }
-        } catch (RuntimeException | InterruptedException e) {
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOG.error("agent 流式轮被中断", e);
+        } catch (RuntimeException e) {
             SwingUtilities.invokeLater(() -> window.addNotifyMessage("Error: " + e.getMessage()));
         } finally {
             SwingUtilities.invokeLater(stream::finish); // 停止也走 finish：已生成部分照常保留并落库
@@ -308,15 +345,11 @@ public class Main {
                 drainUntilPoison(events);
             }
             if (!cancelled.get() && !toolCalls.isEmpty()) {
+                // 工具续轮：同一个取消令牌、同一把会话锁，生成态保持到整条链结束
                 loopControl.requestContinue();
-            } else {
-                // 后台结果补偿：生成期间送达的结果（抢锁失败留的标记）在链释放、会话已空闲时
-                // 补一轮让模型消化——不打断生成态，避免输入区闪烁。用户主动停止的链丢弃标记，
-                // 结果已在历史里，随下一条用户消息自然带上
-                if (PENDING_BG_DELIVERY.remove(conversation.getId()) && !cancelled.get()) {
-                    loopControl.requestContinue();
-                }
             }
+            // 后台结果补偿不在本轮做：查标记必须发生在放锁之后（bg 回调抢锁失败必先于本查），
+            // 见 loop 尾部
         }
     }
 
@@ -327,17 +360,17 @@ public class Main {
         SwingUtilities.invokeLater(() -> {
             if (window.onBackGroundTaskDone(conversation.getId(), callId, output)) {
                 String convId = conversation.getId();
-                PENDING_BG_DELIVERY.add(convId); // 先记再抢(startAgentLoop刚开头)：抢锁失败的间隙由链释放兜底
+                PENDING_BG_DELIVERY.add(convId); // 先记再抢：抢锁失败的间隙由链释放兜底；抢到了由快照对称清除
                 startAgentLoop(conversation, false);
             }
         });
     }
 
+    /** 用量上独立胶囊（与状态胶囊分立）：refreshGeneratingUi 刷"就绪"不会再冲掉它。
+     *  只在轮主会话正在显示时刷，避免后台会话的用量盖掉前台数据。
+     *  生成态不在这里清：链可能还要续轮，清态统一在 loop 尾部（链收束处） */
     private static void updateUsageInfo(Conversation conversation, AtomicBoolean cancelled, long inputTokens, long outputTokens, long roundStartNanos) {
-        SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), false));
         if (!cancelled.get() && (inputTokens > 0 || outputTokens > 0)) {
-            // 用量上独立胶囊（与状态胶囊分立）：refreshGeneratingUi 刷"就绪"不会再冲掉它。
-            // 只在轮主会话正在显示时刷，避免后台会话的用量盖掉前台数据
             String convId = conversation.getId();
             long elapsedMillis = (System.nanoTime() - roundStartNanos) / 1_000_000;
             String summary = "tokens 输入 " + inputTokens + " · 输出 " + outputTokens
@@ -522,23 +555,21 @@ public class Main {
         }
     }
 
+    /** 链内单线程访问（loop 线程），无需原子类：requested 要跑的总轮数（首轮恒 1，续轮 +1），executed 已跑轮数 */
     private static class LoopControl {
-        private final AtomicInteger loops = new AtomicInteger(1);
-        private int last = 0;
+        private int requested = 1;
+        private int executed;
 
-        LoopControl() {
+        void requestContinue() {
+            requested++;
         }
 
-        int requestContinue() {
-            return loops.incrementAndGet();
+        boolean hasMoreRounds() {
+            return executed < requested;
         }
 
-        boolean needContinue() {
-            return last == loops.get();
-        }
-
-        int continueLoop() {
-            return last++;
+        int nextRound() {
+            return ++executed;
         }
     }
 }
