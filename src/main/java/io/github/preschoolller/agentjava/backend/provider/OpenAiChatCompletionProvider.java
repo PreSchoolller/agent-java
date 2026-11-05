@@ -220,7 +220,7 @@ public class OpenAiChatCompletionProvider implements Provider {
 
     private static void visit(BlockingQueue<BaseEvent> blockingQueue, ChatCompletionChunk chatCompletionChunk,
                               Map<Integer, ToolCall> indexToolCall, StringBuilder sb) {
-        LOG.trace(chatCompletionChunk.toString());
+        LOG.trace("{}", chatCompletionChunk);
         Stream<ChatCompletionChunk.Choice.Delta> deltaStream = chatCompletionChunk.choices().stream()
                 .map(ChatCompletionChunk.Choice::delta);
         deltaStream.forEach(delta -> {
@@ -262,7 +262,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                         }
                         ToolCall toolCall = indexToolCall.get(index);
                         if (toolCall == null) {
-                            System.out.println("哦吼，这里还能为null，弃了");
+                            LOG.warn("no way to be here!");
                         } else {
                             toolCall.setArguments(toolCall.getArguments() + arguments.orElse(""));
                         }

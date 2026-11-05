@@ -179,7 +179,7 @@ public class SettingsDialog extends JDialog {
                 approvalBringToFrontCheckBox}) {
             Ui.styleCheckBox(box);
         }
-        // 日志等级：TinyLog 启动时读一次（Main→Configuration.set），改了不重启不生效——
+        // 日志等级：TinyLog 加载配置时读一次（TinyLogConfigurationLoader.load），改了不重启不生效——
         // 初值直接放等级名（不用中文别名），与写入值一一对应省映射
         logLevelCombo.setSelectedItem(settings.getLogLevel());
         // bash 转文件正则：等宽字体（正则里的符号多），未配置显示空串
@@ -283,7 +283,7 @@ public class SettingsDialog extends JDialog {
 
     /**
      * 日志等级行：选项直接用 TinyLog 等级名（与落盘值一一对应，省中文别名映射）。
-     * TinyLog 在 Main 启动时读一次（Configuration.set("level", ...)），改了不重启不生效——
+     * TinyLog 加载配置时读一次（TinyLogConfigurationLoader.load），改了不重启不生效——
      * 这条提示放 tooltip；不接线热更的原因：等级是日志管道的建型参数，运行期切换会中途
      * 改变滚动行为，调试场景也需要"整段会话同一等级"来排查。
      */

@@ -6,9 +6,10 @@ import org.tinylog.configuration.ConfigurationLoader;
 import java.util.Properties;
 
 public class TinyLogConfigurationLoader implements ConfigurationLoader {
-    private static final AppSettings appSettings = AppSettings.get();
+
     @Override
     public Properties load() {
+        AppSettings appSettings = AppSettings.get();
         Properties properties = new Properties();
         properties.put("writer", "console");
         properties.put("writer.level", appSettings.getLogLevel());

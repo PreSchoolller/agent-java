@@ -143,7 +143,7 @@ public class ToolManager {
                 }
             }
         } catch (IOException e) {
-            LOG.error("load plugin error for: {}", e.getMessage());
+            LOG.error("load plugin error", e);
         }
     }
 
