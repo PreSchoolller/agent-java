@@ -270,12 +270,12 @@ class WindowGuiTest {
         edt(() -> uiClickAnyWindow("通用"));
         Thread.sleep(400);
         assertTrue(uiHasShowingTextAnyWindow("正文字号") && uiHasShowingTextAnyWindow("主题")
-                && uiHasShowingTextAnyWindow("日志等级"), "切到通用页（全局项在）");
+                && uiHasShowingTextAnyWindow("关闭按钮"), "切到通用页（全局项在）");
         assertTrue(uiHasShowingTextAnyWindow("审核到来时播放系统提示音")
                 && uiHasShowingTextAnyWindow("审核到来时弹系统通知（托盘气泡）")
                 && uiHasShowingTextAnyWindow("审核到来时窗口抢到前台"), "通用页审核通知三开关在");
         assertFalse(uiHasShowingTextAnyWindow("后端地址"), "通用页不含模型服务页控件");
-        captureDialogGated("window-5b-settings-general.png", "设置", "通用页：正文字号/主题/日志等级 + 审核通知三开关的表单形态。");
+        captureDialogGated("window-5b-settings-general.png", "设置", "通用页：正文字号/主题/关闭按钮 + 审核通知三开关的表单形态。");
         // Provider 页：分组单选（按 API 类型三组）。回归环境不跑 WarmUpStuff.loadExternal，
         // 注册池为空 → 断言组头与各组兜底提示；真实应用的注册行由截图目检兜底
         edt(() -> uiClickAnyWindow("Provider"));
@@ -299,6 +299,15 @@ class WindowGuiTest {
         assertTrue(uiHasShowingTextAnyWindow("文件正则"), "工具页含文件正则行");
         captureDialogGated("window-5d-settings-tools.png", "设置",
                 "工具页：ToolManager 注册的工具逐条一行，勾选框=声明给模型（本次跑全量依赖，是真实注册行）。勾选态看看就好，别点「保存」。");
+        // 日志页：控制台/文件两块参数（原通用页的日志等级挪进独立页并扩成完整日志配置）
+        edt(() -> uiClickAnyWindow("日志"));
+        Thread.sleep(400);
+        assertFalse(uiHasShowingTextAnyWindow("后端地址") && uiHasShowingTextAnyWindow("正文字号"),
+                "日志页不含其他页控件");
+        assertTrue(uiHasShowingTextAnyWindow("单文件上限") && uiHasShowingTextAnyWindow("保留份数"),
+                "日志页文件块参数行在");
+        captureDialogGated("window-5f-settings-logging.png", "设置",
+                "日志页：控制台块（启用/等级/格式）+ 文件块（启用/等级/路径/追加/单文件上限/保留份数/格式），改后重启生效。");
         edt(() -> uiClickAnyWindow("模型服务"));
         Thread.sleep(400);
         assertTrue(uiHasShowingTextAnyWindow("后端地址"), "切回模型服务页（展开态保持）");

@@ -55,7 +55,7 @@ import java.util.function.Function;
 
 /**
  * 设置面板（模态对话框）：编辑 AppSettings 并持久化。
- * 顶部标签页分四页（胶囊切页，当前页主题色实心）：
+ * 顶部标签页分五页（胶囊切页，当前页主题色实心）：
  * 「通用」= 全局对话体验（主题/正文字号/关闭按钮/审核通知）；
  * 「模型服务」= 全部配置方案罗列成卡片、展开折叠（方案名/摘要 + 重命名/删除在卡头，新建在页顶）：
  * 展开哪张卡，共享的参数表单就移进哪张卡（后端地址/Key/API 类型/默认模型/温度/最大 Tokens/系统提示词
@@ -63,7 +63,9 @@ import java.util.function.Function;
  * 「Provider」= 全部注册 provider 按 API 类型分组单选（全局落 AppSettings.activeProviderNames，不随方案；
  * 请求走模型所属方案 apiType 那组的选择，后端 resolveActiveProvider 优先消费）；
  * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）
- * + bash 转文件正则（落 AppSettings.bashFilePattern：命中即写临时文件执行，替代 base64 管道）。
+ * + bash 转文件正则（落 AppSettings.bashFilePattern：命中即写临时文件执行，替代 base64 管道）；
+ * 「日志」= 控制台/文件两块输出参数（log.* 自定义键落盘，TinyLogConfigurationLoader 启动时
+ * 映射成日志后端属性——换后端只改映射；改后重启生效）。
  * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
  * 随方案在模型服务页编辑。
  * 面板里的一切改动（含方案增删改名）都落在深拷贝的工作副本上：展开切换先 flush 表单值，
@@ -87,9 +89,20 @@ public class SettingsDialog extends JDialog {
     private final JCheckBox approvalSoundCheckBox = new JCheckBox("审核到来时播放系统提示音");
     private final JCheckBox approvalSystemNotifyCheckBox = new JCheckBox("审核到来时弹系统通知（托盘气泡）");
     private final JCheckBox approvalBringToFrontCheckBox = new JCheckBox("审核到来时窗口抢到前台");
-    /** 日志等级下拉：TinyLog 重启生效，选项=AppSettings.allowLevels 同名值 */
-    private final JComboBox<String> logLevelCombo =
-            new JComboBox<>(new String[]{"trace", "debug", "info", "warn", "error"});
+    /** 日志页：控制台块（开关/等级/格式），改后重启生效（tinylog 启动读一次配置） */
+    private final JCheckBox logConsoleEnabledBox = new JCheckBox();
+    private final JComboBox<String> logConsoleLevelCombo = new JComboBox<>(LOG_LEVEL_OPTIONS);
+    private final JTextField logConsoleFormatField = new JTextField();
+    /** 日志页：文件块（开关/等级/路径/追加/单文件上限/保留份数/格式） */
+    private final JCheckBox logFileEnabledBox = new JCheckBox();
+    private final JComboBox<String> logFileLevelCombo = new JComboBox<>(LOG_LEVEL_OPTIONS);
+    private final JTextField logFilePathField = new JTextField();
+    private final JCheckBox logFileAppendBox = new JCheckBox();
+    private final JTextField logFileMaxSizeField = new JTextField();
+    private final JSpinner logFileBackupsSpinner;
+    private final JTextField logFileFormatField = new JTextField();
+    /** 日志等级选项：与 AppSettings 落盘值一一对应（不用中文别名，省映射） */
+    private static final String[] LOG_LEVEL_OPTIONS = {"trace", "debug", "info", "warn", "error"};
     private final JButton profileAddButton = Ui.button("新建");
     /** 模型服务页的页容器（方案卡片列表；增删改名/展开切换时整体重建） */
     private JPanel profilePagePanel;
@@ -132,6 +145,7 @@ public class SettingsDialog extends JDialog {
     private static final String TAB_PROFILE = "profile";
     private static final String TAB_PROVIDERS = "providers";
     private static final String TAB_TOOLS = "tools";
+    private static final String TAB_LOGGING = "logging";
     private String currentTab = TAB_PROFILE;
     private JPanel tabsPanel;
     private JPanel pagesPanel;
@@ -179,9 +193,34 @@ public class SettingsDialog extends JDialog {
                 approvalBringToFrontCheckBox}) {
             Ui.styleCheckBox(box);
         }
-        // 日志等级：TinyLog 加载配置时读一次（TinyLogConfigurationLoader.load），改了不重启不生效——
-        // 初值直接放等级名（不用中文别名），与写入值一一对应省映射
-        logLevelCombo.setSelectedItem(settings.getLogLevel());
+        // 日志页控件（TinyLog 加载配置时读一次，改后重启生效——初值直接放等级名/原始值，
+        // 与写入值一一对应省映射；格式/路径字段等宽字体，占位符和路径里的符号多）
+        logConsoleEnabledBox.setSelected(settings.isLogConsoleEnabled());
+        Ui.styleCheckBox(logConsoleEnabledBox);
+        logConsoleEnabledBox.setToolTipText("关闭后日志不进控制台；控制台与文件两路都关时应用完全静默");
+        styleLogCombo(logConsoleLevelCombo);
+        logConsoleLevelCombo.setSelectedItem(settings.getLogConsoleLevel());
+        styleLogFormatField(logConsoleFormatField, "控制台格式模式，tinylog 占位符如 {date} {level} {thread} {message} {class}；"
+                + "留空 = 默认格式（{date} [{thread}] {class}.{method}() 换行 {level}: {message}）");
+        logFileEnabledBox.setSelected(settings.isLogFileEnabled());
+        Ui.styleCheckBox(logFileEnabledBox);
+        logFileEnabledBox.setToolTipText("开启后日志写入文件；文件块的参数只在开启时生效");
+        styleLogCombo(logFileLevelCombo);
+        logFileLevelCombo.setSelectedItem(settings.getLogFileLevel());
+        styleLogFormatField(logFilePathField, "日志文件路径（绝对或相对）；留空 = ~/.agentjava/logs/agent.log");
+        logFilePathField.setText(settings.getLogFilePath() == null ? "" : settings.getLogFilePath());
+        logFileAppendBox.setSelected(settings.isLogFileAppend());
+        Ui.styleCheckBox(logFileAppendBox);
+        logFileAppendBox.setToolTipText("续写不覆盖（默认）；关闭则每次启动清空重写日志文件");
+        styleLogFormatField(logFileMaxSizeField, "单文件大小上限，超过即滚动切新文件（rolling file writer），"
+                + "如 10mb / 512KB；留空 = 不轮转（单文件直写，文件会一直变大）");
+        logFileMaxSizeField.setText(settings.getLogFileMaxSize() == null ? "" : settings.getLogFileMaxSize());
+        logFileBackupsSpinner = new JSpinner(new SpinnerNumberModel(settings.getLogFileBackups(), 1, 999, 1));
+        // 数字去掉千分位逗号：换用无分组 pattern 的 editor（直接改 format 不会刷新已渲染文本，踩坑 #7）
+        logFileBackupsSpinner.setEditor(new JSpinner.NumberEditor(logFileBackupsSpinner, "#"));
+        Ui.styleSpinner(logFileBackupsSpinner);
+        logFileBackupsSpinner.setToolTipText("滚动后保留的历史日志文件份数，超出删最旧");
+        styleLogFormatField(logFileFormatField, "文件格式模式，tinylog 占位符同控制台格式；留空 = 默认格式");
         // bash 转文件正则：等宽字体（正则里的符号多），未配置显示空串
         Ui.styleInput(bashPatternField);
         bashPatternField.setFont(new Font("Monospaced", Font.PLAIN, 13));
@@ -215,6 +254,7 @@ public class SettingsDialog extends JDialog {
         tabsPanel.add(new TabButton("模型服务", TAB_PROFILE));
         tabsPanel.add(new TabButton("Provider", TAB_PROVIDERS));
         tabsPanel.add(new TabButton("工具", TAB_TOOLS));
+        tabsPanel.add(new TabButton("日志", TAB_LOGGING));
 
         // 两页内容（CardLayout 切换）：每页各自套滚动容器，短页不继承长页的滚动空间。
         // 页高取两者较大者：切换标签时对话框尺寸不变，行也不被挤压重排
@@ -225,6 +265,7 @@ public class SettingsDialog extends JDialog {
         pagesPanel.add(wrapPage(buildProfilePage()), TAB_PROFILE);
         pagesPanel.add(wrapPage(buildProvidersPage()), TAB_PROVIDERS);
         pagesPanel.add(wrapPage(buildToolsPage()), TAB_TOOLS);
+        pagesPanel.add(wrapPage(buildLoggingPage()), TAB_LOGGING);
         pageLayout.show(pagesPanel, currentTab);
 
         JButton saveButton = Ui.primaryButton("保存");
@@ -264,8 +305,7 @@ public class SettingsDialog extends JDialog {
         chatRow = addRow(chatCard, chatRow, "主题", themeCombo);
         chatRow = addRow(chatCard, chatRow, "正文字号", fontSizeSpinner);
         addRow(chatCard, chatRow, "关闭按钮", trayCheckBox);
-        chatRow++;
-        addRow(chatCard, chatRow, "日志等级", buildLogLevelRow());
+        // 日志配置挪进了独立的「日志」页（控制台/文件两块参数）
         // 系统提示词是每套配置方案自己的值（落 Profile），随方案在模型服务页编辑
         groups.add(chatCard);
 
@@ -282,16 +322,69 @@ public class SettingsDialog extends JDialog {
     }
 
     /**
-     * 日志等级行：选项直接用 TinyLog 等级名（与落盘值一一对应，省中文别名映射）。
-     * TinyLog 加载配置时读一次（TinyLogConfigurationLoader.load），改了不重启不生效——
-     * 这条提示放 tooltip；不接线热更的原因：等级是日志管道的建型参数，运行期切换会中途
-     * 改变滚动行为，调试场景也需要"整段会话同一等级"来排查。
+     * 日志页：控制台/文件两块输出参数（AppSettings 的 log.* 自定义键，TinyLogConfigurationLoader
+     * 启动时映射成 tinylog 属性——以后换日志后端只改映射，这页与落盘格式不动）。
+     * 改后需重启生效：日志后端启动时读一次配置（等级是日志管道的建型参数，运行期切换会中途
+     * 改变滚动行为，调试场景也需要"整段会话同一等级"来排查），提示行钉在页顶。
      */
-    private JComponent buildLogLevelRow() {
-        Ui.styleComboBox(logLevelCombo);
-        logLevelCombo.setPreferredSize(new Dimension(100, 30));
-        logLevelCombo.setToolTipText("Tinylog 日志等级（改后需重启生效）");
-        return logLevelCombo;
+    private JPanel buildLoggingPage() {
+        JPanel groups = new JPanel();
+        groups.setLayout(new BoxLayout(groups, BoxLayout.Y_AXIS));
+        groups.setBackground(Ui.BG);
+        groups.setBorder(BorderFactory.createEmptyBorder(6, 18, 4, 18));
+
+        // 控制台卡：页顶提示行 + 三个参数行。提示用固定 330px 宽的 HTML 折行（踩坑 #17 的
+        // Swing HTML），但必须装在卡内 GridBag（weightx=1 + fill=HORIZONTAL）里——直接挂在
+        // BoxLayout 下会被拉到整页宽，330px 宽度失效、右缘把 "log.*" 拦腰截断（实测）
+        JPanel consoleCard = Ui.card(Ui.CARD_BG);
+        consoleCard.setLayout(new GridBagLayout());
+        JLabel hint = new JLabel("<html><div style='width:330px'><span style='color:"
+                + Ui.hex(Ui.TEXT_SECONDARY) + "'>日志配置由日志后端在启动时读取一次，修改后需重启应用生效。"
+                + "配置以 log.* 自定义键落盘，由 TinyLogConfigurationLoader 映射成日志后端属性。</span></div></html>");
+        hint.setFont(Ui.FONT_PLAIN);
+        hint.setForeground(Ui.TEXT_SECONDARY);
+        GridBagConstraints hintGbc = new GridBagConstraints();
+        hintGbc.insets = new Insets(10, 14, 2, 14);
+        hintGbc.anchor = GridBagConstraints.NORTHWEST;
+        hintGbc.gridx = 0;
+        hintGbc.gridy = 0;
+        hintGbc.gridwidth = 2;
+        hintGbc.weightx = 1;
+        hintGbc.fill = GridBagConstraints.HORIZONTAL;
+        consoleCard.add(hint, hintGbc);
+        int row = 1;
+        row = addRow(consoleCard, row, "启用", logConsoleEnabledBox);
+        row = addRow(consoleCard, row, "等级", logConsoleLevelCombo);
+        addRow(consoleCard, row, "格式", logConsoleFormatField);
+        groups.add(consoleCard);
+
+        // 文件卡
+        JPanel fileCard = Ui.card(Ui.CARD_BG);
+        fileCard.setLayout(new GridBagLayout());
+        row = 0;
+        row = addRow(fileCard, row, "启用", logFileEnabledBox);
+        row = addRow(fileCard, row, "等级", logFileLevelCombo);
+        row = addRow(fileCard, row, "路径", logFilePathField);
+        row = addRow(fileCard, row, "追加写入", logFileAppendBox);
+        row = addRow(fileCard, row, "单文件上限", logFileMaxSizeField);
+        row = addRow(fileCard, row, "保留份数", logFileBackupsSpinner);
+        addRow(fileCard, row, "格式", logFileFormatField);
+        groups.add(fileCard);
+        groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
+        return groups;
+    }
+
+    /** 日志页的等级下拉：统一样式与尺寸（两块各一个，配置一致） */
+    private void styleLogCombo(JComboBox<String> combo) {
+        Ui.styleComboBox(combo);
+        combo.setPreferredSize(new Dimension(100, 30));
+    }
+
+    /** 日志页的格式/路径字段：等宽字体（占位符与路径里的符号多），宽度交给 GridBag 加权列 */
+    private void styleLogFormatField(JTextField field, String tooltip) {
+        Ui.styleInput(field);
+        field.setFont(new Font("Monospaced", Font.PLAIN, 13));
+        field.setToolTipText(tooltip);
     }
 
     /**
@@ -1290,7 +1383,25 @@ public class SettingsDialog extends JDialog {
             }
             settings.setEnabledTools(checked.size() == toolCheckBoxes.size() ? null : checked);
         }
-        settings.setLogLevel((String) logLevelCombo.getSelectedItem());
+        // 日志页：先校验单文件上限（空白=不轮转；填了必须带 kb/mb/gb 单位），不过整次保存拦下
+        // ——理由同文件正则：setter 里还有一道校验兜底，但那会"静默丢值关窗"，这里拦下才算把原因说清楚
+        String logMaxSize = logFileMaxSizeField.getText();
+        if (logMaxSize != null && !logMaxSize.isBlank() && !AppSettings.isValidLogFileSize(logMaxSize)) {
+            Ui.messageDialog(this, "保存受阻", "「单文件上限」格式不对——填数字 + 单位（kb/mb/gb，如 10mb），"
+                    + "或留空表示不轮转。未保存任何改动。");
+            logFileMaxSizeField.requestFocusInWindow();
+            return;
+        }
+        settings.setLogConsoleEnabled(logConsoleEnabledBox.isSelected());
+        settings.setLogConsoleLevel((String) logConsoleLevelCombo.getSelectedItem());
+        settings.setLogConsoleFormat(logConsoleFormatField.getText());
+        settings.setLogFileEnabled(logFileEnabledBox.isSelected());
+        settings.setLogFileLevel((String) logFileLevelCombo.getSelectedItem());
+        settings.setLogFilePath(logFilePathField.getText());
+        settings.setLogFileAppend(logFileAppendBox.isSelected());
+        settings.setLogFileMaxSize(logMaxSize);
+        settings.setLogFileBackups(((Number) logFileBackupsSpinner.getValue()).intValue());
+        settings.setLogFileFormat(logFileFormatField.getText());
         // 空白=清除配置；setter 内还有一道合法性校验（防御其他调用方）
         settings.setBashFilePattern(bashPatternField.getText());
         // Provider 分组单选：每组收集选中名写回全局（AppSettings.activeProvider.<apiType>，不随方案）。

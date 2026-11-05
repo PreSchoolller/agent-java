@@ -144,16 +144,68 @@ class AppSettingsTest {
     }
 
     @Test
-    void t05_logLevel() {
+    void t05_logSettings() {
         Path settingsFile = file("settings.properties");
         AppSettings testSettings = AppSettings.at(settingsFile);
-        // 日志等级：默认 info、非法值忽略、落盘往返（TinyLog 重启读一次，界面报价见 5 号块 tooltip）
-        assertEquals("info", testSettings.getLogLevel(), "日志等级默认 info");
-        testSettings.setLogLevel("恐怖");
-        assertEquals("info", testSettings.getLogLevel(), "非法日志等级忽略");
-        testSettings.setLogLevel("debug");
+        // 默认：控制台开（info），文件关（追加写、不轮转、保留 5 份）
+        assertTrue(testSettings.isLogConsoleEnabled(), "控制台默认开");
+        assertEquals("info", testSettings.getLogConsoleLevel(), "控制台等级默认 info");
+        assertNull(testSettings.getLogConsoleFormat(), "控制台格式默认用后端默认");
+        assertFalse(testSettings.isLogFileEnabled(), "文件默认关");
+        assertEquals("info", testSettings.getLogFileLevel(), "文件等级默认 info");
+        assertNull(testSettings.getLogFilePath(), "文件路径默认用 loader 兜底");
+        assertTrue(testSettings.isLogFileAppend(), "文件默认追加写");
+        assertNull(testSettings.getLogFileMaxSize(), "默认不轮转");
+        assertEquals(5, testSettings.getLogFileBackups(), "默认保留 5 份");
+        // 等级非法值忽略；格式/路径空白归一成 null（=用默认）；保留份数钳制
+        testSettings.setLogConsoleLevel("恐怖");
+        assertEquals("info", testSettings.getLogConsoleLevel(), "非法日志等级忽略");
+        testSettings.setLogConsoleLevel("debug");
+        assertEquals("debug", testSettings.getLogConsoleLevel(), "合法等级落值");
+        testSettings.setLogConsoleFormat("   ");
+        assertNull(testSettings.getLogConsoleFormat(), "空白格式归一成 null");
+        testSettings.setLogConsoleFormat(" {level}: {message} ");
+        assertEquals("{level}: {message}", testSettings.getLogConsoleFormat(), "格式 strip 落值");
+        testSettings.setLogFileBackups(0);
+        assertEquals(1, testSettings.getLogFileBackups(), "保留份数下钳 1");
+        testSettings.setLogFileBackups(5000);
+        assertEquals(999, testSettings.getLogFileBackups(), "保留份数上钳 999");
+        // 单文件上限：无单位/乱单位拒收，合法值（大小写单位均可）落值
+        assertFalse(AppSettings.isValidLogFileSize("10"), "无单位不是合法上限");
+        assertFalse(AppSettings.isValidLogFileSize("10tb"), "不认识的单位不是合法上限");
+        assertTrue(AppSettings.isValidLogFileSize("10MB"), "单位大小写均可");
+        testSettings.setLogFileMaxSize("10");
+        assertNull(testSettings.getLogFileMaxSize(), "无单位拒收不设值");
+        testSettings.setLogFileMaxSize(" 10mb ");
+        assertEquals("10mb", testSettings.getLogFileMaxSize(), "合法上限 strip 落值");
+        // 落盘往返：两块参数整体保存重读
+        testSettings.setLogFileEnabled(true);
+        testSettings.setLogFileLevel("warn");
+        testSettings.setLogFilePath("logs/x.log");
+        testSettings.setLogFileAppend(false);
+        testSettings.setLogFileBackups(3);
+        testSettings.setLogFileFormat("{date} {message}");
         testSettings.save();
-        assertEquals("debug", AppSettings.at(settingsFile).getLogLevel(), "日志等级落盘往返");
+        AppSettings reread = AppSettings.at(settingsFile);
+        assertTrue(reread.isLogConsoleEnabled() && "debug".equals(reread.getLogConsoleLevel()),
+                "控制台块落盘往返");
+        assertEquals("{level}: {message}", reread.getLogConsoleFormat(), "控制台格式落盘往返");
+        assertTrue(reread.isLogFileEnabled() && "warn".equals(reread.getLogFileLevel())
+                && "logs/x.log".equals(reread.getLogFilePath()) && !reread.isLogFileAppend()
+                && reread.getLogFileBackups() == 3 && "10mb".equals(reread.getLogFileMaxSize())
+                && "{date} {message}".equals(reread.getLogFileFormat()), "文件块落盘往返");
+    }
+
+    @Test
+    void t05b_legacyLogLevelKeyMigration() throws Exception {
+        // 旧版全局 logLevel 键迁移成控制台等级（log.console.level 缺位时才用；非法旧值落默认）
+        Path legacy = file("legacy-log.properties");
+        store(properties("logLevel", "warn"), legacy);
+        assertEquals("warn", AppSettings.at(legacy).getLogConsoleLevel(), "旧键迁移成控制台等级");
+        store(properties("logLevel", "warn", "log.console.level", "debug"), legacy);
+        assertEquals("debug", AppSettings.at(legacy).getLogConsoleLevel(), "新键优先于旧键");
+        store(properties("logLevel", "恐怖"), legacy);
+        assertEquals("info", AppSettings.at(legacy).getLogConsoleLevel(), "非法旧值落默认");
     }
 
     @Test

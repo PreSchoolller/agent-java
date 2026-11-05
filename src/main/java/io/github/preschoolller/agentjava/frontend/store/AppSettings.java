@@ -52,9 +52,30 @@ public final class AppSettings {
     /** 已勾选的工具名（设置面板"工具"页勾选，后端据此过滤工具声明/执行）。
      *  null = 从未配置，语义为全部启用（未来新注册的工具也自动启用）；空列表 = 显式全不启用 */
     private List<String> enabledTools;
-    /** TinyLog日志等级，修改需重启生效 */
-    private String logLevel = "info";
-    private static final Set<String> allowLevels = Set.of("trace", "debug", "info", "warn", "error");
+    /** —— 日志设置（设置面板「日志」页，自定义 log.* 键落盘，TinyLogConfigurationLoader 映射成
+     *  日志后端属性——以后换后端只改映射，设置页与落盘格式不动。改后重启生效：日志后端
+     *  启动时读一次配置）—— */
+    /** 控制台输出开关 */
+    private boolean logConsoleEnabled = true;
+    /** 控制台等级：trace/debug/info/warn/error */
+    private String logConsoleLevel = "info";
+    /** 控制台格式模式（日志后端的格式占位符）；null = 用后端默认格式 */
+    private String logConsoleFormat;
+    /** 文件输出开关 */
+    private boolean logFileEnabled;
+    /** 文件等级 */
+    private String logFileLevel = "info";
+    /** 日志文件路径（绝对或相对）；null/空白 = 用默认 ~/.agentjava/logs/agent.log（loader 兜底） */
+    private String logFilePath;
+    /** 文件追加写入：true=续写（默认），false=每次启动覆盖 */
+    private boolean logFileAppend = true;
+    /** 单文件大小上限（如 10mb），配了即按大小滚动切新文件；null = 不轮转（单文件直写） */
+    private String logFileMaxSize;
+    /** 滚动后保留的历史文件份数（超出删最旧） */
+    private int logFileBackups = 5;
+    /** 文件格式模式；null = 用后端默认格式 */
+    private String logFileFormat;
+    private static final Set<String> LOG_LEVELS = Set.of("trace", "debug", "info", "warn", "error");
     /** 主窗口尺寸/位置与侧栏分隔条位置（全局 UI 偏好；坐标 -1 = 首次启动居中）。
      *  最大化期间的 bounds 不记录，还原后仍是用户习惯的窗口大小 */
     private int windowWidth = 1280;
@@ -238,8 +259,109 @@ public final class AppSettings {
         return uiTheme;
     }
 
-    public String getLogLevel() {
-        return logLevel;
+    public boolean isLogConsoleEnabled() {
+        return logConsoleEnabled;
+    }
+
+    public void setLogConsoleEnabled(boolean logConsoleEnabled) {
+        this.logConsoleEnabled = logConsoleEnabled;
+    }
+
+    public String getLogConsoleLevel() {
+        return logConsoleLevel;
+    }
+
+    /** 仅接受 trace/debug/info/warn/error，其他值忽略 */
+    public void setLogConsoleLevel(String level) {
+        if (level != null && LOG_LEVELS.contains(level)) {
+            logConsoleLevel = level;
+        }
+    }
+
+    public String getLogConsoleFormat() {
+        return logConsoleFormat;
+    }
+
+    /** 格式模式：空白 = 恢复用后端默认格式 */
+    public void setLogConsoleFormat(String format) {
+        logConsoleFormat = format == null || format.isBlank() ? null : format.strip();
+    }
+
+    public boolean isLogFileEnabled() {
+        return logFileEnabled;
+    }
+
+    public void setLogFileEnabled(boolean logFileEnabled) {
+        this.logFileEnabled = logFileEnabled;
+    }
+
+    public String getLogFileLevel() {
+        return logFileLevel;
+    }
+
+    /** 仅接受 trace/debug/info/warn/error，其他值忽略 */
+    public void setLogFileLevel(String level) {
+        if (level != null && LOG_LEVELS.contains(level)) {
+            logFileLevel = level;
+        }
+    }
+
+    public String getLogFilePath() {
+        return logFilePath;
+    }
+
+    /** 文件路径：空白 = 恢复默认路径（loader 兜底） */
+    public void setLogFilePath(String path) {
+        logFilePath = path == null || path.isBlank() ? null : path.strip();
+    }
+
+    public boolean isLogFileAppend() {
+        return logFileAppend;
+    }
+
+    public void setLogFileAppend(boolean logFileAppend) {
+        this.logFileAppend = logFileAppend;
+    }
+
+    public String getLogFileMaxSize() {
+        return logFileMaxSize;
+    }
+
+    /** 单文件上限：空白 = 不轮转；填了必须带 kb/mb/gb 单位（isValidLogFileSize），非法值忽略 */
+    public void setLogFileMaxSize(String maxSize) {
+        if (maxSize == null || maxSize.isBlank()) {
+            logFileMaxSize = null;
+            return;
+        }
+        if (isValidLogFileSize(maxSize)) {
+            logFileMaxSize = maxSize.strip();
+        }
+    }
+
+    /**
+     * 单文件上限格式校验：数字 + kb/mb/gb 单位（大小写均可），如 10mb / 512KB。
+     * 值会拼进滚动策略 "size: …" 交给日志后端解析，存入前先拦一道明显不合法的。
+     */
+    public static boolean isValidLogFileSize(String maxSize) {
+        return maxSize != null && maxSize.strip().matches("\\d+(?i)(kb|mb|gb)");
+    }
+
+    public int getLogFileBackups() {
+        return logFileBackups;
+    }
+
+    /** 保留份数：钳到 1..999（0 无意义，过大没谱） */
+    public void setLogFileBackups(int backups) {
+        logFileBackups = Math.max(1, Math.min(999, backups));
+    }
+
+    public String getLogFileFormat() {
+        return logFileFormat;
+    }
+
+    /** 格式模式：空白 = 恢复用后端默认格式 */
+    public void setLogFileFormat(String format) {
+        logFileFormat = format == null || format.isBlank() ? null : format.strip();
     }
 
     public String getBashFilePattern() {
@@ -341,13 +463,6 @@ public final class AppSettings {
             i = next - 1; // 量词可能是多字符（{2,}），推进到量词末尾
         }
         return false;
-    }
-
-    /** 仅接受 trace/debug/info/warn/error，其他值忽略（TinyLog 重启读一次，改了不重启不生效） */
-    public void setLogLevel(String logLevel) {
-        if (logLevel != null && allowLevels.contains(logLevel)) {
-            this.logLevel = logLevel;
-        }
     }
 
     /** 仅接受 "light"/"dark"，其他值忽略 */
@@ -570,7 +685,24 @@ public final class AppSettings {
         properties.setProperty("windowX", String.valueOf(windowX));
         properties.setProperty("windowY", String.valueOf(windowY));
         properties.setProperty("sidebarDivider", String.valueOf(sidebarDivider));
-        properties.setProperty("logLevel", String.valueOf(logLevel));
+        properties.setProperty("log.console.enabled", String.valueOf(logConsoleEnabled));
+        properties.setProperty("log.console.level", logConsoleLevel);
+        if (logConsoleFormat != null) { // 缺键=用后端默认格式
+            properties.setProperty("log.console.format", logConsoleFormat);
+        }
+        properties.setProperty("log.file.enabled", String.valueOf(logFileEnabled));
+        properties.setProperty("log.file.level", logFileLevel);
+        if (logFilePath != null) { // 缺键=用默认路径（loader 兜底）
+            properties.setProperty("log.file.path", logFilePath);
+        }
+        properties.setProperty("log.file.append", String.valueOf(logFileAppend));
+        if (logFileMaxSize != null) { // 缺键=不轮转（单文件直写）
+            properties.setProperty("log.file.maxSize", logFileMaxSize);
+        }
+        properties.setProperty("log.file.backups", String.valueOf(logFileBackups));
+        if (logFileFormat != null) { // 缺键=用后端默认格式
+            properties.setProperty("log.file.format", logFileFormat);
+        }
         if (bashFilePattern != null) { // 缺键=未配置；非法值在 load/setter 两处已拦下，落盘的必是校验过的
             properties.setProperty("bashFilePattern", bashFilePattern);
         }
@@ -626,10 +758,27 @@ public final class AppSettings {
                 activeProviderNames.put(apiType, providerName.strip());
             }
         }
-        logLevel = properties.getProperty("logLevel");
-        if (logLevel == null || !allowLevels.contains(logLevel)) {
-            logLevel = "info";
+        // 日志设置：等级非法值落默认；旧版全局 logLevel 键迁移成控制台等级（新键缺位时才用）
+        logConsoleEnabled = Boolean.parseBoolean(properties.getProperty("log.console.enabled", "true"));
+        String consoleLevel = properties.getProperty("log.console.level");
+        if (consoleLevel == null) {
+            consoleLevel = properties.getProperty("logLevel"); // 旧版平面键迁移
         }
+        logConsoleLevel = consoleLevel != null && LOG_LEVELS.contains(consoleLevel) ? consoleLevel : "info";
+        String consoleFormat = properties.getProperty("log.console.format");
+        logConsoleFormat = consoleFormat == null || consoleFormat.isBlank() ? null : consoleFormat;
+        logFileEnabled = Boolean.parseBoolean(properties.getProperty("log.file.enabled", "false"));
+        String fileLevel = properties.getProperty("log.file.level");
+        logFileLevel = fileLevel != null && LOG_LEVELS.contains(fileLevel) ? fileLevel : "info";
+        String filePath = properties.getProperty("log.file.path");
+        logFilePath = filePath == null || filePath.isBlank() ? null : filePath;
+        logFileAppend = Boolean.parseBoolean(properties.getProperty("log.file.append", "true"));
+        // maxSize 手改坏值（无单位等）不入库——loader 拼进滚动策略前会拦，这里直接当未配置
+        String fileSize = properties.getProperty("log.file.maxSize");
+        logFileMaxSize = fileSize != null && isValidLogFileSize(fileSize) ? fileSize.strip() : null;
+        logFileBackups = Math.max(1, Math.min(999, parseInt(properties.getProperty("log.file.backups"), 5)));
+        String fileFormat = properties.getProperty("log.file.format");
+        logFileFormat = fileFormat == null || fileFormat.isBlank() ? null : fileFormat;
         String names = properties.getProperty("profileNames");
         if (names == null) {
             loadLegacyFlat(properties); // v1 之前的平面键格式
