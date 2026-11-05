@@ -53,7 +53,6 @@ import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import org.jetbrains.annotations.NotNull;
-import org.tinylog.Logger;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -86,6 +85,8 @@ public class OpenAiResponseProvider implements Provider {
     }
 
     private static final Map<KeyUrl, OpenAIClient> clientPool = new ConcurrentHashMap<>();
+
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(OpenAiResponseProvider.class);
 
     private OpenAiResponseProvider() {
     }
@@ -204,7 +205,7 @@ public class OpenAiResponseProvider implements Provider {
 
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
-        Logger.info("--------------streaming start--------------");
+        LOG.info("--------------streaming start--------------");
         ResponseCreateParams responseCreateParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         ResponseStreamEventVisitorAdaptor visitor = getVisitor(blockingQueue);
@@ -224,7 +225,7 @@ public class OpenAiResponseProvider implements Provider {
             } catch (OpenAIIoException exception) {
                 errors.add(new ErrorMessageEvent("Stream event iteration failed: " + exception.getMessage()));
             } catch (RuntimeException exception) {
-                Logger.error("Unexpected stream error: {}", exception.getMessage());
+                LOG.error("Unexpected stream error: {}", exception.getMessage());
                 errors.add(new ErrorMessageEvent("Unexpected stream error: " + exception.getMessage()));
             } finally {
                 try {

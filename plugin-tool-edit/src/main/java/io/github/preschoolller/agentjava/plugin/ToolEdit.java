@@ -6,7 +6,6 @@ import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.NeedAdditionalApproval;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
-import org.tinylog.Logger;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -31,6 +30,8 @@ public class ToolEdit implements Tool {
     private static final String OLD_STRING = "old_string";
     private static final String NEW_STRING = "new_string";
     private static final String MODE = "mode";
+
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ToolEdit.class);
 
     public ToolEdit() {
     }
@@ -105,10 +106,10 @@ public class ToolEdit implements Tool {
                         }
                         Files.writeString(tmpFile, str, StandardOpenOption.APPEND);
                         Files.move(tmpFile, oldFile, StandardCopyOption.ATOMIC_MOVE);
-                        Logger.info("edit file {} success", oldFile);
+                        LOG.info("edit file {} success", oldFile);
                         return "(edit success)";
                     } catch (IOException e) {
-                        Logger.error(e, "append file {} failed", oldFile);
+                        LOG.error("append file {} failed", oldFile, e);
                         return "(edit error: append failed)";
                     }
                 }
@@ -117,7 +118,7 @@ public class ToolEdit implements Tool {
                         String[] searchLines = args.oldString.split("\\R");
                         SearchResult searchResult = getSearchResult(oldFile, searchLines, true);
                         if (!searchResult.found) {
-                            Logger.info("delete old string {} failed, not found in file {}", args.oldString, oldFile);
+                            LOG.info("delete old string {} failed, not found in file {}", args.oldString, oldFile);
                             return "(edit error: no " + OLD_STRING + " found in the file)";
                         }
                         long startPointer = searchResult.couples.get(0).startPointer;
@@ -128,10 +129,10 @@ public class ToolEdit implements Tool {
                             ensureTransfer(oldChannel, endPointer, oldChannel.size() - endPointer, tmpChannel);
                         }
                         Files.move(tmpFile, oldFile, StandardCopyOption.ATOMIC_MOVE);
-                        Logger.info("edit file {} success", oldFile);
+                        LOG.info("edit file {} success", oldFile);
                         return "(edit success)";
                     } catch (IOException e) {
-                        Logger.error(e, "edit file {} failed", oldFile);
+                        LOG.error("edit file {} failed", oldFile, e);
                         return "(edit error: delete old string failed)";
                     }
                 }
@@ -140,7 +141,7 @@ public class ToolEdit implements Tool {
                     try {
                         SearchResult searchResult = getSearchResult(oldFile, searchLines, true);
                         if (!searchResult.found) {
-                            Logger.info("replace old string {} failed, not found in file {}", args.oldString, oldFile);
+                            LOG.info("replace old string {} failed, not found in file {}", args.oldString, oldFile);
                             return "(edit error: no " + OLD_STRING + " found in the file)";
                         }
                         long startPointer = searchResult.couples.get(0).startPointer;
@@ -156,10 +157,10 @@ public class ToolEdit implements Tool {
                             ensureTransfer(oldChannel, endPointer, oldChannel.size() - endPointer, tmpChannel);
                         }
                         Files.move(tmpFile, oldFile, StandardCopyOption.ATOMIC_MOVE);
-                        Logger.info("edit file {} success", oldFile);
+                        LOG.info("edit file {} success", oldFile);
                         return "(edit success)";
                     } catch (IOException e) {
-                        Logger.error(e, "edit file {} failed", oldFile);
+                        LOG.error("edit file {} failed", oldFile, e);
                         return "(edit error: replace old string failed)";
                     }
                 }
@@ -168,7 +169,7 @@ public class ToolEdit implements Tool {
                     try {
                         SearchResult searchResult = getSearchResult(oldFile, searchLines, false);
                         if (!searchResult.found) {
-                            Logger.info("replace old string {} failed, not found in file {}", args.oldString, oldFile);
+                            LOG.info("replace old string {} failed, not found in file {}", args.oldString, oldFile);
                             return "(edit error: no " + OLD_STRING + " found in the file)";
                         }
                         String str = args.newString;
@@ -186,15 +187,15 @@ public class ToolEdit implements Tool {
                             ensureTransfer(oldChannel, prevEnd, oldChannel.size() - prevEnd, tmpChannel); // 最后一段尾巴
                         }
                         Files.move(tmpFile, oldFile, StandardCopyOption.ATOMIC_MOVE);
-                        Logger.info("edit file {} success", oldFile);
+                        LOG.info("edit file {} success", oldFile);
                         return "(edit success)";
                     } catch (IOException e) {
-                        Logger.error(e, "edit file {} failed", oldFile);
+                        LOG.error("edit file {} failed", oldFile, e);
                         return "(edit error: replace all old string failed)";
                     }
                 }
                 default -> {
-                    Logger.error("不可能，绝对不可能！！！");
+                    LOG.error("不可能，绝对不可能！！！");
                     return "(edit error: nothing happened)";
                 }
             }
@@ -202,7 +203,7 @@ public class ToolEdit implements Tool {
             try {
                 Files.deleteIfExists(tmpFile);
             } catch (IOException e) {
-                Logger.error(e, "tmp file {} delete failed", tmpFile);
+                LOG.error("tmp file {} delete failed", tmpFile, e);
             }
         }
     }

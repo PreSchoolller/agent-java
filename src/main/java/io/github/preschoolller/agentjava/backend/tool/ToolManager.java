@@ -9,7 +9,6 @@ import com.openai.models.responses.ResponseFunctionToolCall;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
-import org.tinylog.Logger;
 
 import java.io.IOException;
 import java.net.MalformedURLException;
@@ -39,6 +38,8 @@ public class ToolManager {
             ToolBash.getInstance().name(), ToolBash.getInstance()
     ));
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ToolManager.class);
+
     private ToolManager() {
     }
 
@@ -52,7 +53,7 @@ public class ToolManager {
         }
         Tool preValue = tools.put(tool.name(), tool);
         if (preValue != null) {
-            Logger.info("tool {} was exchanged", tool.name());
+            LOG.info("tool {} was exchanged", tool.name());
         }
     }
 
@@ -114,7 +115,7 @@ public class ToolManager {
         try {
             Files.createDirectories(Constants.PLUGIN_DIR);
         } catch (IOException e) {
-            Logger.error("...-_-!...");
+            LOG.error("...-_-!...");
         }
         try (Stream<Path> files = Files.find(Constants.PLUGIN_DIR, 1,
                 (path, basicFileAttributes) -> path.getFileName().toString().endsWith(".jar"))) {
@@ -130,19 +131,19 @@ public class ToolManager {
                     URLClassLoader urlClassLoader = new URLClassLoader("plugin-" + jarName, jarUrl, ToolManager.class.getClassLoader());
                     ServiceLoader.load(Tool.class, urlClassLoader).forEach(tool -> {
                         register(tool);
-                        Logger.info("{} loaded by {}", tool.getClass(), tool.getClass().getClassLoader());
+                        LOG.info("{} loaded by {}", tool.getClass(), tool.getClass().getClassLoader());
                         count.incrementAndGet();
                     });
                 } catch (MalformedURLException e) {
-                    Logger.error("should not be here, riiiight ?");
+                    LOG.error("should not be here, riiiight ?");
                 } catch (Throwable throwable) {
-                    Logger.error(throwable, "plugin {} failed", jarNameWithSuffix);
+                    LOG.error("plugin {} failed", jarNameWithSuffix, throwable);
                 } finally {
-                    Logger.info("plugin {} loaded {} tools", jarNameWithSuffix, count.get());
+                    LOG.info("plugin {} loaded {} tools", jarNameWithSuffix, count.get());
                 }
             }
         } catch (IOException e) {
-            Logger.error("load plugin error for: {}", e.getMessage());
+            LOG.error("load plugin error for: {}", e.getMessage());
         }
     }
 

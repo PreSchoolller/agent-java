@@ -38,7 +38,6 @@ import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseD
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
-import org.tinylog.Logger;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -69,6 +68,8 @@ public class OpenAiChatCompletionProvider implements Provider {
     public static OpenAiChatCompletionProvider getInstance() {
         return InstanceHolder.instance;
     }
+
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(OpenAiChatCompletionProvider.class);
 
     private OpenAiChatCompletionProvider() {
     }
@@ -164,7 +165,7 @@ public class OpenAiChatCompletionProvider implements Provider {
 
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
-        Logger.info("--------------streaming start--------------");
+        LOG.info("--------------streaming start--------------");
         ChatCompletionCreateParams chatCompletionCreateParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         Map<Integer, ToolCall> indexToolCall = new HashMap<>();
@@ -190,7 +191,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                 exception.printStackTrace();
                 errors.add(new ErrorMessageEvent("Unexpected stream error: " + exception.getMessage()));
             } finally {
-                Logger.info("--------------streaming end--------------");
+                LOG.info("--------------streaming end--------------");
                 putIntoBQ(new ReasoningDeltaDoneEvent("", sb.toString().trim().strip()), blockingQueue);
                 try {
                     for (ErrorMessageEvent error : errors) {
@@ -219,7 +220,7 @@ public class OpenAiChatCompletionProvider implements Provider {
 
     private static void visit(BlockingQueue<BaseEvent> blockingQueue, ChatCompletionChunk chatCompletionChunk,
                               Map<Integer, ToolCall> indexToolCall, StringBuilder sb) {
-        Logger.trace(chatCompletionChunk);
+        LOG.trace(chatCompletionChunk.toString());
         Stream<ChatCompletionChunk.Choice.Delta> deltaStream = chatCompletionChunk.choices().stream()
                 .map(ChatCompletionChunk.Choice::delta);
         deltaStream.forEach(delta -> {
@@ -284,7 +285,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                 .map(Optional::get)
                 .findAny();
         if (finishReason.isPresent()) {
-            Logger.info("流式传输终止，原因：{}", finishReason.get());
+            LOG.info("流式传输终止，原因：{}", finishReason.get());
             for (Integer index : indexToolCall.keySet()) {
                 ToolCall toolCall = indexToolCall.get(index);
                 putIntoBQ(new FunctionToolCallDoneEvent(toolCall.getCallId(), toolCall), blockingQueue);

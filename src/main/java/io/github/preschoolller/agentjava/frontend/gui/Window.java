@@ -8,7 +8,6 @@ import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 import io.github.preschoolller.agentjava.frontend.store.Message;
 import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
-import org.tinylog.Logger;
 
 import javax.swing.BorderFactory;
 import javax.swing.AbstractAction;
@@ -241,6 +240,8 @@ public class Window extends JFrame {
     private int searchCursor = -1;
     private MessageCard flashedCard;
     private Timer searchFlashTimer;
+
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(Window.class);
 
     /** AI 回复的流式句柄：addAiMessage 返回。所有方法须在 EDT 上调用。 */
     public interface AiStream {
@@ -1075,7 +1076,7 @@ public class Window extends JFrame {
 
         @Override
         public void finish(String result, boolean success, String arguments) {
-            Logger.info("tool call card finish");
+            LOG.debug("tool call card finish");
             if (finished) {
                 return;
             }
@@ -1139,7 +1140,7 @@ public class Window extends JFrame {
                 // 提醒/重绘失败绝不能让审批流挂掉：EDT 异常经 invokeAndWait 会被包成
                 // InvocationTargetException，requestToolApproval 只能误判成拒绝——"自动拒绝"事故。
                 // 决策 future 已挂好，这里吞掉显示层的失败，按钮没画出来也不影响等待与点击。
-                Logger.error("审批提醒/重绘失败（不影响审批）: {}", e.getMessage());
+                LOG.error("审批提醒/重绘失败（不影响审批）: {}", e.getMessage());
             }
         }
     }
@@ -2522,7 +2523,7 @@ public class Window extends JFrame {
 
         @Override
         public void finish() {
-            Logger.info("ai stream card finish");
+            LOG.debug("ai stream card finish");
             if (finished) {
                 return;
             }

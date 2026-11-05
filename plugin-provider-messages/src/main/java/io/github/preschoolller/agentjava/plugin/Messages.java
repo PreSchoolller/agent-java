@@ -51,7 +51,6 @@ import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseD
 import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaStartEvent;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
-import org.tinylog.Logger;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -84,6 +83,8 @@ public class Messages implements Provider {
     }
 
     private static final Map<KeyUrl, AnthropicClient> clientPool = new ConcurrentHashMap<>();
+
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(Messages.class);
 
     public Messages() {
     }
@@ -152,7 +153,7 @@ public class Messages implements Provider {
                                 }
                         );
                     } catch (JsonProcessingException e) {
-                        Logger.error(e, "parse tool arguments error, use null instead");
+                        LOG.error("parse tool arguments error, use null instead", e);
                     }
 
                     toolUseBlockParamBuilder.input(ToolUseBlockParam.Input.builder().additionalProperties(inputMap).build());
@@ -210,7 +211,7 @@ public class Messages implements Provider {
 
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
-        Logger.info("/v1/messages start streaming");
+        LOG.info("/v1/messages start streaming");
         MessageCreateParams createParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         AtomicBoolean shouldStop = new AtomicBoolean();
@@ -226,7 +227,7 @@ public class Messages implements Provider {
             } catch (Throwable throwable) {
                 // TODO 有哪些异常还不知道，先兜一下
                 error = new ErrorMessageEvent(throwable.getMessage());
-                Logger.error(throwable, "Unexpected error occurred");
+                LOG.error("Unexpected error occurred", throwable);
             } finally {
                 try {
                     if (error != null) {
@@ -237,14 +238,14 @@ public class Messages implements Provider {
                     Thread.currentThread().interrupt();
                     blockingQueue.offer(new PoisonEvent());
                 }
-                Logger.info("/v1/messages stream end");
+                LOG.info("/v1/messages stream end");
             }
         });
         return new ProviderStreamingResponse(blockingQueue, shouldStop);
     }
 
     private void visit(RawMessageStreamEvent rawMessageStreamEvent, BlockingQueue<BaseEvent> blockingQueue, Map<Long, Type> indexType, Map<Long, ToolCall> indexToolCall) {
-        Logger.trace(rawMessageStreamEvent);
+        LOG.trace(rawMessageStreamEvent.toString());
         if (rawMessageStreamEvent.isMessageStart()) {
             handleMessageStart(rawMessageStreamEvent.asMessageStart(), blockingQueue);
         } else if (rawMessageStreamEvent.isMessageDelta()) {
@@ -261,12 +262,12 @@ public class Messages implements Provider {
     }
 
     private void handleMessageStart(RawMessageStartEvent rawMessageStartEvent, BlockingQueue<BaseEvent> blockingQueue) {
-        Logger.info("/v1/messages api stream started: {}", rawMessageStartEvent);
+        LOG.info("/v1/messages api stream started: {}", rawMessageStartEvent);
     }
 
     private void handleMessageDelta(RawMessageDeltaEvent rawMessageDeltaEvent, BlockingQueue<BaseEvent> blockingQueue) {
         Optional<StopReason> stopReason = rawMessageDeltaEvent.delta().stopReason();
-        stopReason.ifPresent(reason -> Logger.info("/v1/messages api stream stopped for reason: {}", reason));
+        stopReason.ifPresent(reason -> LOG.info("/v1/messages api stream stopped for reason: {}", reason));
         MessageDeltaUsage usage = rawMessageDeltaEvent.usage();
         putIntoBQ(new ResponseCompleteEvent(usage.inputTokens().orElse(0L), usage.outputTokens()), blockingQueue);
     }
@@ -307,7 +308,7 @@ public class Messages implements Provider {
             if (Type.FUNCTION.equals(indexType.get(index))) {
                 ToolCall toolCall = indexToolCall.get(index);
                 if (toolCall == null) {
-                    Logger.error("unknown tool block delta event: {}", rawContentBlockDeltaEvent);
+                    LOG.error("unknown tool block delta event: {}", rawContentBlockDeltaEvent);
                     return;
                 }
                 String argusDelta = delta.asInputJson().partialJson();
@@ -331,12 +332,12 @@ public class Messages implements Provider {
             case FUNCTION -> {
                 ToolCall toolCall = indexToolCall.get(index);
                 if (toolCall == null) {
-                    Logger.error("unknown tool block stop event, index: {}", index);
+                    LOG.error("unknown tool block stop event, index: {}", index);
                     return;
                 }
                 putIntoBQ(new FunctionToolCallDoneEvent(toolCall.getCallId(), toolCall), blockingQueue);
             }
-            default -> Logger.error("unhandled type of content block stop event, index: {}", index);
+            default -> LOG.error("unhandled type of content block stop event, index: {}", index);
         }
     }
 

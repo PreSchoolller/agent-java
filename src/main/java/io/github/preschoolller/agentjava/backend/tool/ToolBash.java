@@ -9,7 +9,6 @@ import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFacto
 import io.github.preschoolller.agentjava.backend.tool.interfaces.BackGroundTaskDone;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
-import org.tinylog.Logger;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -65,6 +64,8 @@ public class ToolBash implements Tool {
     private static volatile boolean valid = true;
     private static volatile BashHead bashHead;
     private static volatile List<String> customBashHead;
+
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ToolBash.class);
 
     private ToolBash() {
     }
@@ -143,7 +144,7 @@ public class ToolBash implements Tool {
         } catch (JsonProcessingException e) {
             return "json parse error: " + e.getMessage();
         } catch (Throwable e) {
-            Logger.error(e, "tool bash execute error, arguments {}, workspace {}, call id {}", arguments, workspace, callId);
+            LOG.error("tool bash execute error, arguments {}, workspace {}, call id {}", arguments, workspace, callId, e);
             return "agent app error: unknown";
         }
     }
@@ -185,7 +186,7 @@ public class ToolBash implements Tool {
             } catch (ExecutionException | TimeoutException e) {
                 // 最差情况 60秒等待->2秒强杀->2秒读缓冲流 依然到了这里，前端早已超时终止检查，结果已不重要，此处直接强杀
                 // 好情况 前方无等待顺利完成->2秒读缓冲流 到了这里，有那么长的缓冲流吗？强行截断，直接强杀
-                Logger.info("force cut off");
+                LOG.info("force cut off");
                 futureRead.cancel(true);
                 out.append("\n(result was cut off for long waiting)");
             }
@@ -201,14 +202,14 @@ public class ToolBash implements Tool {
                 //（Conversation.updateToolResult 按此标记把卡片翻"已终止"徽标）
                 out.append("\n(已手动终止)");
             }
-            Logger.trace("bash参数：{} bash 执行结果：{}", arguments, out);
+            LOG.trace("bash参数：{} bash 执行结果：{}", arguments, out);
             return out.toString();
         } catch (IOException e) {
-            Logger.error("start process error, arguments {}, workspace {}", arguments, workspace);
+            LOG.error("start process error, arguments {}, workspace {}", arguments, workspace);
             out.append("\nforeground task failed to start: ").append(e.getMessage());
             return out.toString();
         } catch (InterruptedException e) {
-            Logger.error("bash execute was interrupted, arguments {}, workspace {}", arguments, workspace);
+            LOG.error("bash execute was interrupted, arguments {}, workspace {}", arguments, workspace);
             Thread.currentThread().interrupt();
             return "tool use error: bash execute was interrupted, maybe try again later.";
         } finally {
@@ -218,7 +219,7 @@ public class ToolBash implements Tool {
 
     private static String executeBackGround(String arguments, String workspace, ProcessBuilder processBuilder, BackGroundTaskDone bgTaskDone, String callId) {
         if (bgTaskDone == null || callId == null || callId.isBlank()) {
-            Logger.error("illegal arguments: bgTaskDone {}; callId {};", bgTaskDone, callId);
+            LOG.error("illegal arguments: bgTaskDone {}; callId {};", bgTaskDone, callId);
             return "tool use error: unknown app error.";
         }
         CompletableFuture<Long> pid = new CompletableFuture<>();
@@ -230,7 +231,7 @@ public class ToolBash implements Tool {
                     Process process = ShutDownJob.registerBgProcess(callId, new TaskHandle(out, processBuilder.start(), true));
                     holder = process;
                     pid.complete(process.pid());
-                    Logger.info("background task submitted, arguments {}, workspace {}, pid {}", arguments, workspace, process.pid());
+                    LOG.info("background task submitted, arguments {}, workspace {}, pid {}", arguments, workspace, process.pid());
                     Future<?> futureRead = ThreadPoolFactory.getBgTaskReadOutExecutor().submit(() -> {
                         try (BufferedReader reader = new BufferedReader(
                                 new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
@@ -256,13 +257,13 @@ public class ToolBash implements Tool {
                     });
                     futureRead.get();
                 } catch (IOException e) {
-                    Logger.error("start process error, arguments {}, workspace {}", arguments, workspace);
+                    LOG.error("start process error, arguments {}, workspace {}", arguments, workspace);
                     out.append("\nbackground task failed to start: ").append(e.getMessage());
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    Logger.error("bash execute was interrupted, arguments {}, workspace {}", arguments, workspace);
+                    LOG.error("bash execute was interrupted, arguments {}, workspace {}", arguments, workspace);
                 } catch (ExecutionException e) {
-                    Logger.error("future read exception, arguments {}, workspace {}, exception message {}", arguments, workspace, e.getMessage());
+                    LOG.error("future read exception, arguments {}, workspace {}, exception message {}", arguments, workspace, e.getMessage());
                     out.append("\nbackground task exception: ").append(e.getMessage());
                 } finally {
                     if (holder != null) {
@@ -274,14 +275,14 @@ public class ToolBash implements Tool {
                 }
             });
         } catch (RejectedExecutionException e) {
-            Logger.info("background task failed to submit, arguments {}, workspace {}", arguments, workspace);
+            LOG.info("background task failed to submit, arguments {}, workspace {}", arguments, workspace);
             return "background task submitted failed: task pool is full, try again later";
         }
         String pidS = "(not start yet)";
         try {
             pidS = String.valueOf(pid.get(MILI_TIMEOUT, TimeUnit.MILLISECONDS));
         } catch (InterruptedException | ExecutionException | TimeoutException e) {
-            Logger.debug("exception encounter while waiting pid, message ignored");
+            LOG.debug("exception encounter while waiting pid, message ignored");
         }
         String pidStr = ", pid: " + pidS;
         return "background task submitted successfully, id: " + callId + pidStr;
@@ -304,10 +305,10 @@ public class ToolBash implements Tool {
                 tmpFile.toFile().deleteOnExit();
                 Files.writeString(tmpFile, command);
                 bash.add(buildTmpFilePath(tmpFile, bashHead));
-                Logger.info("转文件执行：{}", tmpFile.toAbsolutePath());
+                LOG.info("转文件执行：{}", tmpFile.toAbsolutePath());
                 byFile = true;
             } catch (IOException e) {
-                Logger.error("创建临时文件失败，尝试回退base64");
+                LOG.error("创建临时文件失败，尝试回退base64");
             }
         }
         if (!byFile) {
@@ -457,8 +458,8 @@ public class ToolBash implements Tool {
             }
             process.destroyForcibly();
         } catch (IOException | InterruptedException e) {
-            Logger.info("测试bash工具{}出错", head);
-            Logger.debug("测试bash工具{}出错: {}", head, e);
+            LOG.info("测试bash工具{}出错", head);
+            LOG.debug("测试bash工具{}出错: {}", head, e);
         }
         return false;
     }

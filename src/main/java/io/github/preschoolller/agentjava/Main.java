@@ -30,8 +30,7 @@ import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.Message;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
-import org.tinylog.Logger;
-import org.tinylog.configuration.Configuration;
+import org.slf4j.LoggerFactory;
 
 import javax.swing.SwingUtilities;
 import java.io.IOException;
@@ -72,9 +71,10 @@ public class Main {
 
     private static final AppSettings appSettings = AppSettings.get();
 
+    private static final org.slf4j.Logger log = LoggerFactory.getLogger(Main.class);
+
     public static void main(String[] args) {
-        Configuration.set("level", appSettings.getLogLevel());
-        
+
         SwingUtilities.invokeLater(() -> {
             Window window = new Window("Agent");
             // 尺寸/位置/分隔条由 Window 从 AppSettings 恢复（无记录回落居中），关闭行为 Window 自己接管
@@ -102,7 +102,7 @@ public class Main {
                     // 已派发的工具还在后台跑完才收尾（P2-5）：胶囊上说明状态，避免用户以为卡死连点。
                     // 纯文案不改停止语义；链结束 setConversationGenerating(false) 会把胶囊刷回"就绪"
                     window.setRealtimeInfo("正在等待工具收尾…");
-                    Logger.info("停止生成......");
+                    log.info("停止生成......");
                 }
             });
 
@@ -337,12 +337,12 @@ public class Main {
         if (additionalRequest && AgentMode.FULL_ACCESS.equals(mode)) {
             return true;
         }
-        Logger.info("审批工具： {}， 是否额外申请：{}", toolCall.getTool().name(), additionalRequest);
+        log.info("审批工具： {}， 是否额外申请：{}", toolCall.getTool().name(), additionalRequest);
         Window.ToolCallHandle handle = callIdHandleMap.get(toolCall.getCallId());
         if (handle == null || cancelled.get()) {
             // 自动拒绝的三个分支之一。出现过"没人点却自动拒绝"（间歇性），每个分支留日志
             // 便于下次 occurrence 定位：卡片缺失 / 用户已停止 / EDT 异常 / 等待被中断
-            Logger.info("审批自动拒绝：handle={} cancelled={}",
+            log.info("审批自动拒绝：handle={} cancelled={}",
                     handle == null ? "缺失(callId=" + toolCall.getCallId() + ")" : "在册", cancelled.get());
             return false; // 没有卡片可挂 / 已经叫停：宁可拦下也不静默执行
         }
@@ -355,23 +355,23 @@ public class Main {
                 } catch (TimeoutException stillWaiting) {
                     // 用户还没点，继续等
                 } catch (CancellationException rejected) {
-                    Logger.info("审批自动拒绝：decision 被取消");
+                    log.info("审批自动拒绝：decision 被取消");
                     return false;
                 } catch (ExecutionException impossible) {
-                    Logger.info("审批自动拒绝：decision 异常完成 {}", impossible.getCause());
+                    log.info("审批自动拒绝：decision 异常完成 {}", impossible.getCause());
                     return false; // 只有 complete(true/false)，正常到不了
                 }
             }
-            Logger.info("审批自动拒绝：用户点了停止");
+            log.info("审批自动拒绝：用户点了停止");
             decision.cancel(true); // 用户点了停止：终结等待，provider 会把这次调用按未放行收尾
             return false;
         } catch (InterruptedException e) {
-            Logger.info("审批自动拒绝：等待线程被中断");
+            log.info("审批自动拒绝：等待线程被中断");
             Thread.currentThread().interrupt();
             return false;
         } catch (InvocationTargetException e) {
             // requestApproval 在 EDT 上抛了异常（提醒/重绘层），按未批准处理而非用户拒绝
-            Logger.error("审批自动拒绝：EDT 异常 {}", e.getCause() == null ? "" : e.getCause().toString());
+            log.error("审批自动拒绝：EDT 异常 {}", e.getCause() == null ? "" : e.getCause().toString());
             return false;
         }
     }

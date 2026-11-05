@@ -4,7 +4,6 @@ import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
-import org.tinylog.Logger;
 
 import java.io.IOException;
 import java.net.MalformedURLException;
@@ -34,6 +33,8 @@ public class ProviderFactory {
 
     private static final AppSettings appSettings = AppSettings.get();
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ProviderFactory.class);
+
     private ProviderFactory() {}
 
     public static Provider createResponseProvider() {
@@ -62,7 +63,7 @@ public class ProviderFactory {
                 if (activeMessages != null) {
                     return activeMessages;
                 }
-                Logger.warn("found no provider implement /v1/messages, fall back to response");
+                LOG.warn("found no provider implement /v1/messages, fall back to response");
             }
         }
         return createResponseProvider();
@@ -118,7 +119,7 @@ public class ProviderFactory {
 
     public static Provider setActiveProvider(Provider provider) {
         if (provider == null || provider.implement() == null) {
-            Logger.warn("trying set active provider with wrong type");
+            LOG.warn("trying set active provider with wrong type");
             return null;
         }
         Provider value = ACTIVE_PROVIDERS.computeIfAbsent(provider.implement(), key -> provider);
@@ -130,7 +131,7 @@ public class ProviderFactory {
 
     private static void register(Provider provider) {
         if (provider == null || provider.name() == null || provider.name().isBlank() || provider.implement() == null) {
-            Logger.info("null provider: ignore");
+            LOG.info("null provider: ignore");
             return;
         }
         switch (provider.implement()) {
@@ -147,7 +148,7 @@ public class ProviderFactory {
         try {
             Files.createDirectories(Constants.PLUGIN_DIR);
         } catch (IOException e) {
-            Logger.error("...-_-!...");
+            LOG.error("...-_-!...");
         }
         try (Stream<Path> files = Files.find(Constants.PLUGIN_DIR, 1,
                 (path, basicFileAttributes) -> path.getFileName().toString().endsWith(".jar"))) {
@@ -163,19 +164,19 @@ public class ProviderFactory {
                     URLClassLoader urlClassLoader = new URLClassLoader("plugin-" + jarName, jarUrl, ProviderFactory.class.getClassLoader());
                     ServiceLoader.load(Provider.class, urlClassLoader).forEach(provider -> {
                         register(provider);
-                        Logger.info("{} loaded by {}", provider.getClass(), provider.getClass().getClassLoader());
+                        LOG.info("{} loaded by {}", provider.getClass(), provider.getClass().getClassLoader());
                         count.incrementAndGet();
                     });
                 } catch (MalformedURLException e) {
-                    Logger.error("should not be here, riiiight ?");
+                    LOG.error("should not be here, riiiight ?");
                 } catch (Throwable throwable) {
-                    Logger.error(throwable, "plugin {} failed", jarNameWithSuffix);
+                    LOG.error("plugin {} failed", jarNameWithSuffix, throwable);
                 } finally {
-                    Logger.info("plugin {} loaded {} providers", jarNameWithSuffix, count.get());
+                    LOG.info("plugin {} loaded {} providers", jarNameWithSuffix, count.get());
                 }
             }
         } catch (IOException e) {
-            Logger.error("load plugin error for: {}", e.getMessage());
+            LOG.error("load plugin error for: {}", e.getMessage());
         }
     }
 }
