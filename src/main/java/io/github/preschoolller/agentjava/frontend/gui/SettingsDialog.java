@@ -309,6 +309,8 @@ public class SettingsDialog extends JDialog {
         // 系统提示词是每套配置方案自己的值（落 Profile），随方案在模型服务页编辑
         groups.add(chatCard);
 
+        groups.add(Box.createVerticalStrut(10)); // 卡片间距：与日志页/工具页一致
+
         // 审核通知卡：工具审批到来时的三通道提醒（开关独立，落全局 UI 偏好不随方案走）
         JPanel approveCard = Ui.card(Ui.CARD_BG);
         approveCard.setLayout(new GridBagLayout());
@@ -353,22 +355,35 @@ public class SettingsDialog extends JDialog {
         hintGbc.fill = GridBagConstraints.HORIZONTAL;
         consoleCard.add(hint, hintGbc);
         int row = 1;
-        row = addRow(consoleCard, row, "启用", logConsoleEnabledBox);
-        row = addRow(consoleCard, row, "等级", logConsoleLevelCombo);
-        addRow(consoleCard, row, "格式", logConsoleFormatField);
+        row = addHintedRow(consoleCard, row, "启用", logConsoleEnabledBox,
+                "把日志输出到控制台；控制台与文件两路都关时应用完全静默");
+        row = addHintedRow(consoleCard, row, "等级", logConsoleLevelCombo,
+                "只输出该等级及以上的日志，从低到高：trace &lt; debug &lt; info &lt; warn &lt; error");
+        row = addHintedRow(consoleCard, row, "格式", logConsoleFormatField,
+                "tinylog 占位符模板，例：{date: HH:mm:ss.SSS} [{level}] {message}；留空=默认格式");
         groups.add(consoleCard);
+
+        // 卡片间距：BoxLayout 直 add 两张卡会贴死，与方案卡列表的 strut(8) 同款拉开
+        groups.add(Box.createVerticalStrut(10));
 
         // 文件卡
         JPanel fileCard = Ui.card(Ui.CARD_BG);
         fileCard.setLayout(new GridBagLayout());
         row = 0;
-        row = addRow(fileCard, row, "启用", logFileEnabledBox);
-        row = addRow(fileCard, row, "等级", logFileLevelCombo);
-        row = addRow(fileCard, row, "路径", logFilePathField);
-        row = addRow(fileCard, row, "追加写入", logFileAppendBox);
-        row = addRow(fileCard, row, "单文件上限", logFileMaxSizeField);
-        row = addRow(fileCard, row, "保留份数", logFileBackupsSpinner);
-        addRow(fileCard, row, "格式", logFileFormatField);
+        row = addHintedRow(fileCard, row, "启用", logFileEnabledBox,
+                "把日志写入文件（重启不丢）；本卡其余参数只在开启时生效");
+        row = addHintedRow(fileCard, row, "等级", logFileLevelCombo,
+                "文件自己的输出等级，与控制台互不影响；从低到高：trace &lt; debug &lt; info &lt; warn &lt; error");
+        row = addHintedRow(fileCard, row, "路径", logFilePathField,
+                "绝对或相对路径，例：logs/agent.log；留空=~/.agentjava/logs/agent.log");
+        row = addHintedRow(fileCard, row, "追加写入", logFileAppendBox,
+                "开启=接着上次继续写（默认）；关闭=每次启动清空文件重写");
+        row = addHintedRow(fileCard, row, "单文件上限", logFileMaxSizeField,
+                "单文件超过该大小就滚动切新文件，例：10mb、512KB；留空=不轮转（文件一直变大）");
+        row = addHintedRow(fileCard, row, "保留份数", logFileBackupsSpinner,
+                "滚动后保留的历史文件份数（agent.0.log、agent.1.log…），超出删最旧");
+        addHintedRow(fileCard, row, "格式", logFileFormatField,
+                "同控制台的占位符模板；留空=默认格式");
         groups.add(fileCard);
         groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
         return groups;
@@ -682,6 +697,8 @@ public class SettingsDialog extends JDialog {
             toolsCard.add(hint, gbc);
         }
         groups.add(toolsCard);
+
+        groups.add(Box.createVerticalStrut(10)); // 卡片间距：两张卡贴死不好看
 
         // bash 转文件正则卡：命中正则的命令写临时文件执行（替代 base64 管道）。非空时必须是
         // 合法且安全的正则——内联红字实时提示，保存时再拦一道（AppSettings setter 是最后防线）
@@ -1446,5 +1463,36 @@ public class SettingsDialog extends JDialog {
         gbc.fill = GridBagConstraints.HORIZONTAL;
         card.add(editor, gbc);
         return row + 1;
+    }
+
+    /**
+     * 带内联注释的参数行：编辑控件一行、灰字注释紧随其下一行。注释**跨整卡两列**（gridx=0 +
+     * gridwidth=2，与页顶提示同款）而不是只占控件列——裸 JLabel 直接放 GridBag 第 1 列时
+     * HTML 折行宽度不可靠，行尾会被硬裁（"debug &lt; i" 拦腰截断，实测）；跨整卡的两处页顶
+     * 提示从未出过事。代价是注释从标签列起头，整卡宽的灰色注释读起来反而顺。
+     * 注释用固定 330px 宽的 HTML 折行（踩坑 #17 的 Swing HTML），常驻可见比 tooltip 靠谱：
+     * tooltip 悬停才出现，注释里放示例值方便照抄。
+     */
+    private int addHintedRow(JPanel card, int row, String label, JComponent editor, String hint) {
+        row = addRow(card, row, label, editor);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(0, 14, 6, 14);
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.gridwidth = 2;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        card.add(hintLabel(hint), gbc);
+        return row + 1;
+    }
+
+    /** 次要色的小注释行（HTML 固定 330px 折行，颜色现场读 Ui 镜像随主题） */
+    private JLabel hintLabel(String text) {
+        JLabel hint = new JLabel("<html><div style='width:330px'><span style='color:"
+                + Ui.hex(Ui.TEXT_SECONDARY) + "'>" + text + "</span></div></html>");
+        hint.setFont(Ui.FONT_PLAIN);
+        hint.setForeground(Ui.TEXT_SECONDARY);
+        return hint;
     }
 }
