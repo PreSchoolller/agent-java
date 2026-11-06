@@ -928,6 +928,8 @@ public class Window extends JFrame {
      * 往当前对话追加一张 AI 输出卡片（Markdown 渲染），返回流式句柄。
      * 一次性后端直接 addAiMessage(完整回复)；流式后端先 addAiMessage("")，再逐段
      * appendChunk，结束时 finish()（会把最终文本写回会话仓库）。须在 EDT 上调用。
+     * 便捷入口隐式取 store.getActive()：仅限 UI 测试/演示（显示中即目标会话）；
+     * agent 链路的目标会话可能不在前台，必须用带会话 id 的版本
      */
     public AiStream addAiMessage(String text) {
         return addAiMessage(store.getActive().getId(), text);
@@ -981,6 +983,7 @@ public class Window extends JFrame {
      * 先 addToolCall(工具名, 参数摘要) 出卡，参数逐段生成时 handle.appendArgs(增量) 上屏
      * （只显示不落库），执行完 handle.finish(结果文本, 是否成功, 完整参数) 回填终态。
      * 与 AiStream 对称：后端在 EDT 上调用。须在 EDT 上调用。
+     * 便捷入口隐式取 store.getActive()：仅限 UI 测试/演示；agent 链路必须用带会话 id 的版本
      */
     public ToolCallHandle addToolCall(String toolName, String argsSummary, String callId) {
         return addToolCall(store.getActive().getId(), toolName, argsSummary, callId);
@@ -1312,13 +1315,25 @@ public class Window extends JFrame {
     }
 
     /** 更新底部用量胶囊（tokens 输入/输出 · 耗时）：一旦有过数据就常驻显示，切生成态/回到
-     *  就绪都不清空，直到下一轮用量覆盖。空文本忽略（没有"没有数据"的中间态可画） */
+     *  就绪都不清空，直到下一轮用量覆盖。空文本忽略（没有"没有数据"的中间态可画）。
+     *  数据源是会话上的 Conversation.Usage：Main 每轮写入会话并在这里同步显示，切会话走 restoreUsagePill */
     public void setUsageInfo(String text) {
         if (text == null || text.isBlank()) {
             return;
         }
         usageLabel.setText(text);
         usagePill.setVisible(true);
+    }
+
+    /** 切会话时用量胶囊跟回该会话的记忆（内存态，重启清空）：没跑过轮的会话胶囊藏起不占位 */
+    private void restoreUsagePill(Conversation conversation) {
+        Conversation.Usage usage = conversation.getUsage();
+        if (usage == null) {
+            usageLabel.setText("");
+            usagePill.setVisible(false);
+        } else {
+            setUsageInfo(usage.label());
+        }
     }
 
     /** 用会话内容重建瀑布流（切换会话、设置变更后调用），并把窗口标题带上会话名 */
@@ -1348,6 +1363,7 @@ public class Window extends JFrame {
             insertMessageCard(message);
         }
         rebindLiveStreams(conversation.getId()); // 切回还在生成的会话：把进行中的句柄挂回新卡片（要在物化前，待确认态才画得出来）
+        restoreUsagePill(conversation); // 用量胶囊跟回会话记忆：后台会话的轮次用量不丢，没有数据的会话不占位
         updateMaterialization(); // 长会话只物化视口附近；短会话在这里全量补齐
         setTitle("Agent - " + displayTitle(conversation));
         waterfallPanel.revalidate();

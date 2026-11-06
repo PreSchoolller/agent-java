@@ -388,18 +388,18 @@ public class Main {
         });
     }
 
-    /** 用量上独立胶囊（与状态胶囊分立）：refreshGeneratingUi 刷"就绪"不会再冲掉它。
-     *  只在轮主会话正在显示时刷，避免后台会话的用量盖掉前台数据。
+    /** 用量落到会话上（Conversation.Usage，会话级数据源），显示中的会话同步刷胶囊：
+     *  后台会话的轮次不丢也不串台，切回时由 showConversation 据此恢复胶囊。
      *  生成态不在这里清：链可能还要续轮，清态统一在 loop 尾部（链收束处） */
     private static void updateUsageInfo(Conversation conversation, AtomicBoolean cancelled, long inputTokens, long outputTokens, long roundStartNanos) {
         if (!cancelled.get() && (inputTokens > 0 || outputTokens > 0)) {
             String convId = conversation.getId();
-            long elapsedMillis = (System.nanoTime() - roundStartNanos) / 1_000_000;
-            String summary = "tokens 输入 " + inputTokens + " · 输出 " + outputTokens
-                    + " · 耗时 " + (elapsedMillis / 1000.0) + " 秒";
+            double elapsedSeconds = (System.nanoTime() - roundStartNanos) / 1_000_000_000.0;
+            Conversation.Usage usage = new Conversation.Usage(inputTokens, outputTokens, elapsedSeconds);
             SwingUtilities.invokeLater(() -> {
+                conversation.setUsage(usage);
                 if (convId.equals(window.getStore().getActive().getId())) {
-                    window.setUsageInfo(summary);
+                    window.setUsageInfo(usage.label());
                 }
             });
         }

@@ -41,6 +41,19 @@ public class Conversation {
      *  null = 没记录（旧会话/没发过消息），消费端回落输入区当前值 */
     private ReasoningEffortEnum reasoningEffort;
     private AgentMode agentMode;
+    /** 本会话最近一轮的用量（tokens/耗时），用量胶囊的会话级数据源：每轮 ResponseCompleteEvent
+     *  写入，切回会话时由 Window 据此恢复胶囊。内存态不落盘（上一轮用量是会话过程信息，
+     *  重启后清空可接受）；null = 本会话还没跑过轮（胶囊不占位）。
+     *  为什么放会话上而不是全局变量：后台会话 A 的轮次不该静默丢，也不该盖掉显示中会话 B 的胶囊 */
+    private Usage usage;
+
+    /** 一轮流式回复的用量：输入/输出 token 数 + 本轮耗时（秒，含 HTTP 建流）。
+     *  label() 是胶囊展示文本，Main 写入和 Window 切会话恢复共用同一份格式 */
+    public record Usage(long inputTokens, long outputTokens, double elapsedSeconds) {
+        public String label() {
+            return "tokens 输入 " + inputTokens + " · 输出 " + outputTokens + " · 耗时 " + elapsedSeconds + " 秒";
+        }
+    }
     private final List<Message> messages = new ArrayList<>();
     /** 消息是否已在内存。新建/分叉出来的会话天然为 true；从索引装载的为 false，首次触达时经 loader 补齐 */
     private boolean loaded;
@@ -153,6 +166,15 @@ public class Conversation {
     public void setDialogPreferences(ReasoningEffortEnum reasoningEffort, AgentMode agentMode) {
         this.reasoningEffort = reasoningEffort;
         this.agentMode = agentMode;
+    }
+
+    /** 最近一轮用量（EDT 上写入；内存态，见字段注释） */
+    public Usage getUsage() {
+        return usage;
+    }
+
+    public void setUsage(Usage usage) {
+        this.usage = usage;
     }
 
     /** 返回实时消息列表（未加载时先读盘补齐）；请勿在遍历时增删 */
