@@ -137,7 +137,15 @@ public class Main {
         if (regenerate) {
             window.getStore().removeLastMessage(conversation.getId());
         }
-        PrepareParams prepareParams = getPrepareParams(conversation);
+        PrepareParams prepareParams;
+        try {
+            prepareParams = getPrepareParams(conversation);
+        } catch (Throwable throwable) {
+            RUNNING.remove(conversation.getId(), token);
+            LOG.error("prepare snapshot params failed: ", throwable);
+            SwingUtilities.invokeLater(() -> window.addNotifyMessage("failed to start agent loop: " + throwable.getMessage()));
+            return;
+        }
         // 首轮快照在此备好；后台结果补偿续链在 loop 尾部另起
         loop(conversation, token, prepareParams);
     }
@@ -172,23 +180,12 @@ public class Main {
             // 双参 remove：条目还是本轮令牌才清（防御性的对称）
             RUNNING.remove(conversation.getId(), cancelled);
             SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), false));
+            LOG.info("loop of {} ends after {} rounds", conversation.getId(), loopControl.executed);
             // 后台结果补偿（顺序关键：先放锁再查标记——bg 回调抢锁失败必然发生在放锁之前，
             // 本查必然能看见它留的标记）。生成期间送达的结果在链释放、会话已空闲时补一轮
             // 让模型消化；用户主动停止的链丢弃标记（结果已在历史里，随下一条用户消息自然带上）
             if (PENDING_BG_DELIVERY.remove(conversation.getId()) && !cancelled.get()) {
-                AtomicBoolean bgToken = tryAcquire(conversation.getId());
-                if (bgToken != null) {
-                    try {
-                        loop(conversation, bgToken, snapshotOnEdt(conversation));
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        RUNNING.remove(conversation.getId(), bgToken);
-                        LOG.error("后台结果补偿轮被中断", e);
-                    } catch (Throwable e) {
-                        RUNNING.remove(conversation.getId(), bgToken); // 快照失败：放锁，结果随下一条用户消息走
-                        LOG.error("后台结果补偿轮启动失败", e);
-                    }
-                }
+                SwingUtilities.invokeLater(() -> startAgentLoop(conversation, false));
                 // 抢锁失败：新链已持有会话，其快照必然包含该结果（注入先于标记），不会漏消化
             }
         });
@@ -238,10 +235,13 @@ public class Main {
         PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
                 .agentMode(mode).workspace(workspace).key(key).backendUrl(backendUrl)
                 .systemPrompt(systemPrompt).enabledTools(enabledTools);
-        return new PrepareParams(history, provider, stream, paramsBuilder);
+        for (PromptParams.RoleMessage roleMessage : history) {
+            paramsBuilder.roleMessages(roleMessage);
+        }
+        return new PrepareParams(provider, stream, paramsBuilder);
     }
 
-    private record PrepareParams(List<PromptParams.RoleMessage> history, Provider provider, Window.AiStream stream, PromptParams.Builder paramsBuilder) {
+    private record PrepareParams(Provider provider, Window.AiStream stream, PromptParams.Builder paramsBuilder) {
     }
 
     /**
@@ -258,11 +258,7 @@ public class Main {
         Set<String> doneCalls = new HashSet<>();
         Window.AiStream stream = prepareParams.stream;
         try {
-            PromptParams.Builder paramsBuilder = prepareParams.paramsBuilder;
-            for (PromptParams.RoleMessage roleMessage : prepareParams.history) {
-                paramsBuilder.roleMessages(roleMessage);
-            }
-            PromptParams promptParams = paramsBuilder.build();
+            PromptParams promptParams = prepareParams.paramsBuilder.build();
             long roundStartNanos = System.nanoTime(); // 本轮耗时（含 HTTP 建流），胶囊上展示用
             ProviderStreamingResponse providerStreamingResponse = prepareParams.provider.sendPromptStreaming(promptParams);
             events = providerStreamingResponse.blockingQueue();
