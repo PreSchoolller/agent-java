@@ -1328,6 +1328,7 @@ public class Window extends JFrame {
         // 草稿按会话取回：上次没发完的文本还在（setText 会触发 DocumentListener 写回同值，无碍）
         inputTextArea.setText(draftsByConversation.getOrDefault(conversation.getId(), ""));
         restoreConversationModel(conversation); // 模型下拉跟回会话记忆（该会话上次用的模型）
+        restoreConversationOptions(conversation); // 思考强度/权限模式跟回会话记忆（在模型恢复之后：模型默认强度先带出、会话记忆覆盖之）
         if (conversation.isEmpty()) {
             GridBagConstraints gbc = rowConstraints(false);
             gbc.fill = GridBagConstraints.NONE;
@@ -1353,10 +1354,34 @@ public class Window extends JFrame {
         inputTextArea.requestFocusInWindow();
     }
 
-    /** 把输入区当前选中的模型盖到会话的记忆字段上（发送/重新生成时调；随本会话随后的消息写一起落盘） */
-    private void stampConversationModel(Conversation conversation) {
+    /** 把输入区当前的模型/思考强度/权限模式盖到会话的记忆字段上（发送/重新生成时调；随本会话
+     *  随后的消息写一起落盘）。会话级记忆：链启动读自己的戳而不读全局下拉——后台会话的续轮/
+     *  补偿链若读下拉，读到的是当前显示会话的选择（串台） */
+    private void stampConversationOptions(Conversation conversation) {
         if (getSelectedModel() != null && getSelectedModelProfile() != null) {
             conversation.setModelOption(getSelectedModelProfile(), getSelectedModel());
+        }
+        conversation.setDialogPreferences(getSelectedEffort(), getSelectedMode());
+    }
+
+    /** 会话级偏好恢复：思考强度/权限模式下拉跟回该会话上次的选择；没盖过戳（旧会话/新会话）
+     *  保持当前选中不动。要在模型恢复之后调——模型下拉的监听器可能带出模型默认强度，会话记忆后到覆盖之 */
+    private void restoreConversationOptions(Conversation conversation) {
+        if (conversation.getReasoningEffort() != null) {
+            for (int i = 0; i < EFFORT_OPTIONS.length; i++) {
+                if (EFFORT_OPTIONS[i] == conversation.getReasoningEffort()) {
+                    effortCombo.setSelectedIndex(i);
+                    break;
+                }
+            }
+        }
+        if (conversation.getAgentMode() != null) {
+            for (int i = 0; i < MODE_OPTIONS.length; i++) {
+                if (MODE_OPTIONS[i] == conversation.getAgentMode()) {
+                    modeCombo.setSelectedIndex(i);
+                    break;
+                }
+            }
         }
     }
 
@@ -2066,7 +2091,7 @@ public class Window extends JFrame {
         refreshRegenerateButtons();
         waterfallPanel.revalidate();
         if (regenerateHandler != null) {
-            stampConversationModel(store.getActive()); // 重新生成同样按当前选中的模型盖戳
+            stampConversationOptions(store.getActive()); // 重新生成同样按当前选中的模型/偏好盖戳
             regenerateHandler.accept(store.getActive());
         }
     }
@@ -2610,7 +2635,7 @@ public class Window extends JFrame {
         if (text.isEmpty() || isGenerating(displayedConvId)) {
             return;
         }
-        stampConversationModel(store.getActive()); // 先盖戳再入库：模型记忆随本次消息一起落盘
+        stampConversationOptions(store.getActive()); // 先盖戳再入库：模型/偏好记忆随本次消息一起落盘
         addUserMessage(text);
         inputTextArea.setText("");
         if (inputHandler != null) {

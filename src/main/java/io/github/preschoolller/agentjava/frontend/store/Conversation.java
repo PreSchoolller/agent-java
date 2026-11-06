@@ -1,5 +1,8 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
+import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
+import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +35,12 @@ public class Conversation {
      *  切回会话/重启后恢复选中；null = 没记录（没发过消息的会话），随会话落盘 history */
     private String modelName;
     private String modelProfile;
+    /** 本会话最后使用的思考强度/权限模式（输入区下拉的会话级记忆，与模型记忆同一套路）：
+     *  发送/重新生成时盖戳、切回会话恢复、随会话落盘。链启动读这里而不是全局下拉——
+     *  后台会话续轮/补偿链若读下拉，读到的是当前显示会话的选择（串台）。
+     *  null = 没记录（旧会话/没发过消息），消费端回落输入区当前值 */
+    private ReasoningEffortEnum reasoningEffort;
+    private AgentMode agentMode;
     private final List<Message> messages = new ArrayList<>();
     /** 消息是否已在内存。新建/分叉出来的会话天然为 true；从索引装载的为 false，首次触达时经 loader 补齐 */
     private boolean loaded;
@@ -130,6 +139,20 @@ public class Conversation {
     public void setModelOption(String profileName, String modelName) {
         this.modelProfile = profileName;
         this.modelName = modelName;
+    }
+
+    public ReasoningEffortEnum getReasoningEffort() {
+        return reasoningEffort;
+    }
+
+    public AgentMode getAgentMode() {
+        return agentMode;
+    }
+
+    /** 会话级偏好盖戳（发送/重新生成时从输入区调；与模型记忆一起随会话落盘） */
+    public void setDialogPreferences(ReasoningEffortEnum reasoningEffort, AgentMode agentMode) {
+        this.reasoningEffort = reasoningEffort;
+        this.agentMode = agentMode;
     }
 
     /** 返回实时消息列表（未加载时先读盘补齐）；请勿在遍历时增删 */

@@ -206,12 +206,14 @@ public class Main {
      * 那是每轮快照（appendMessages）的事。
      */
     private static LoopConfig buildLoopConfig(Conversation conversation) {
-        // 模型/强度/模式选择都在 EDT 上取；之后下拉框可能被 EDT 修改，后台线程只读这份不可变数据
-        String model = window.getSelectedModel();
+        // 配置都在 EDT 上取：模型/强度/模式读会话记忆（发送时盖戳），后台会话续轮/补偿链
+        // 不读全局下拉——不然读到的是当前显示会话的选择（串台）；之后下拉框可能被 EDT 修改，
+        // 后台线程只读这份不可变数据
+        String model = conversation.getModelName();
         // 多配置路由：输入区模型下拉跨方案列出所有配置的模型（Window.ModelOption 带所属方案），
         // 选中哪个方案的模型，本轮就走那套配置——key/backendUrl/systemPrompt 从该方案快照，
         // provider 按该方案的 apiType 分派（provider 名全局存 AppSettings，per-apiType）
-        String selectedProfile = window.getSelectedModelProfile();
+        String selectedProfile = conversation.getModelProfile();
         Profile profile = selectedProfile == null ? null : appSettings.getProfile(selectedProfile);
         if (profile == null) {
             profile = appSettings.findProfileOwningModel(model); // 下拉没带所属方案时按模型名反查
@@ -221,8 +223,11 @@ public class Main {
             profile = appSettings.getProfile(appSettings.getProfileNames().get(0));
         }
         Provider provider = ProviderFactory.createProvider(profile.getApiType());
-        ReasoningEffortEnum re = window.getSelectedEffort(); // 模型与思考强度取输入区右下角的选择（对话级设置）
-        AgentMode mode = window.getSelectedMode(); // 权限模式快照：本轮中途改下拉框不影响已发出的请求
+        // 思考强度/权限模式读会话记忆；旧会话没盖过戳（字段 null）回落输入区当前值
+        ReasoningEffortEnum re = conversation.getReasoningEffort() != null
+                ? conversation.getReasoningEffort() : window.getSelectedEffort();
+        AgentMode mode = conversation.getAgentMode() != null
+                ? conversation.getAgentMode() : window.getSelectedMode();
         // 纯聊天不挂工具，工作区无所谓（保持 null：不建目录、系统提示词不注入）
         String workspace = AgentMode.CHAT == mode ? null : resolveWorkspace(conversation);
         String key = profile.getKey();

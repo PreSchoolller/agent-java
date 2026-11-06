@@ -1,6 +1,8 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
 import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
+import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -367,6 +369,15 @@ public class ConversationStore {
             map.put("model", conversation.getModelName());
             map.put("modelProfile", conversation.getModelProfile());
         }
+        if (conversation.getReasoningEffort() != null || conversation.getAgentMode() != null) {
+            // 会话级偏好记忆（思考强度/权限模式，发送时盖戳）；缺键（旧文件）= 未记录
+            if (conversation.getReasoningEffort() != null) {
+                map.put("reasoningEffort", conversation.getReasoningEffort().name());
+            }
+            if (conversation.getAgentMode() != null) {
+                map.put("agentMode", conversation.getAgentMode().name());
+            }
+        }
         return map;
     }
 
@@ -443,6 +454,13 @@ public class ConversationStore {
                             modelProfile == null ? null : String.valueOf(modelProfile),
                             String.valueOf(modelName));
                 }
+                Object effortName = map.get("reasoningEffort"); // 会话级偏好记忆：缺键（旧文件）= 未记录
+                Object modeName = map.get("agentMode");
+                if (effortName != null || modeName != null) {
+                    conversation.setDialogPreferences(
+                            parseEnum(ReasoningEffortEnum.class, effortName),
+                            parseEnum(AgentMode.class, modeName));
+                }
                 // 按需加载：启动只读元数据，消息挂回读钩子，首次触达该会话消息时才读单会话文件。
                 // 消息只认单会话文件（文件名=会话 id）——旧格式内嵌消息不迁移，读到坏文件按无消息处理
                 String id = conversation.getId();
@@ -496,5 +514,17 @@ public class ConversationStore {
 
     private static long num(Object value) {
         return value instanceof Number number ? number.longValue() : 0L;
+    }
+
+    /** 枚举名 → 枚举值；null/未知名（旧文件遇到被删改的枚举值）回落 null = 未记录 */
+    private static <E extends Enum<E>> E parseEnum(Class<E> type, Object name) {
+        if (name == null) {
+            return null;
+        }
+        try {
+            return Enum.valueOf(type, String.valueOf(name));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 }
