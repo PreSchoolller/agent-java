@@ -137,9 +137,9 @@ public class Main {
         if (regenerate) {
             window.getStore().removeLastMessage(conversation.getId());
         }
-        PrepareParams prepareParams;
+        LoopConfig loopConfig;
         try {
-            prepareParams = getPrepareParams(conversation);
+            loopConfig = buildLoopConfig(conversation);
         } catch (Throwable throwable) {
             RUNNING.remove(conversation.getId(), token);
             LOG.error("prepare snapshot params failed: ", throwable);
@@ -147,7 +147,7 @@ public class Main {
             return;
         }
         // 首轮快照在此备好；后台结果补偿续链在 loop 尾部另起
-        loop(conversation, token, prepareParams);
+        loop(conversation, token, loopConfig);
     }
 
     /**
@@ -156,17 +156,16 @@ public class Main {
      * 无续轮诉求时链收束：清生成态、放会话锁，再查后台结果补偿标记决定是否补一轮。
      * 生成的会话不必在前台：卡片经会话 id 定向落库，用户切走再切回由 Window 的 rebind 重新上屏。
      */
-    private static void loop(Conversation conversation, AtomicBoolean cancelled, PrepareParams firstRoundParams) {
+    private static void loop(Conversation conversation, AtomicBoolean cancelled, LoopConfig loopConfig) {
         CompletableFuture.runAsync(() -> {
-            PrepareParams prepareParams = firstRoundParams;
+            PrepareParams prepareParams;
             LoopControl loopControl = new LoopControl();
             // 这里是唯一调用 doStream 的地方
             while (loopControl.hasMoreRounds()) {
                 int round = loopControl.nextRound();
                 try {
-                    if (round > 1) {
-                        prepareParams = snapshotOnEdt(conversation); // 续轮重取快照：工具结果/后台结果已进历史
-                    }
+                    window.setConversationGenerating(conversation.getId(), true);
+                    prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 续轮重取快照：工具结果/后台结果已进历史
                     doStream(window, conversation, cancelled, prepareParams, loopControl);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -192,10 +191,10 @@ public class Main {
     }
 
     /** 续轮前在 EDT 上重取快照（历史/模型/权限模式都可能与首轮不同），勿进行耗时操作 */
-    private static PrepareParams snapshotOnEdt(Conversation conversation)
+    private static PrepareParams snapshotMessagesOnEdt(Conversation conversation, LoopConfig loopConfig)
             throws InterruptedException, InvocationTargetException {
         PrepareParams[] holder = new PrepareParams[1];
-        SwingUtilities.invokeAndWait(() -> holder[0] = getPrepareParams(conversation));
+        SwingUtilities.invokeAndWait(() -> holder[0] = appendMessages(conversation, loopConfig));
         return holder[0];
     }
 
@@ -203,12 +202,10 @@ public class Main {
      * EDT 上取历史快照，勿进行耗时操作。快照即消费：已注入历史的后台结果随快照进上下文，
      * 补偿标记在此清除——whenBackgroundTaskDone 先记再抢，抢到锁的链负责消化（对称收口）
      */
-    private static PrepareParams getPrepareParams(Conversation conversation) {
-        window.setConversationGenerating(conversation.getId(), true);
+    private static LoopConfig buildLoopConfig(Conversation conversation) {
         PENDING_BG_DELIVERY.remove(conversation.getId());
         // 历史快照与模型/强度/模式选择都在 EDT 上取（此时本轮 AI 占位卡还没建），
         // 之后仓库与下拉框可能被 EDT 修改，后台线程只读这份不可变数据
-        List<PromptParams.RoleMessage> history = buildRoleMessages(conversation);
         String model = window.getSelectedModel();
         // 多配置路由：输入区模型下拉跨方案列出所有配置的模型（Window.ModelOption 带所属方案），
         // 选中哪个方案的模型，本轮就走那套配置——key/backendUrl/systemPrompt 从该方案快照，
@@ -231,14 +228,24 @@ public class Main {
         String backendUrl = profile.getBackendUrl();
         String systemPrompt = profile.getSystemPrompt();
         List<String> enabledTools = appSettings.getEnabledTools();
-        Window.AiStream stream = window.addAiMessage(conversation.getId(), "");
         PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
                 .agentMode(mode).workspace(workspace).key(key).backendUrl(backendUrl)
                 .systemPrompt(systemPrompt).enabledTools(enabledTools);
+        return new LoopConfig(provider, paramsBuilder.build());
+    }
+
+    private static PrepareParams appendMessages(Conversation conversation, LoopConfig loopConfig) {
+        List<PromptParams.RoleMessage> history = buildRoleMessages(conversation);
+        PromptParams.Builder builder = loopConfig.noMessages.toBuilder();
+        builder.clearRoleMessages();
         for (PromptParams.RoleMessage roleMessage : history) {
-            paramsBuilder.roleMessages(roleMessage);
+            builder.roleMessages(roleMessage);
         }
-        return new PrepareParams(provider, stream, paramsBuilder);
+        Window.AiStream stream = window.addAiMessage(conversation.getId(), "");
+        return new PrepareParams(loopConfig.provider, stream, builder);
+    }
+
+    private record LoopConfig(Provider provider, PromptParams noMessages) {
     }
 
     private record PrepareParams(Provider provider, Window.AiStream stream, PromptParams.Builder paramsBuilder) {

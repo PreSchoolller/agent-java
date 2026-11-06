@@ -143,6 +143,11 @@ public class PromptParams {
             base.enabledTools = enabledTools;
             return this;
         }
+
+        public Builder clearRoleMessages() {
+            base.roleMessages.clear();
+            return this;
+        }
     }
 
     public record RoleMessage(RoleEnum role, String content, String toolArguments, String toolName, String callId) {
