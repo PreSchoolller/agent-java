@@ -146,12 +146,13 @@ public class Main {
             SwingUtilities.invokeLater(() -> window.addNotifyMessage("failed to start agent loop: " + throwable.getMessage()));
             return;
         }
-        // 首轮快照在此备好；后台结果补偿续链在 loop 尾部另起
+        // 链配置在此冻结；每轮消息快照在 loop 内 EDT 上取，后台结果补偿续链在 loop 尾部另起
         loop(conversation, token, loopConfig);
     }
 
     /**
-     * 整条 agent 链（后台线程跑）：首轮用 startAgentLoop 在 EDT 上备好的快照，之后每轮 doStream；
+     * 整条 agent 链（后台线程跑）：配置在 startAgentLoop 冻结为 LoopConfig，每轮经
+     * snapshotMessagesOnEdt 重取历史+建卡后 doStream；
      * 工具结果到齐由 doStream requestContinue 续轮（同一个取消令牌、同一把会话锁，生成态保持到整条链结束），
      * 无续轮诉求时链收束：清生成态、放会话锁，再查后台结果补偿标记决定是否补一轮。
      * 生成的会话不必在前台：卡片经会话 id 定向落库，用户切走再切回由 Window 的 rebind 重新上屏。
@@ -164,8 +165,8 @@ public class Main {
             while (loopControl.hasMoreRounds()) {
                 int round = loopControl.nextRound();
                 try {
-                    window.setConversationGenerating(conversation.getId(), true);
-                    prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 续轮重取快照：工具结果/后台结果已进历史
+                    SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), true));
+                    prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 每轮快照：只重取历史+建卡，配置不动
                     doStream(window, conversation, cancelled, prepareParams, loopControl);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -190,7 +191,7 @@ public class Main {
         });
     }
 
-    /** 续轮前在 EDT 上重取快照（历史/模型/权限模式都可能与首轮不同），勿进行耗时操作 */
+    /** 每轮在 EDT 上重取消息快照（配置已由 LoopConfig 冻结，这里只取历史+建卡），勿进行耗时操作 */
     private static PrepareParams snapshotMessagesOnEdt(Conversation conversation, LoopConfig loopConfig)
             throws InterruptedException, InvocationTargetException {
         PrepareParams[] holder = new PrepareParams[1];
@@ -199,13 +200,13 @@ public class Main {
     }
 
     /**
-     * EDT 上取历史快照，勿进行耗时操作。快照即消费：已注入历史的后台结果随快照进上下文，
-     * 补偿标记在此清除——whenBackgroundTaskDone 先记再抢，抢到锁的链负责消化（对称收口）
+     * EDT 上冻结整条链的请求构造参数：模型/方案路由（key、backendUrl）/思考强度/权限模式/
+     * 工具清单/系统提示词，链中途一律不重查——设置变更对下一条链生效，不改动跑着的链
+     * （主流 agent 语义：一次 run = 冻结的构造参数 + 演进的消息）。也别在这里读历史/建卡，
+     * 那是每轮快照（appendMessages）的事。
      */
     private static LoopConfig buildLoopConfig(Conversation conversation) {
-        PENDING_BG_DELIVERY.remove(conversation.getId());
-        // 历史快照与模型/强度/模式选择都在 EDT 上取（此时本轮 AI 占位卡还没建），
-        // 之后仓库与下拉框可能被 EDT 修改，后台线程只读这份不可变数据
+        // 模型/强度/模式选择都在 EDT 上取；之后下拉框可能被 EDT 修改，后台线程只读这份不可变数据
         String model = window.getSelectedModel();
         // 多配置路由：输入区模型下拉跨方案列出所有配置的模型（Window.ModelOption 带所属方案），
         // 选中哪个方案的模型，本轮就走那套配置——key/backendUrl/systemPrompt 从该方案快照，
@@ -234,7 +235,15 @@ public class Main {
         return new LoopConfig(provider, paramsBuilder.build());
     }
 
+    /**
+     * EDT 上装配单轮请求：重取历史快照 + 建本轮 AI 占位卡，与冻结的 LoopConfig 合成。
+     * 快照即消费：补偿标记的清除必须和读历史在**同一个 EDT 任务**里——消费挪到 loop 体
+     * （bg 线程）时，回调任务（注入结果→加标记）可以插在 remove 和快照之间，读到了结果
+     * 却留下标记，链尾补偿再把同一结果消化一遍（幽灵轮）；同任务则 EDT FIFO 保证原子。
+     * whenBackgroundTaskDone 先记再抢，抢到锁的链的快照负责消化（对称收口）
+     */
     private static PrepareParams appendMessages(Conversation conversation, LoopConfig loopConfig) {
+        PENDING_BG_DELIVERY.remove(conversation.getId());
         List<PromptParams.RoleMessage> history = buildRoleMessages(conversation);
         PromptParams.Builder builder = loopConfig.noMessages.toBuilder();
         builder.clearRoleMessages();
@@ -245,6 +254,8 @@ public class Main {
         return new PrepareParams(loopConfig.provider, stream, builder);
     }
 
+    /** 链级冻结配置：provider 实例 + 不含消息的请求模板（PromptParams.Builder(PromptParams) 拷贝列表，
+     *  toBuilder 出来的 builder 每轮独立改写消息，不会污染这里）。整条链只读 */
     private record LoopConfig(Provider provider, PromptParams noMessages) {
     }
 

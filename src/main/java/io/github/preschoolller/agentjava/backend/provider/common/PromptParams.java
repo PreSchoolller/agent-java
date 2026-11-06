@@ -84,7 +84,7 @@ public class PromptParams {
             this();
             base.model = promptParams.model;
             base.re = promptParams.re;
-            base.roleMessages = promptParams.roleMessages;
+            base.roleMessages = new ArrayList<>(promptParams.roleMessages);
             base.agentMode = promptParams.agentMode;
             base.workspace = promptParams.workspace;
             base.key = promptParams.key;
