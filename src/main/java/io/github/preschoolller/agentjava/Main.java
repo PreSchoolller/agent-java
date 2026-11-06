@@ -143,7 +143,8 @@ public class Main {
         } catch (Throwable throwable) {
             RUNNING.remove(conversation.getId(), token);
             LOG.error("prepare snapshot params failed: ", throwable);
-            SwingUtilities.invokeLater(() -> window.addNotifyMessage("failed to start agent loop: " + throwable.getMessage()));
+            SwingUtilities.invokeLater(() -> window.addNotifyMessage(conversation.getId(),
+                    "failed to start agent loop: " + throwable.getMessage()));
             return;
         }
         // 链配置在此冻结；每轮消息快照在 loop 内 EDT 上取，后台结果补偿续链在 loop 尾部另起
@@ -334,14 +335,16 @@ public class Main {
                 } else if (event instanceof ErrorMessageEvent error) {
                     // 流式错误（visitError/visitFailed/visitIncomplete/SSE 异常发射，后端接线待做）：
                     // 通知气泡展示，流本身照常走到毒丸收束
-                    SwingUtilities.invokeLater(() -> window.addNotifyMessage("Error: " + error.message()));
+                    SwingUtilities.invokeLater(() -> window.addNotifyMessage(conversation.getId(),
+                            "Error: " + error.message()));
                 }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             LOG.error("agent 流式轮被中断", e);
         } catch (RuntimeException e) {
-            SwingUtilities.invokeLater(() -> window.addNotifyMessage("Error: " + e.getMessage()));
+            SwingUtilities.invokeLater(() -> window.addNotifyMessage(conversation.getId(),
+                    "Error: " + e.getMessage()));
         } finally {
             SwingUtilities.invokeLater(stream::finish); // 停止也走 finish：已生成部分照常保留并落库
             if (cancelled.get() && shouldStopBackend != null) {

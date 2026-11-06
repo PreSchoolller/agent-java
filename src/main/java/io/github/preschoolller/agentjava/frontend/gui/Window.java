@@ -1146,15 +1146,17 @@ public class Window extends JFrame {
     }
 
     /**
-     * 往当前对话追加一张 AI 输出卡片（Markdown 渲染），返回流式句柄。
-     * 一次性后端直接 addAiMessage(完整回复)；流式后端先 addAiMessage("")，再逐段
-     * appendChunk，结束时 finish()（会把最终文本写回会话仓库）。须在 EDT 上调用。
+     * 往指定会话追加一条错误通知（AI 身份消息，Markdown 渲染）。通知属于**出错的会话**而不是
+     * 当前显示的会话：后台会话链上出的错要落它自己的库——按当前活动会话落会把别人的错写进
+     * 无辜会话。显示中的才出卡滚动到底；不在前台只落库，切回来随会话重建上屏。须在 EDT 上调用。
      */
-    public void addNotifyMessage(String text) {
-        Message message = store.appendMessage(store.getActive().getId(), Conversation.ROLE_AI, text);
-        MessageCard card = insertMessageCard(message);
-        updateMaterialization(); // 流式卡片是最后一张，窗口化时保证它已物化
-        scrollToBottom();
+    public void addNotifyMessage(String conversationId, String text) {
+        Message message = store.appendMessage(conversationId, Conversation.ROLE_AI, text);
+        if (conversationId.equals(displayedConvId)) {
+            insertMessageCard(message);
+            updateMaterialization(); // 通知卡是最后一张，窗口化时保证它已物化
+            scrollToBottom();
+        }
     }
 
     /**
