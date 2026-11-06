@@ -925,17 +925,6 @@ public class Window extends JFrame {
     }
 
     /**
-     * 往当前对话追加一张 AI 输出卡片（Markdown 渲染），返回流式句柄。
-     * 一次性后端直接 addAiMessage(完整回复)；流式后端先 addAiMessage("")，再逐段
-     * appendChunk，结束时 finish()（会把最终文本写回会话仓库）。须在 EDT 上调用。
-     * 便捷入口隐式取 store.getActive()：仅限 UI 测试/演示（显示中即目标会话）；
-     * agent 链路的目标会话可能不在前台，必须用带会话 id 的版本
-     */
-    public AiStream addAiMessage(String text) {
-        return addAiMessage(store.getActive().getId(), text);
-    }
-
-    /**
      * 往指定会话追加 AI 输出卡片（并行生成时目标会话可能不在前台）：非显示中的会话只落库不出卡，
      * 流式增量攒在句柄里，切回该会话时经 rebind 一次性补画。须在 EDT 上调用。
      */
@@ -976,17 +965,6 @@ public class Window extends JFrame {
          * 卡片不挂终止/查看输出按钮（进程还不存在），放行/免审批后执行期才挂。须在 EDT 上调用。
          */
         void markExecuting();
-    }
-
-    /**
-     * 往当前对话追加一张工具调用卡片（"运行中"状态）。agent 循环里每次调工具：
-     * 先 addToolCall(工具名, 参数摘要) 出卡，参数逐段生成时 handle.appendArgs(增量) 上屏
-     * （只显示不落库），执行完 handle.finish(结果文本, 是否成功, 完整参数) 回填终态。
-     * 与 AiStream 对称：后端在 EDT 上调用。须在 EDT 上调用。
-     * 便捷入口隐式取 store.getActive()：仅限 UI 测试/演示；agent 链路必须用带会话 id 的版本
-     */
-    public ToolCallHandle addToolCall(String toolName, String argsSummary, String callId) {
-        return addToolCall(store.getActive().getId(), toolName, argsSummary, callId);
     }
 
     /** 指定会话的版本（并行生成时目标会话可能不在前台）：非显示中的会话只落库，卡片等切回时重绑上屏 */
@@ -1325,7 +1303,7 @@ public class Window extends JFrame {
         usagePill.setVisible(true);
     }
 
-    /** 切会话时用量胶囊跟回该会话的记忆（内存态，重启清空）：没跑过轮的会话胶囊藏起不占位 */
+    /** 切会话时用量胶囊跟回该会话的记忆（随会话落盘，重启恢复）：没跑过轮的会话胶囊藏起不占位 */
     private void restoreUsagePill(Conversation conversation) {
         Conversation.Usage usage = conversation.getUsage();
         if (usage == null) {

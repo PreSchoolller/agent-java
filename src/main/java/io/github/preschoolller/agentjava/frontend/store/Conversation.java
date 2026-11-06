@@ -42,8 +42,8 @@ public class Conversation {
     private ReasoningEffortEnum reasoningEffort;
     private AgentMode agentMode;
     /** 本会话最近一轮的用量（tokens/耗时），用量胶囊的会话级数据源：每轮 ResponseCompleteEvent
-     *  写入，切回会话时由 Window 据此恢复胶囊。内存态不落盘（上一轮用量是会话过程信息，
-     *  重启后清空可接受）；null = 本会话还没跑过轮（胶囊不占位）。
+     *  写入，切回会话时由 Window 据此恢复胶囊；随会话索引落盘——以后做上下文管理
+     *  （按会话 token 消耗裁剪/预估）也用这份数据。null = 本会话还没跑过轮（胶囊不占位）。
      *  为什么放会话上而不是全局变量：后台会话 A 的轮次不该静默丢，也不该盖掉显示中会话 B 的胶囊 */
     private Usage usage;
 
@@ -59,6 +59,8 @@ public class Conversation {
     private boolean loaded;
     /** 单会话消息回读钩子（ConversationStore 装载索引时注入，消费一次即清空）；内存新建的会话为 null */
     private Supplier<List<Message>> loader;
+    /** 落盘钩子（ConversationStore 持有本对象时注入）：元数据级变更（setUsage）用它即写盘 */
+    private Runnable saver;
 
     /** 装载索引用构造：只有元数据，消息等按需加载（attachLoader 注入回读钩子） */
     public Conversation(String id, String title, long createdAt, long updatedAt) {
@@ -78,6 +80,13 @@ public class Conversation {
     /** 注入消息回读钩子（包内：只有仓库需要）；必须在首次触达消息之前调用 */
     void attachLoader(Supplier<List<Message>> loader) {
         this.loader = loader;
+    }
+
+    /** 注入落盘钩子（包内：只有仓库需要，仓库持有本对象时立即装上）。
+     *  用量的落盘不走"随下次消息保存"搭车：链末轮的用量（ResponseCompleteEvent）到得
+     *  比消息写晚，等搭车就丢了——setUsage 自己触发保存，写完即盘 */
+    void attachSaver(Runnable saver) {
+        this.saver = saver;
     }
 
     /** 消息当前是否已在内存（仓库落盘判断用：未加载的会话磁盘上就是对的，不必重写） */
@@ -168,13 +177,16 @@ public class Conversation {
         this.agentMode = agentMode;
     }
 
-    /** 最近一轮用量（EDT 上写入；内存态，见字段注释） */
+    /** 最近一轮用量（EDT 上写入；写完即触发仓库落盘，见 attachSaver 注释） */
     public Usage getUsage() {
         return usage;
     }
 
     public void setUsage(Usage usage) {
         this.usage = usage;
+        if (saver != null) {
+            saver.run();
+        }
     }
 
     /** 返回实时消息列表（未加载时先读盘补齐）；请勿在遍历时增删 */

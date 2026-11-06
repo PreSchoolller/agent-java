@@ -68,6 +68,7 @@ public class ConversationStore {
         }
         if (conversations.isEmpty()) {
             Conversation created = Conversation.create();
+            created.attachSaver(() -> saveAndSyncSession(created));
             conversations.add(created);
             activeId = created.getId();
             return created;
@@ -90,6 +91,7 @@ public class ConversationStore {
             return current;
         }
         Conversation created = Conversation.create();
+        created.attachSaver(() -> saveAndSyncSession(created));
         created.setWorkspace(workspace);
         conversations.add(0, created);
         activeId = created.getId();
@@ -378,6 +380,13 @@ public class ConversationStore {
                 map.put("agentMode", conversation.getAgentMode().name());
             }
         }
+        if (conversation.getUsage() != null) {
+            // 最近一轮用量（胶囊恢复 + 以后上下文管理用）；缺键（旧文件/没跑过轮）= 未记录
+            Conversation.Usage usage = conversation.getUsage();
+            map.put("usageInput", usage.inputTokens());
+            map.put("usageOutput", usage.outputTokens());
+            map.put("usageElapsed", usage.elapsedSeconds());
+        }
         return map;
     }
 
@@ -461,10 +470,16 @@ public class ConversationStore {
                             parseEnum(ReasoningEffortEnum.class, effortName),
                             parseEnum(AgentMode.class, modeName));
                 }
+                Object usageInput = map.get("usageInput"); // 最近一轮用量：三键齐才算有（防半截数据）
+                if (usageInput != null && map.get("usageOutput") != null && map.get("usageElapsed") != null) {
+                    conversation.setUsage(new Conversation.Usage(
+                            num(usageInput), num(map.get("usageOutput")), dbl(map.get("usageElapsed"))));
+                }
                 // 按需加载：启动只读元数据，消息挂回读钩子，首次触达该会话消息时才读单会话文件。
                 // 消息只认单会话文件（文件名=会话 id）——旧格式内嵌消息不迁移，读到坏文件按无消息处理
                 String id = conversation.getId();
                 conversation.attachLoader(() -> readSessionMessages(id));
+                conversation.attachSaver(() -> saveAndSyncSession(conversation));
                 conversations.add(conversation);
             }
             activeId = conversations.isEmpty() ? null : conversations.get(0).getId();
@@ -514,6 +529,10 @@ public class ConversationStore {
 
     private static long num(Object value) {
         return value instanceof Number number ? number.longValue() : 0L;
+    }
+
+    private static double dbl(Object value) {
+        return value instanceof Number number ? number.doubleValue() : 0.0;
     }
 
     /** 枚举名 → 枚举值；null/未知名（旧文件遇到被删改的枚举值）回落 null = 未记录 */

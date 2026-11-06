@@ -371,7 +371,7 @@ class WindowGuiTest {
         String streamedBody = "### 流式输出\n\n这是**逐段**追加的回复，"
                 + "每 120ms 渲染一次，`高度`自适应。\n\n```java\nint x = 42;\n```\n";
         Window.AiStream[] streamHolder = new Window.AiStream[1];
-        edt(() -> streamHolder[0] = WINDOW.addAiMessage(""));
+        edt(() -> streamHolder[0] = WINDOW.addAiMessage(store.getActive().getId(), ""));
         Thread.sleep(500);
         edt(() -> streamHolder[0].appendThinking("先拆解一下问题再作答。\n思考区与正文各走各的缓冲。\n"));
         Thread.sleep(300);
@@ -410,7 +410,7 @@ class WindowGuiTest {
         // —— 异常收尾：只吐了思考就断流（后端报错 / 用户点停止），正文永远不到 ——
         // 契约：finish() 必须兜底收尾思考区——收成"已思考 N 秒"一行，不能永远停在"思考中…"
         Window.AiStream[] brokenHolder = new Window.AiStream[1];
-        edt(() -> brokenHolder[0] = WINDOW.addAiMessage(""));
+        edt(() -> brokenHolder[0] = WINDOW.addAiMessage(store.getActive().getId(), ""));
         Thread.sleep(300);
         edt(() -> brokenHolder[0].appendThinking("只吐了思考，正文还没到就断流了。\n"));
         Thread.sleep(300);
@@ -435,7 +435,7 @@ class WindowGuiTest {
         edt(() -> toolConvHolder[0] = store.newConversation());
         Thread.sleep(1000); // fireChanged 已把主区切到新会话
         Window.ToolCallHandle[] toolHolder = new Window.ToolCallHandle[1];
-        edt(() -> toolHolder[0] = WINDOW.addToolCall("read_file", "", "call_2217929885810011"));
+        edt(() -> toolHolder[0] = WINDOW.addToolCall(store.getActive().getId(), "read_file", "", "call_2217929885810011"));
         edt(() -> toolHolder[0].appendArgs("{\"path\": "));
         Thread.sleep(200);
         edt(() -> toolHolder[0].appendArgs("\"src/Demo."));
@@ -446,7 +446,7 @@ class WindowGuiTest {
         // finish 传空参数：终态参数应回退到流式累积的完整 JSON（argsByCallId 兜底路径）
         edt(() -> toolHolder[0].finish("public class Demo {\n    private Buffer buffer;\n}", true, ""));
         edt(() -> {
-            Window.ToolCallHandle handle = WINDOW.addToolCall("read_file", "{\"path\": \"missing.txt\"}",
+            Window.ToolCallHandle handle = WINDOW.addToolCall(store.getActive().getId(), "read_file", "{\"path\": \"missing.txt\"}",
                     "call_2217929885810012");
             handle.finish("错误: 文件不存在", false, "{\"path\": \"missing.txt\"}");
         });
@@ -481,7 +481,7 @@ class WindowGuiTest {
         // 截图 17：待确认卡。待确认是纯显示态不落库，断言看视图树与 future，落库断言看决完之后的终态
         java.util.concurrent.CompletableFuture<Boolean>[] decision = new java.util.concurrent.CompletableFuture[1];
         edt(() -> {
-            Window.ToolCallHandle approvalHandle = WINDOW.addToolCall("write_file", "{\"path\": \"a.txt\"}",
+            Window.ToolCallHandle approvalHandle = WINDOW.addToolCall(store.getActive().getId(), "write_file", "{\"path\": \"a.txt\"}",
                     "call_approval_1");
             decision[0] = new java.util.concurrent.CompletableFuture<>();
             approvalHandle.requestApproval(decision[0]);
@@ -501,7 +501,7 @@ class WindowGuiTest {
         // 拒绝路径：按钮写 false，随后按 provider 的收尾（DENIED_RESULT, 失败）落库
         java.util.concurrent.CompletableFuture<Boolean>[] denied = new java.util.concurrent.CompletableFuture[1];
         edt(() -> {
-            Window.ToolCallHandle denyHandle = WINDOW.addToolCall("write_file", "{\"path\": \"b.txt\"}",
+            Window.ToolCallHandle denyHandle = WINDOW.addToolCall(store.getActive().getId(), "write_file", "{\"path\": \"b.txt\"}",
                     "call_approval_2");
             denied[0] = new java.util.concurrent.CompletableFuture<>();
             denyHandle.requestApproval(denied[0]);
@@ -541,7 +541,7 @@ class WindowGuiTest {
                 + "\"mode\": \"overwrite\"}";
         java.util.concurrent.CompletableFuture<Boolean>[] narrowDecision = new java.util.concurrent.CompletableFuture[1];
         edt(() -> {
-            Window.ToolCallHandle narrowHandle = WINDOW.addToolCall("write_file", longArgs, "call_narrow");
+            Window.ToolCallHandle narrowHandle = WINDOW.addToolCall(store.getActive().getId(), "write_file", longArgs, "call_narrow");
             narrowDecision[0] = new java.util.concurrent.CompletableFuture<>();
             narrowHandle.requestApproval(narrowDecision[0]);
             NARROW_HOLDER[0] = narrowHandle;
@@ -889,7 +889,7 @@ class WindowGuiTest {
         Thread.sleep(800);
         Window.ToolCallHandle[] bgHandle = new Window.ToolCallHandle[1];
         String bgArgs = "{\"command\": \"mvn package\", \"background\": true}";
-        edt(() -> bgHandle[0] = WINDOW.addToolCall("bash", bgArgs, "call_bg_peek"));
+        edt(() -> bgHandle[0] = WINDOW.addToolCall(store.getActive().getId(), "bash", bgArgs, "call_bg_peek"));
         edt(() -> bgHandle[0].finish("background task submitted successfully, id: call_bg_peek, pid: 1234",
                 true, bgArgs));
         Thread.sleep(400);

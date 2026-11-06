@@ -151,6 +151,24 @@ class PersistenceTest {
         assertTrue(wsPath.equals(reusedConv.getWorkspace()), "复用空会话改绑工作区");
     }
 
+    @Test
+    @Order(6)
+    void t06_usageRoundTrip() {
+        // 最近一轮用量落盘往返（胶囊恢复 + 以后上下文管理的数据源）：setUsage 即写盘，
+        // 不搭消息保存的车——链末轮用量到得比消息落盘晚；没跑过轮的会话不写键
+        ConversationStore usageStore = new ConversationStore(historyFile());
+        String usageId = usageStore.newConversation().getId();
+        usageStore.appendMessage(usageId, Conversation.ROLE_USER, "x"); // 先有消息（空会话从不进主文件）
+        usageStore.getActive().setUsage(new Conversation.Usage(120, 34, 2.05));
+        Conversation.Usage reloaded = byId(new ConversationStore(historyFile()), usageId).getUsage();
+        assertNotNull(reloaded, "用量落盘往返");
+        assertEquals(120, reloaded.inputTokens(), "输入 token 往返");
+        assertEquals(34, reloaded.outputTokens(), "输出 token 往返");
+        assertEquals(2.05, reloaded.elapsedSeconds(), 1e-9, "耗时往返");
+        assertEquals("tokens 输入 120 · 输出 34 · 耗时 2.05 秒", reloaded.label(), "胶囊文本格式");
+        assertNull(byId(new ConversationStore(historyFile()), assertConvId()).getUsage(), "没跑过轮的会话无用量");
+    }
+
     private static String assertConvId() {
         assertNotNull(convId, "首条会话未初始化（用例须按顺序执行）");
         return convId;
