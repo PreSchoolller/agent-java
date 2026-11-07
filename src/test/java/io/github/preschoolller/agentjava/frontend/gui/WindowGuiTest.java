@@ -297,8 +297,17 @@ class WindowGuiTest {
         // bash 转文件正则行（用户点名）：工具页第二张卡；行为说明是 HTML 折行文案，
         // 全等断言够不着，由 5d 截图目检兜底
         assertTrue(uiHasShowingTextAnyWindow("文件正则"), "工具页含文件正则行");
+        // 每工具可展开交互区（支持 uiTips/uiInteractive 的工具才有）：bash 实现了，read 没有。
+        // 只展开断言不点「执行」——执行会真拉进程探测（最坏 10 秒）且改 bash 头，回归不碰。
+        // uiTips 提示是 HTML 折行标签（getText 返回整段 HTML），全等断言够不着，截图目检兜底
+        assertTrue(uiHasShowingTextAnyWindow("展开交互"), "bash 工具有交互开关");
+        assertEquals(1, countShowingTextAnyWindow("展开交互"), "只实现了交互的工具有开关（read 没有）");
+        edt(() -> uiClickAnyWindow("展开交互"));
+        Thread.sleep(400);
+        assertEquals(1, countShowingTextAnyWindow("收起交互"), "展开后开关换收起文案");
+        assertEquals(1, countShowingTextAnyWindow("执行"), "展开后执行钮在");
         captureDialogGated("window-5d-settings-tools.png", "设置",
-                "工具页：ToolManager 注册的工具逐条一行，勾选框=声明给模型（本次跑全量依赖，是真实注册行）。勾选态看看就好，别点「保存」。");
+                "工具页：ToolManager 注册的工具逐条一行，勾选框=声明给模型；实现交互的工具（bash）下方有可展开交互区（uiTips+输入框+执行钮），已展开。勾选态看看就好，别点「保存」。");
         // 日志页：控制台/文件两块参数（原通用页的日志等级挪进独立页并扩成完整日志配置）
         edt(() -> uiClickAnyWindow("日志"));
         Thread.sleep(400);

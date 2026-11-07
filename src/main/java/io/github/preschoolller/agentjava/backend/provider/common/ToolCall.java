@@ -2,6 +2,8 @@ package io.github.preschoolller.agentjava.backend.provider.common;
 
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -29,6 +31,8 @@ public class ToolCall implements Runnable {
 
     /** 额外审批结束（放行或拒绝）时完成：额外审批工具的执行超时从这里起算（审批等待不计入） */
     private final CompletableFuture<Void> extraGatesDone = new CompletableFuture<>();
+
+    private static final Logger LOG = LoggerFactory.getLogger(ToolCall.class);
 
     public ToolCall() {
         tool = ToolManager.EMPTY_TOOL;
@@ -96,6 +100,7 @@ public class ToolCall implements Runnable {
 
     @Override
     public void run() {
+        long start = System.currentTimeMillis();
         // 审批在池线程上做（可阻塞等用户点击）；读流线程只管转发事件，绝不停顿。
         // 全程兜底 Throwable：任何路径都必须到达终态，否则续轮的 join 永久挂起
         try {
@@ -104,6 +109,7 @@ public class ToolCall implements Runnable {
                 return;
             }
             executionStarted.complete(null); // 初审通过，非额外审批工具的执行计时起点
+            LOG.debug("tool {} first approval passed, elapsed: {}ms", tool.name(), System.currentTimeMillis() - start);
             String result;
             if (tool.supportsAdditionalApproval()) {
                 result = tool.execute(arguments, workspace, (noMore) -> {
@@ -123,6 +129,7 @@ public class ToolCall implements Runnable {
             completeTerminally(ToolCall.Status.INCOMPLETE,
                     "tool call error, id: " + getCallId() + " with message: " + e.getMessage());
         } finally {
+            LOG.debug("tool {} executed, elapsed: {}ms", tool.name(), System.currentTimeMillis() - start);
             executionStarted.complete(null);
             extraGatesDone.complete(null);
         }

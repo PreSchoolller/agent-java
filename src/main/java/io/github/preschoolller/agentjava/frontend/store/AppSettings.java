@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -95,9 +96,13 @@ public final class AppSettings {
     /** 各 API 类型下选用的 provider 名（Provider 页分组单选落盘，全局不随方案）；缺键=未指定，后端回落默认 */
     private Map<String, String> activeProviderNames = new HashMap<>();
 
-    private Properties properties;
+    /** 原始键值快照：load() 填充、save() 末尾整体替换（引用原子读，读侧无锁安全）；
+     *  默认空表兜全新安装首次读（load 的早退分支不碰它，getPersistentToolInput 不 NPE） */
+    private Properties properties = new Properties();
 
-    private Map<String, String> toolProperties = new HashMap<>();
+    /** 工具持久化交互输入的待落盘区：前端交互后写入、save() 合并进 properties 落盘。
+     *  ConcurrentHashMap——写入在交互的后台线程、save 可能在别的线程（窗口防抖），防并发改 */
+    private Map<String, String> toolProperties = new ConcurrentHashMap<>();
 
     private AppSettings(Path file) {
         this.file = file;
@@ -808,6 +813,14 @@ public final class AppSettings {
                 profiles.put(DEFAULT_PROFILE_NAME, new Profile());
             }
         }
+        // 工具持久化交互输入（tool-properties.<工具name()>）：泛化键不逐个解析，整段收进
+        // 待落盘 map。必须回填——save() 是"从模型重建整份文件"，只留在 properties 快照里的
+        // 键活不过启动后第一次防抖落盘（现象：关应用时文件里有、重启后被自己的 save 抹掉）
+        for (String key : properties.stringPropertyNames()) {
+            if (key.startsWith(TOOL_PROPERTIES) && key.length() > TOOL_PROPERTIES.length()) {
+                toolProperties.put(key, properties.getProperty(key));
+            }
+        }
     }
 
     /** 读一个方案的前缀键，缺的字段落回 Profile 默认值 */
@@ -885,11 +898,23 @@ public final class AppSettings {
         }
     }
 
-    public String getPersistentToolInput(String className) {
-        return properties.getProperty(TOOL_PROPERTIES + className);
+    /**
+     * 读工具的持久化交互输入（键 tool-properties.前缀 + 工具 name()，后端经
+     * ToolManager.getPersistentToolInput → Tool.getPersistentInput 消费）。读的是最近一次
+     * save() 后的快照——前端交互后 set + save 成对调用，保证下次读得见。
+     * @param toolName 工具名（工具注册键，比运行时类名稳：不受包装/代理影响）
+     * @return 未配置返回 null（注意空串是合法值，语义由各工具自己的解释器定）
+     */
+    public String getPersistentToolInput(String toolName) {
+        return properties.getProperty(TOOL_PROPERTIES + toolName);
     }
 
-    public void setToolProperties(String className, String customProperty) {
-        toolProperties.put(TOOL_PROPERTIES + className, customProperty);
+    /**
+     * 写工具的持久化交互输入（前端交互成功后调用，随后必须 save() 才落盘——
+     * 写只进待落盘区，save 时合并进 properties）。null 值不允许（Properties 语义），
+     * 清除语义=存空串，解释权在工具侧。
+     */
+    public void setPersistentToolInput(String toolName, String input) {
+        toolProperties.put(TOOL_PROPERTIES + toolName, input);
     }
 }

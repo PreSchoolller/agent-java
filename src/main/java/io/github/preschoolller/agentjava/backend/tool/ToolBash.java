@@ -552,11 +552,20 @@ public class ToolBash implements Tool {
             return "已执行bash重选，当前：" + (bashHead == null ? "null" : bashHead.head.toString());
         }
         if (input.equals(WSL)) {
-            bashHead = BashHead.WSL;
+            // 显式指定=用户拍板，把 valid 一起复位给一次机会：此前探测全败（valid=false）时
+            // 光换头不抬 valid，execute 会继续拒调，与"已重新指定"的反馈自相矛盾。
+            // 若真有问题，下次 execute 探测失败会再把 valid 按下去（uiTips 描述的语义）
+            synchronized (ToolBash.class) {
+                bashHead = BashHead.WSL;
+                valid = true;
+            }
             return "已重新指定bash为wsl bash";
         }
         if (input.equals(GIT_BASH)) {
-            bashHead = BashHead.GIT;
+            synchronized (ToolBash.class) {
+                bashHead = BashHead.GIT;
+                valid = true;
+            }
             return "已重新指定bash为git bash";
         }
         if (input.startsWith(CUSTOM)) {

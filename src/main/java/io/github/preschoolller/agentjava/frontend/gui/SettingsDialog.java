@@ -52,6 +52,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 设置面板（模态对话框）：编辑 AppSettings 并持久化。
@@ -63,7 +64,10 @@ import java.util.function.Function;
  * 「Provider」= 全部注册 provider 按 API 类型分组单选（全局落 AppSettings.activeProviderNames，不随方案；
  * 请求走模型所属方案 apiType 那组的选择，后端 resolveActiveProvider 优先消费）；
  * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）
- * + bash 转文件正则（落 AppSettings.bashFilePattern：命中即写临时文件执行，替代 base64 管道）；
+ * + bash 转文件正则（落 AppSettings.bashFilePattern：命中即写临时文件执行，替代 base64 管道）
+ * + 每个支持交互的工具一条可展开交互区（uiTips 提示 + 输入框 + 执行钮 + 结果提示：
+ *   输入经 uiInteractive 交给工具自行解释应用，工具处理后由前端立即
+ *   setPersistentToolInput + save 落盘——持久化是前端输入之后的事，后端只读消费）；
  * 「日志」= 控制台/文件两块输出参数（log.* 自定义键落盘，TinyLogConfigurationLoader 启动时
  * 映射成日志后端属性——换后端只改映射；改后重启生效）。
  * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
@@ -766,7 +770,8 @@ public class SettingsDialog extends JDialog {
 
     /** 工具一行：等宽工具名 + 勾选框（勾选框文字=说明文字）。长说明按固定 330px 宽的 HTML 分段
      *  折行（踩坑 #17 的 Swing HTML；span 颜色现场读 Ui 镜像，随主题重建生效），不进自动宽排量
-     *  防布局正反馈（踩坑 #3：JLabel 首选宽=单行全文宽，会把整页撑爆/裁边） */
+     *  防布局正反馈（踩坑 #3：JLabel 首选宽=单行全文宽，会把整页撑爆/裁边）。
+     *  支持 ui 交互的工具（ToolCatalog 给了 interactiveTips）在下方再挂可展开交互区 */
     private int addToolRow(JPanel card, int row, ToolCatalog.ToolInfo info) {
         JLabel name = new JLabel(info.name());
         name.setFont(new Font("Monospaced", Font.BOLD, 13));
@@ -783,7 +788,138 @@ public class SettingsDialog extends JDialog {
         gbc.weightx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         card.add(enabledToolCheckBox(info), gbc);
-        return row + 1;
+        row++;
+        if (info.interactiveTips() != null) {
+            row = addInteractiveRows(card, row, info);
+        }
+        return row;
+    }
+
+    /**
+     * 支持交互的工具在勾选行下挂两行：「展开交互」开关钮（跨第 2 列，展开态换「收起交互」）+
+     * 默认隐藏的交互区（跨整卡两列——踩坑 #17 的教训，提示文字别塞进单列受硬裁）。
+     */
+    private int addInteractiveRows(JPanel card, int row, ToolCatalog.ToolInfo info) {
+        // Ui.button 是自绘工厂（无 selected 视觉），展开态换文字；不用 ▸▾ 箭头——
+        // 微软雅黑缺字形渲染成方框（踩坑 #5），设置面板内「展开/收起」纯文字是既有惯例
+        JButton toggle = Ui.button("展开交互");
+        toggle.setToolTipText("展开 " + info.name() + " 的交互区（uiTips 描述的功能，输入交给工具自行解释）");
+        toggle.setPreferredSize(new Dimension(96, 24));
+        toggle.setMinimumSize(toggle.getPreferredSize());
+        JPanel section = buildInteractiveSection(info);
+        section.setVisible(false);
+        toggle.addActionListener(e -> {
+            boolean open = !Boolean.TRUE.equals(toggle.getClientProperty("open"));
+            toggle.putClientProperty("open", open);
+            toggle.setText(open ? "收起交互" : "展开交互");
+            section.setVisible(open);
+            card.revalidate();
+            card.repaint();
+        });
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(0, 14, 6, 14);
+        gbc.anchor = GridBagConstraints.WEST;
+        gbc.gridx = 1;
+        gbc.gridy = row;
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        card.add(toggle, gbc);
+        gbc.insets = new Insets(0, 14, 8, 14);
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        gbc.gridx = 0;
+        gbc.gridy = row + 1;
+        gbc.gridwidth = 2;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        card.add(section, gbc);
+        return row + 2;
+    }
+
+    /**
+     * 交互区：uiTips 提示（HTML 固定宽折行，踩坑 #17）+ 输入框（预填落盘的持久化输入）+
+     * 执行钮 + 结果提示。输入允许空串——各工具自己定语义（如 bash 的空输入=触发重选）。
+     */
+    private JPanel buildInteractiveSection(ToolCatalog.ToolInfo info) {
+        JPanel section = new JPanel();
+        section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
+        section.setOpaque(false);
+        section.setBorder(BorderFactory.createEmptyBorder(0, 24, 0, 6));
+
+        JLabel tips = new JLabel("<html><div style='width:430px'><span style='color:"
+                + Ui.hex(Ui.TEXT_SECONDARY) + "'>"
+                + escapeHtml(info.interactiveTips()).replace("\n", "<br/>")
+                + "</span></div></html>");
+        tips.setFont(Ui.FONT_PLAIN);
+        tips.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        section.add(tips);
+        section.add(Box.createVerticalStrut(5));
+
+        JTextField inputField = new JTextField();
+        Ui.styleInput(inputField);
+        inputField.setFont(new Font("Monospaced", Font.PLAIN, 13));
+        String saved = ToolCatalog.persistentInput(info.name());
+        inputField.setText(saved == null ? "" : saved);
+        JButton execButton = Ui.button("执行");
+        execButton.setToolTipText("把输入交给工具的交互入口（可能拉起进程，最坏 10 秒）；工具处理后输入会被保存");
+        execButton.setPreferredSize(new Dimension(58, 26));
+        execButton.setMinimumSize(execButton.getPreferredSize());
+        JPanel inputRow = new JPanel(new BorderLayout(8, 0));
+        inputRow.setOpaque(false);
+        inputRow.add(inputField, BorderLayout.CENTER);
+        inputRow.add(execButton, BorderLayout.EAST);
+        inputRow.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        section.add(inputRow);
+        section.add(Box.createVerticalStrut(4));
+
+        JLabel result = new JLabel();
+        result.setFont(Ui.FONT_PLAIN);
+        result.setVisible(false);
+        result.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        section.add(result);
+
+        execButton.addActionListener(e -> runInteractive(info, inputField, execButton, result));
+        return section;
+    }
+
+    /**
+     * 后台执行工具交互（uiInteractive 可能拉起进程探测，最坏 10 秒，不占 EDT）：期间执行钮
+     * 和输入框置灰、结果标签先给"执行中…"；反馈回来按是否被工具实际处理分色显示。工具实际
+     * 处理了输入（非接口默认哨兵 "not implemented"、调用未失败）才由前端落盘
+     * （setPersistentToolInput + save——持久化是前端的事这个契约的落地处）。
+     */
+    private void runInteractive(ToolCatalog.ToolInfo info, JTextField inputField, JButton execButton, JLabel result) {
+        String input = inputField.getText();
+        execButton.setEnabled(false);
+        inputField.setEnabled(false);
+        result.setVisible(true);
+        result.setText("<html><div style='width:430px'><span style='color:"
+                + Ui.hex(Ui.TEXT_SECONDARY) + "'>执行中…（可能拉起进程，最坏 10 秒）</span></div></html>");
+        CompletableFuture.runAsync(() -> {
+            String feedback = ToolCatalog.uiInteractive(info.name(), input);
+            boolean processed = feedback != null && !"not implemented".equals(feedback);
+            if (processed) { // 没实现的输入不占配置槽；存了工具侧也会在自己的解释器里忽略，但保持干净
+                settings.setPersistentToolInput(info.name(), input);
+                settings.save();
+            }
+            javax.swing.SwingUtilities.invokeLater(() -> {
+                execButton.setEnabled(true);
+                inputField.setEnabled(true);
+                String text;
+                String color;
+                if (feedback == null) {
+                    text = "执行失败：工具不可用（后端工具类加载失败），输入未保存";
+                    color = Ui.hex(Ui.DANGER);
+                } else if (!processed) {
+                    text = escapeHtml(feedback) + "（输入未保存）";
+                    color = Ui.hex(Ui.DANGER);
+                } else {
+                    text = escapeHtml(feedback) + "（输入已保存）";
+                    color = Ui.hex(Ui.TEXT_SECONDARY);
+                }
+                result.setText("<html><div style='width:430px'><span style='color:" + color + "'>"
+                        + text + "</span></div></html>");
+            });
+        });
     }
 
     /** 勾选框：文字是说明文字（次要色），勾选态=AppSettings.isToolEnabled（未配置=全启用） */
