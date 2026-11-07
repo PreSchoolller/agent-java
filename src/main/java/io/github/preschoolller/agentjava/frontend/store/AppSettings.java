@@ -34,6 +34,7 @@ public final class AppSettings {
     private static final Path FILE = Constants.APP_USER_DIR.resolve("settings.properties");
     /** 默认方案名：首次启动与旧配置迁移时创建 */
     public static final String DEFAULT_PROFILE_NAME = "默认";
+    public static final String TOOL_PROPERTIES = "tool-properties.";
 
     private static AppSettings instance;
 
@@ -93,6 +94,10 @@ public final class AppSettings {
 
     /** 各 API 类型下选用的 provider 名（Provider 页分组单选落盘，全局不随方案）；缺键=未指定，后端回落默认 */
     private Map<String, String> activeProviderNames = new HashMap<>();
+
+    private Properties properties;
+
+    private Map<String, String> toolProperties = new HashMap<>();
 
     private AppSettings(Path file) {
         this.file = file;
@@ -706,11 +711,20 @@ public final class AppSettings {
         if (bashFilePattern != null) { // 缺键=未配置；非法值在 load/setter 两处已拦下，落盘的必是校验过的
             properties.setProperty("bashFilePattern", bashFilePattern);
         }
+        if (toolProperties != null) {
+            for (String key : toolProperties.keySet()) {
+                if (key == null) {
+                    continue;
+                }
+                properties.put(key, toolProperties.get(key));
+            }
+        }
         try {
             Files.createDirectories(file.getParent());
             try (OutputStream out = Files.newOutputStream(file)) {
                 properties.store(out, "agent-java settings");
             }
+            this.properties = properties;
         } catch (IOException e) {
             System.err.println("保存设置失败: " + e.getMessage());
         }
@@ -729,6 +743,7 @@ public final class AppSettings {
             profiles.put(DEFAULT_PROFILE_NAME, new Profile());
             return;
         }
+        this.properties = properties;
         contentFontSize = parseInt(properties.getProperty("contentFontSize"), contentFontSize);
         windowWidth = parseInt(properties.getProperty("windowWidth"), windowWidth);
         windowHeight = parseInt(properties.getProperty("windowHeight"), windowHeight);
@@ -868,5 +883,13 @@ public final class AppSettings {
         } catch (NumberFormatException e) {
             return fallback;
         }
+    }
+
+    public String getPersistentToolInput(String className) {
+        return properties.getProperty(TOOL_PROPERTIES + className);
+    }
+
+    public void setToolProperties(String className, String customProperty) {
+        toolProperties.put(TOOL_PROPERTIES + className, customProperty);
     }
 }

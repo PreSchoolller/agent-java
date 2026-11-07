@@ -40,6 +40,7 @@ class ToolBashTest {
                 在工作区执行bash命令。
                 如果agent运行环境（由工作区路径判断）非windows，bash为原生实现。
                 如果agent运行环境为Windows，则bash实现查找顺序(wsl bash -> git bash)。
+                用户也可以在应用设置里指定自定义bash可执行程序，配置了则优先使用。
                 由于windows上两种种bash实现的路径表示不一样，可先pwd判断格式再执行绝对路径命令书写。
                 """, ToolBash.getInstance().description());
     }

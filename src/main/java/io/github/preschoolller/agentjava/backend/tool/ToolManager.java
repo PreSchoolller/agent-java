@@ -9,6 +9,7 @@ import com.openai.models.responses.ResponseFunctionToolCall;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 
 import java.io.IOException;
 import java.net.MalformedURLException;
@@ -39,6 +40,8 @@ public class ToolManager {
     ));
 
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ToolManager.class);
+
+    private static final AppSettings appSettings = AppSettings.get();
 
     private ToolManager() {
     }
@@ -170,5 +173,9 @@ public class ToolManager {
             result.add(tool);
         }
         return Collections.unmodifiableList(result);
+    }
+
+    public static String getPersistentToolInput(Tool toolImplement) {
+        return appSettings.getPersistentToolInput(toolImplement.name());
     }
 }

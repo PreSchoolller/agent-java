@@ -9,6 +9,8 @@ import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFacto
 import io.github.preschoolller.agentjava.backend.tool.interfaces.BackGroundTaskDone;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -64,8 +66,16 @@ public class ToolBash implements Tool {
     private static volatile boolean valid = true;
     private static volatile BashHead bashHead;
     private static volatile List<String> customBashHead;
+    /** 最近一次探测过的自定义 bash 路径（成败都记）：defineBash 按它去重，避免配置没变时
+     *  每次工具调用都重新拉起进程探测（探测最坏 10 秒）。设置面板保存路径变更会直接下发
+     *  setBashHead（必然重探），这里只挡 defineBash 的惰性补齐路径 */
+    private static volatile String attemptedCustomPath;
 
-    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ToolBash.class);
+    private static final Logger LOG = LoggerFactory.getLogger(ToolBash.class);
+
+    private static final String WSL = "WSL";
+    private static final String GIT_BASH = "GITBASH";
+    private static final String CUSTOM = "CUSTOM:";
 
     private ToolBash() {
     }
@@ -89,6 +99,7 @@ public class ToolBash implements Tool {
                 在工作区执行bash命令。
                 如果agent运行环境（由工作区路径判断）非windows，bash为原生实现。
                 如果agent运行环境为Windows，则bash实现查找顺序(wsl bash -> git bash)。
+                用户也可以在应用设置里指定自定义bash可执行程序，配置了则优先使用。
                 由于windows上两种种bash实现的路径表示不一样，可先pwd判断格式再执行绝对路径命令书写。
                 """;
     }
@@ -380,8 +391,37 @@ public class ToolBash implements Tool {
         }
     }
 
-    static void defineBash() {
+    /**
+     * 定头入口（每次工具调用先进这里）：先把设置里配置的自定义 bash 应用上（或清除已失效的
+     * 自定义头），再按默认链探测兜底。自定义路径探测一次就记在 attemptedCustomPath，
+     * 同一路径不重复拉进程；配置清空而内存还挂着自定义头时复位重探（redefine）。
+     */
+    void defineBash() {
+        applyConfiguredCustomBash();
         exploreBash(true, false);
+    }
+
+    private void applyConfiguredCustomBash() {
+        String path = null;
+        try {
+            String saved = getPersistentInput();
+            if (saved != null && !saved.isBlank() && saved.startsWith("CUSTOM:")) {
+                path = saved.substring(7);
+            }
+        } catch (Throwable t) {
+            return; // 设置侧不可用（裸类路径回归等）不挡 bash 工具本身的默认链，踩坑 #26 同源
+        }
+        synchronized (ToolBash.class) {
+            if (path == null || path.isBlank()) {
+                if (BashHead.CUSTOM.equals(bashHead)) {
+                    clearCustomBash();
+                }
+                return;
+            }
+            if (!path.equals(attemptedCustomPath)) {
+                ToolBash.getInstance().setBashHead(path);
+            }
+        }
     }
 
     /**
@@ -459,20 +499,19 @@ public class ToolBash implements Tool {
             process.destroyForcibly();
         } catch (IOException | InterruptedException e) {
             LOG.info("测试bash工具{}出错", head);
-            LOG.debug("测试bash工具{}出错: {}", head, e);
+            LOG.debug("测试bash工具{}出错: ", head, e);
         }
         return false;
     }
 
-    /**
-     * 自定义bash可执行程序位置，可设计一个前端自定义功能，待设计。
-     * 但是自定义的 buildTmpFilePath 不太好搞，TODO
-     * @param bashPath 自定义bash位置
-     * @return 添加是否成功
-     */
-    public boolean setBashHead(String bashPath) {
+    private boolean setBashHead(String bashPath) {
+        if (bashPath == null || bashPath.isBlank()) {
+            return false;
+        }
+        attemptedCustomPath = bashPath; // 成败都记：defineBash 按它去重，同一路径不重复探测
         boolean result = tryBash(List.of(bashPath), false, 10, TimeUnit.SECONDS);
         if (!result) {
+            clearCustomBash();
             return false;
         }
         synchronized (ToolBash.class) {
@@ -481,5 +520,53 @@ public class ToolBash implements Tool {
             valid = true;
         }
         return true;
+    }
+
+    /**
+     * 清除自定义 bash，复位按默认链重新探测（redefine 语义）——设置清空自定义路径、或配置的
+     * 路径探测失败时调用。redefine=true 让此前探测全失败（valid=false）的场景也有重试机会。
+     */
+    private static void clearCustomBash() {
+        synchronized (ToolBash.class) {
+            customBashHead = null;
+            bashHead = null;
+        }
+        exploreBash(true, true);
+    }
+
+    @Override
+    public String uiTips() {
+        return """
+               输入示例：
+               1. “” 空/空白 字符串触发bash重选。
+               2. “WSL” 指定WSL为bash工具，若WSL有问题则工具拒绝执行之后的一切调用。
+               3. “GITBASH” 指定git bash为bash工具，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
+               4. “CUSTOM:{your_bash_path}” 指定自定义bash可执行文件地址，若有问题，则仍使用内部定义的bash地址。
+               """;
+    }
+
+    @Override
+    public String uiInteractive(String input) {
+        if (input == null || input.isBlank()) {
+            exploreBash(true, true);
+            return "已执行bash重选，当前：" + (bashHead == null ? "null" : bashHead.head.toString());
+        }
+        if (input.equals(WSL)) {
+            bashHead = BashHead.WSL;
+            return "已重新指定bash为wsl bash";
+        }
+        if (input.equals(GIT_BASH)) {
+            bashHead = BashHead.GIT;
+            return "已重新指定bash为git bash";
+        }
+        if (input.startsWith(CUSTOM)) {
+            String bashPath = input.substring(CUSTOM.length());
+            boolean result = setBashHead(bashPath);
+            if (result) {
+                return "已重新指定bash成功";
+            }
+            return "指定自定义bash失败，仍使用内部bash，当前：" + bashHead.head;
+        }
+        return "还没实现呢。。。";
     }
 }
