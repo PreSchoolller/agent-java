@@ -41,7 +41,6 @@ public class ToolBash implements Tool {
     private static final int TIMEOUT = 60; // seconds
     private static final int SHORT_TIMEOUT = 2; // seconds 用于检测 bash 命令超时
     private static final int MILI_TIMEOUT = 500; // mili seconds 用于检测等待后台 pid 超时
-    private static final int MILI_WARMUP_TIMEOUT = 500; // mili seconds 用于预热超时
     private static final int THRESHOLD = 4096; // 超长命令转临时文件执行
 
     enum BashHead {
@@ -391,35 +390,52 @@ public class ToolBash implements Tool {
         }
     }
 
+    /** 自定义 bash 配置是否已从落盘恢复过：恢复只做一次（首个工具调用时惰性触发），
+     *  之后运行期变更一律走 uiInteractive（前端落盘 + 工具应用），不回头重读设置 */
+    private static volatile boolean customRestored;
+
     /**
-     * 定头入口（每次工具调用先进这里）：先把设置里配置的自定义 bash 应用上（或清除已失效的
-     * 自定义头），再按默认链探测兜底。自定义路径探测一次就记在 attemptedCustomPath，
-     * 同一路径不重复拉进程；配置清空而内存还挂着自定义头时复位重探（redefine）。
+     * 定头入口（每次工具调用先进这里）：首个调用先惰性恢复落盘的自定义 bash 配置，
+     * 再按默认链探测。已定头或此前探测全败则直接返回。
      */
     void defineBash() {
-        applyConfiguredCustomBash();
+        if (!customRestored) {
+            synchronized (ToolBash.class) {
+                if (!customRestored) {
+                    customRestored = true;
+                    applyConfiguredCustomBash();
+                }
+            }
+        }
         exploreBash(true, false);
     }
 
     private void applyConfiguredCustomBash() {
-        String path = null;
+        String input = null;
         try {
-            String saved = getPersistentInput();
-            if (saved != null && !saved.isBlank() && saved.startsWith("CUSTOM:")) {
-                path = saved.substring(7);
-            }
+            input = getPersistentInput();
         } catch (Throwable t) {
             return; // 设置侧不可用（裸类路径回归等）不挡 bash 工具本身的默认链，踩坑 #26 同源
         }
+        if (input == null || input.isBlank()) {
+            return;
+        }
         synchronized (ToolBash.class) {
-            if (path == null || path.isBlank()) {
-                if (BashHead.CUSTOM.equals(bashHead)) {
-                    clearCustomBash();
+            if (WSL.equals(input)) {
+                bashHead = BashHead.WSL;
+            } else if (GIT_BASH.equals(input)) {
+                bashHead = BashHead.GIT;
+            } else if (input.startsWith("CUSTOM:")) {
+                String path = input.substring(7);
+                if (path.isBlank()) {
+                    if (BashHead.CUSTOM.equals(bashHead)) {
+                        clearCustomBash();
+                    }
+                    return;
                 }
-                return;
-            }
-            if (!path.equals(attemptedCustomPath)) {
-                ToolBash.getInstance().setBashHead(path);
+                if (!path.equals(attemptedCustomPath)) {
+                    setBashHead(path);
+                }
             }
         }
     }
@@ -432,17 +448,14 @@ public class ToolBash implements Tool {
     }
 
     static void exploreBash(boolean define, boolean redefine) {
-        if (bashHead != null && define) {
-            return;
-        }
         if (!define) {
             if (System.getProperty("os.name").toLowerCase().contains("win")) {
-                tryBash(BashHead.WSL.head, true, 0, null);
+                tryBash(BashHead.WSL.head, TIMEOUT, TimeUnit.SECONDS);
             }
             return;
         }
         synchronized (ToolBash.class) {
-            if (bashHead != null || !valid && !redefine) {
+            if (!redefine && (bashHead != null || !valid)) {
                 return;
             }
             String osName = System.getProperty("os.name").toLowerCase();
@@ -465,10 +478,10 @@ public class ToolBash implements Tool {
     }
 
     private static boolean tryBash(List<String> head) {
-        return tryBash(head, false, SHORT_TIMEOUT, TimeUnit.SECONDS);
+        return tryBash(head, SHORT_TIMEOUT, TimeUnit.SECONDS);
     }
 
-    private static boolean tryBash(List<String> head, boolean warmup, int timeout, TimeUnit timeUnit) {
+    private static boolean tryBash(List<String> head, int timeout, TimeUnit timeUnit) {
         if (head == null || head.isEmpty()) {
             return false;
         }
@@ -479,12 +492,7 @@ public class ToolBash implements Tool {
         processBuilder.redirectErrorStream(true);
         try {
             Process process = processBuilder.start();
-            if (warmup) {
-                process.waitFor(MILI_WARMUP_TIMEOUT, TimeUnit.MILLISECONDS);
-                process.destroyForcibly();
-                return false;
-            }
-            timeout = timeout == 0 ? SHORT_TIMEOUT : timeout;
+            timeout = timeout <= 0 ? SHORT_TIMEOUT : timeout;
             timeUnit = timeUnit == null ? TimeUnit.SECONDS : timeUnit;
             ThreadPoolFactory.getTimeoutScheduler().schedule(process::destroyForcibly, timeout, timeUnit);
             String out;
@@ -504,12 +512,12 @@ public class ToolBash implements Tool {
         return false;
     }
 
-    private boolean setBashHead(String bashPath) {
+    private static boolean setBashHead(String bashPath) {
         if (bashPath == null || bashPath.isBlank()) {
             return false;
         }
         attemptedCustomPath = bashPath; // 成败都记：defineBash 按它去重，同一路径不重复探测
-        boolean result = tryBash(List.of(bashPath), false, 10, TimeUnit.SECONDS);
+        boolean result = tryBash(List.of(bashPath), 10, TimeUnit.SECONDS);
         if (!result) {
             clearCustomBash();
             return false;
@@ -539,7 +547,7 @@ public class ToolBash implements Tool {
         return """
                输入示例：
                1. “” 空/空白 字符串触发bash重选。
-               2. “WSL” 指定WSL为bash工具，若WSL有问题则工具拒绝执行之后的一切调用。
+               2. “WSL” 指定WSL为bash工具，若WSL有问题则工具拒绝执行之后的一切调用。建议开一个wsl bash窗口保持wsl在线，不然会有启动开销。
                3. “GITBASH” 指定git bash为bash工具，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
                4. “CUSTOM:{your_bash_path}” 指定自定义bash可执行文件地址，若有问题，则仍使用内部定义的bash地址。
                """;
