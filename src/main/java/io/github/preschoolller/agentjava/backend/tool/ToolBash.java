@@ -3,6 +3,7 @@ package io.github.preschoolller.agentjava.backend.tool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.backend.maintenance.HoldWsl;
 import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.maintenance.TaskHandle;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
@@ -39,7 +40,8 @@ public class ToolBash implements Tool {
     private static final String COMMAND = "command";
     private static final String BACKGROUND = "background";
     private static final int TIMEOUT = 60; // seconds
-    private static final int SHORT_TIMEOUT = 2; // seconds 用于检测 bash 命令超时
+    private static final int SHORT_TIMEOUT = 2; // seconds 用于排空 std 超时
+    private static final int DETECT_TIMEOUT = 10; // seconds 用于检测 bash 命令超时
     private static final int MILI_TIMEOUT = 500; // mili seconds 用于检测等待后台 pid 超时
     private static final int THRESHOLD = 4096; // 超长命令转临时文件执行
 
@@ -67,7 +69,7 @@ public class ToolBash implements Tool {
     private static volatile List<String> customBashHead;
     /** 最近一次探测过的自定义 bash 路径（成败都记）：defineBash 按它去重，避免配置没变时
      *  每次工具调用都重新拉起进程探测（探测最坏 10 秒）。设置面板保存路径变更会直接下发
-     *  setBashHead（必然重探），这里只挡 defineBash 的惰性补齐路径 */
+     *  setCustomBashHead（必然重探），这里只挡 defineBash 的惰性补齐路径 */
     private static volatile String attemptedCustomPath;
 
     private static final Logger LOG = LoggerFactory.getLogger(ToolBash.class);
@@ -411,7 +413,7 @@ public class ToolBash implements Tool {
     }
 
     private void applyConfiguredCustomBash() {
-        String input = null;
+        String input;
         try {
             input = getPersistentInput();
         } catch (Throwable t) {
@@ -423,8 +425,13 @@ public class ToolBash implements Tool {
         synchronized (ToolBash.class) {
             if (WSL.equals(input)) {
                 bashHead = BashHead.WSL;
+                valid = tryBash(BashHead.WSL.head);
+                if (valid) {
+                    HoldWsl.getInstance().on();
+                }
             } else if (GIT_BASH.equals(input)) {
                 bashHead = BashHead.GIT;
+                valid = tryBash(BashHead.GIT.head);
             } else if (input.startsWith("CUSTOM:")) {
                 String path = input.substring(7);
                 if (path.isBlank()) {
@@ -434,7 +441,7 @@ public class ToolBash implements Tool {
                     return;
                 }
                 if (!path.equals(attemptedCustomPath)) {
-                    setBashHead(path);
+                    setCustomBashHead(path);
                 }
             }
         }
@@ -478,7 +485,7 @@ public class ToolBash implements Tool {
     }
 
     private static boolean tryBash(List<String> head) {
-        return tryBash(head, SHORT_TIMEOUT, TimeUnit.SECONDS);
+        return tryBash(head, DETECT_TIMEOUT, TimeUnit.SECONDS);
     }
 
     private static boolean tryBash(List<String> head, int timeout, TimeUnit timeUnit) {
@@ -492,7 +499,7 @@ public class ToolBash implements Tool {
         processBuilder.redirectErrorStream(true);
         try {
             Process process = processBuilder.start();
-            timeout = timeout <= 0 ? SHORT_TIMEOUT : timeout;
+            timeout = timeout <= 0 ? DETECT_TIMEOUT : timeout;
             timeUnit = timeUnit == null ? TimeUnit.SECONDS : timeUnit;
             ThreadPoolFactory.getTimeoutScheduler().schedule(process::destroyForcibly, timeout, timeUnit);
             String out;
@@ -512,12 +519,12 @@ public class ToolBash implements Tool {
         return false;
     }
 
-    private static boolean setBashHead(String bashPath) {
+    private static boolean setCustomBashHead(String bashPath) {
         if (bashPath == null || bashPath.isBlank()) {
             return false;
         }
         attemptedCustomPath = bashPath; // 成败都记：defineBash 按它去重，同一路径不重复探测
-        boolean result = tryBash(List.of(bashPath), 10, TimeUnit.SECONDS);
+        boolean result = tryBash(List.of(bashPath), DETECT_TIMEOUT, TimeUnit.SECONDS);
         if (!result) {
             clearCustomBash();
             return false;
@@ -547,8 +554,8 @@ public class ToolBash implements Tool {
         return """
                输入示例：
                1. “” 空/空白 字符串触发bash重选。
-               2. “WSL” 指定WSL为bash工具，若WSL有问题则工具拒绝执行之后的一切调用。建议开一个wsl bash窗口保持wsl在线，不然会有启动开销。
-               3. “GITBASH” 指定git bash为bash工具，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
+               2. “WSL” 指定"wsl bash"执行命令，若WSL有问题则工具拒绝执行之后的一切调用。建议开一个wsl bash窗口保持wsl在线，不然会有启动开销。
+               3. “GITBASH” 指定"C:\\Program Files\\Git\\bin\\bash.exe"执行命令，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
                4. “CUSTOM:{your_bash_path}” 指定自定义bash可执行文件地址，若有问题，则仍使用内部定义的bash地址。
                """;
     }
@@ -560,25 +567,25 @@ public class ToolBash implements Tool {
             return "已执行bash重选，当前：" + (bashHead == null ? "null" : bashHead.head.toString());
         }
         if (input.equals(WSL)) {
-            // 显式指定=用户拍板，把 valid 一起复位给一次机会：此前探测全败（valid=false）时
-            // 光换头不抬 valid，execute 会继续拒调，与"已重新指定"的反馈自相矛盾。
-            // 若真有问题，下次 execute 探测失败会再把 valid 按下去（uiTips 描述的语义）
             synchronized (ToolBash.class) {
                 bashHead = BashHead.WSL;
-                valid = true;
+                valid = tryBash(BashHead.WSL.head, DETECT_TIMEOUT, TimeUnit.SECONDS);
+            }
+            if (valid) {
+                HoldWsl.getInstance().on();
             }
             return "已重新指定bash为wsl bash";
         }
         if (input.equals(GIT_BASH)) {
             synchronized (ToolBash.class) {
                 bashHead = BashHead.GIT;
-                valid = true;
+                valid = tryBash(BashHead.GIT.head, DETECT_TIMEOUT, TimeUnit.SECONDS);
             }
             return "已重新指定bash为git bash";
         }
         if (input.startsWith(CUSTOM)) {
             String bashPath = input.substring(CUSTOM.length());
-            boolean result = setBashHead(bashPath);
+            boolean result = setCustomBashHead(bashPath);
             if (result) {
                 return "已重新指定bash成功";
             }
