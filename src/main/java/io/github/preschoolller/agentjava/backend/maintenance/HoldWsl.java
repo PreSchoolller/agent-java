@@ -23,31 +23,24 @@ public class HoldWsl {
     private static final Path HOLDER_PID = Constants.APP_USER_DIR.resolve("wsl_holder_pid");
     private static final Logger LOG = LoggerFactory.getLogger(HoldWsl.class);
     private static volatile Thread running;
+    private static final Thread hookOff = new Thread(HoldWsl::off);
 
     private HoldWsl() {
     }
 
-    public static HoldWsl getInstance() {
-        return InstanceHolder.instance;
-    }
-
-    private static class InstanceHolder {
-        private static final HoldWsl instance = new HoldWsl();
-    }
-
-    public synchronized void on() {
+    public static synchronized void on() {
         if (running != null && running.isAlive()) {
             return;
         }
-        Thread thread = new Thread(this::startAndHold);
+        Thread thread = new Thread(HoldWsl::startAndHold);
         thread.setDaemon(true);
         thread.setName("hold-wsl");
         thread.start();
         running = thread;
-        Runtime.getRuntime().addShutdownHook(new Thread(this::off));
+        Runtime.getRuntime().addShutdownHook(hookOff);
     }
 
-    public synchronized void off() {
+    public static synchronized void off() {
         if (running == null || !running.isAlive()) {
             return;
         }
@@ -55,7 +48,7 @@ public class HoldWsl {
         running = null;
     }
 
-    private void detectIfExist() throws InterruptedException {
+    private static void detectIfExist() throws InterruptedException {
         boolean holderExist = Files.exists(HOLDER_PID);
         long pid = 0;
         if (holderExist) {
@@ -98,7 +91,7 @@ public class HoldWsl {
         }
     }
 
-    private void startAndHold() {
+    private static void startAndHold() {
         Process process = null;
         try {
             detectIfExist();
@@ -120,9 +113,8 @@ public class HoldWsl {
         }
     }
 
-    private Process createNewProcess() throws IOException {
+    private static Process createNewProcess() throws IOException {
         ProcessBuilder processBuilder = new ProcessBuilder(ARGS);
-        processBuilder.redirectInput(ProcessBuilder.Redirect.DISCARD);
         processBuilder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
         processBuilder.redirectError(ProcessBuilder.Redirect.DISCARD);
         Process process = processBuilder.start();

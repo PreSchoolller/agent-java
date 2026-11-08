@@ -427,7 +427,7 @@ public class ToolBash implements Tool {
                 bashHead = BashHead.WSL;
                 valid = tryBash(BashHead.WSL.head);
                 if (valid) {
-                    HoldWsl.getInstance().on();
+                    HoldWsl.on();
                 }
             } else if (GIT_BASH.equals(input)) {
                 bashHead = BashHead.GIT;
@@ -512,6 +512,7 @@ public class ToolBash implements Tool {
                 return true;
             }
             process.destroyForcibly();
+            LOG.debug("bash {} failed: {}", head, out);
         } catch (IOException | InterruptedException e) {
             LOG.info("测试bash工具{}出错", head);
             LOG.debug("测试bash工具{}出错: ", head, e);
@@ -572,12 +573,13 @@ public class ToolBash implements Tool {
                 valid = tryBash(BashHead.WSL.head, DETECT_TIMEOUT, TimeUnit.SECONDS);
             }
             if (valid) {
-                HoldWsl.getInstance().on();
+                HoldWsl.on();
             }
             return "已重新指定为wsl bash，状态：" + (valid ? "可用" : "不可用");
         }
         if (input.equals(GIT_BASH)) {
             synchronized (ToolBash.class) {
+                HoldWsl.off();
                 bashHead = BashHead.GIT;
                 valid = tryBash(BashHead.GIT.head, DETECT_TIMEOUT, TimeUnit.SECONDS);
             }

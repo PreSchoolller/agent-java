@@ -241,4 +241,34 @@ class ToolBashTest {
         String result = ToolBash.getInstance().execute(arguments, workSpace, "ignore", System.out::println);
         assertEquals("json parse error: wrong command", result);
     }
+
+    @Test
+    void testUiTips() {
+        String expected = """
+                输入示例：
+                1. “” 空/空白 字符串触发bash重选。
+                2. “WSL” 指定"wsl bash"执行命令，若WSL有问题则工具拒绝执行之后的一切调用。建议开一个wsl bash窗口保持wsl在线，不然会有启动开销。
+                3. “GITBASH” 指定"C:\\Program Files\\Git\\bin\\bash.exe"执行命令，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
+                4. “CUSTOM:{your_bash_path}” 指定自定义bash可执行文件地址，若有问题，则仍使用内部定义的bash地址。
+                """;
+        assertEquals(expected, ToolBash.getInstance().uiTips());
+    }
+
+    @Test
+    void testUiInteractiveRedefineWhenInputBlank() {
+        String result = ToolBash.getInstance().uiInteractive("");
+        assertTrue(result.startsWith("已执行bash重选，当前："));
+    }
+
+    @Test
+    void testUiInteractiveRedefineWhenInputWsl() {
+        String result = ToolBash.getInstance().uiInteractive("WSL");
+        assertTrue(result.startsWith("已重新指定为wsl bash，状态："));
+    }
+
+    @Test
+    void testUiInteractiveRedefineWhenInputGitBash() {
+        String result = ToolBash.getInstance().uiInteractive("GITBASH");
+        assertTrue(result.startsWith("已重新指定为git bash，状态："));
+    }
 }
