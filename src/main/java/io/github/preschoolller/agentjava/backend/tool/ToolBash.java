@@ -574,14 +574,14 @@ public class ToolBash implements Tool {
             if (valid) {
                 HoldWsl.getInstance().on();
             }
-            return "已重新指定bash为wsl bash";
+            return "已重新指定为wsl bash，状态：" + (valid ? "可用" : "不可用");
         }
         if (input.equals(GIT_BASH)) {
             synchronized (ToolBash.class) {
                 bashHead = BashHead.GIT;
                 valid = tryBash(BashHead.GIT.head, DETECT_TIMEOUT, TimeUnit.SECONDS);
             }
-            return "已重新指定bash为git bash";
+            return "已重新指定为git bash，状态：" + (valid ? "可用" : "不可用");
         }
         if (input.startsWith(CUSTOM)) {
             String bashPath = input.substring(CUSTOM.length());
@@ -589,7 +589,7 @@ public class ToolBash implements Tool {
             if (result) {
                 return "已重新指定bash成功";
             }
-            return "指定自定义bash失败，仍使用内部bash，当前：" + bashHead.head;
+            return "指定自定义bash失败，仍使用内部bash，当前：" + bashHead.head + "，状态：" + (valid ? "可用" : "不可用");
         }
         return "还没实现呢。。。";
     }

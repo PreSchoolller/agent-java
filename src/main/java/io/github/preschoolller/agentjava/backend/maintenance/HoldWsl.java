@@ -9,6 +9,7 @@ import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 
 /**
  * 按需启用，保持wsl存活，不检查wsl是否存在。
@@ -16,6 +17,9 @@ import java.util.List;
 public class HoldWsl {
 
     private static final List<String> ARGS = List.of("wsl", "--exec", "sleep", "infinity");
+    /**
+     * 只复写，不删除
+     */
     private static final Path HOLDER_PID = Constants.APP_USER_DIR.resolve("wsl_holder_pid");
     private static final Logger LOG = LoggerFactory.getLogger(HoldWsl.class);
     private static volatile Thread running;
@@ -35,7 +39,7 @@ public class HoldWsl {
         if (running != null && running.isAlive()) {
             return;
         }
-        Thread thread = new Thread(this::startJob);
+        Thread thread = new Thread(this::startAndHold);
         thread.setDaemon(true);
         thread.setName("hold-wsl");
         thread.start();
@@ -51,7 +55,7 @@ public class HoldWsl {
         running = null;
     }
 
-    private void startJob() {
+    private void detectIfExist() throws InterruptedException {
         boolean holderExist = Files.exists(HOLDER_PID);
         long pid = 0;
         if (holderExist) {
@@ -60,33 +64,44 @@ public class HoldWsl {
             } catch (IOException ignored) {
             }
         }
-        if (pid > 0) {
-            ProcessHandle.of(pid).ifPresent(processHandle -> {
-                if (!processHandle.isAlive()) {
+        if (pid <= 0) {
+            return;
+        }
+        ProcessHandle.of(pid).ifPresent(processHandle -> {
+            if (!processHandle.isAlive()) {
+                return;
+            }
+            ProcessHandle.Info info = processHandle.info();
+            info.arguments().ifPresent(args -> {
+                if (ARGS.size() != args.length) {
                     return;
                 }
-                ProcessHandle.Info info = processHandle.info();
-                info.arguments().ifPresent(args -> {
-                    if (ARGS.size() != args.length) {
+                int index = 0;
+                for (String arg : args) {
+                    if (!ARGS.get(index++).equals(arg)) {
                         return;
                     }
-                    int index = 0;
-                    for (String arg : args) {
-                        if (!ARGS.get(index++).equals(arg)) {
-                            return;
-                        }
-                    }
-                    processHandle.onExit().thenRun(this::startAndHold);
-                });
+                }
+                try {
+                    processHandle.onExit().get();
+                } catch (InterruptedException e) {
+                    LOG.info("existing wsl holder got interrupted", e);
+                    Thread.currentThread().interrupt();
+                    processHandle.descendants().forEach(ProcessHandle::destroyForcibly);
+                    processHandle.destroyForcibly();
+                } catch (ExecutionException ignored) {
+                }
             });
-        } else {
-            startAndHold();
+        });
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException();
         }
     }
 
     private void startAndHold() {
         Process process = null;
         try {
+            detectIfExist();
             while (true) {
                 process = createNewProcess();
                 int exitCode = process.waitFor();
