@@ -1,19 +1,31 @@
 package io.github.preschoolller.agentjava.backend.maintenance;
 
+import org.tinylog.provider.ProviderRegistry;
+
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /**
- * 维护一些需要在应用关闭时做的事情：按 callId 管理在册的前台/后台进程，
- * 支持"终止"（工具卡按钮）与退出时兜底清理
+ * 维护一些需要在应用关闭时做的事情：
+ * <p/>
+ * 1. 按 callId 管理在册的前台/后台进程，支持"终止"（工具卡按钮）与退出时兜底清理
+ * <p/>
+ * 2.
  */
 public class ShutDownJob {
     private static final Map<String, TaskHandle> bgProcesses = new HashMap<>();
     /** 被 kill() 终止过的 callId：前台工具调用据此在结果里注明"已手动终止"；
      *  removeBgProcess 时一并清除 */
     private static final Set<String> killedCallIds = new HashSet<>();
+
+    private static Set<Consumer<Void>> hooks = new HashSet<>();
+
+    private ShutDownJob() {
+    }
 
     public static synchronized Process registerBgProcess(String callId, TaskHandle taskHandle) {
         if (taskHandle == null) {
@@ -65,11 +77,55 @@ public class ShutDownJob {
         });
         bgProcesses.clear();
         killedCallIds.clear();
+        runHooks();
+        shutDownTinyLog();// 最后执行，保证日志都能记录
+    }
+
+    private static synchronized void runHooks() {
+        Collection<Consumer<Void>> tmpHooks;
+        tmpHooks = hooks;
+        hooks = null;
+        for (Consumer<Void> tmpHook : tmpHooks) {
+            try {
+                tmpHook.accept(null);
+            } catch (Throwable ignored){
+            }
+        }
     }
 
     private static void killF(Process process) {
         if (process == null) return;
         process.descendants().forEach(ProcessHandle::destroyForcibly);
         process.destroyForcibly();
+    }
+
+    private static void shutDownTinyLog() {
+        try {
+            ProviderRegistry.getLoggingProvider().shutdown();
+        } catch (InterruptedException ignored) {
+            try {
+                ProviderRegistry.getLoggingProvider().shutdown();
+            } catch (InterruptedException ignored1) {
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public static synchronized void addShutDownHook(Consumer<Void> hook) {
+        if(hooks == null || hooks.contains(hook))
+            return;
+
+        hooks.add(hook);
+    }
+
+    public static synchronized boolean remove(Consumer<Void> hook) {
+        if (hook == null || (hooks != null && !hooks.contains(hook))) {
+            return true;
+        }
+
+        if(hooks == null)
+            hook.accept(null);
+
+        return hooks.remove(hook);
     }
 }

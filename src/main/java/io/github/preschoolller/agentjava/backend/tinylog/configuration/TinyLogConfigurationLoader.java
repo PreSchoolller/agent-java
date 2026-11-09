@@ -62,6 +62,7 @@ public class TinyLogConfigurationLoader implements ConfigurationLoader {
         if (writer == 0) {
             properties.put("level", "off"); // 两路全关：静默运行
         }
+        properties.put("autoshutdown", "false");
         return properties;
     }
 

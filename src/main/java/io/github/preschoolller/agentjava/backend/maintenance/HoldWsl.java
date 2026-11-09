@@ -9,7 +9,7 @@ import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
+import java.util.function.Consumer;
 
 /**
  * 按需启用，保持wsl存活，不检查wsl是否存在。
@@ -23,7 +23,7 @@ public class HoldWsl {
     private static final Path HOLDER_PID = Constants.APP_USER_DIR.resolve("wsl_holder_pid");
     private static final Logger LOG = LoggerFactory.getLogger(HoldWsl.class);
     private static volatile Thread running;
-    private static final Thread hookOff = new Thread(HoldWsl::off);
+    public static final Consumer<Void> OFF = i -> HoldWsl.off();
 
     private HoldWsl() {
     }
@@ -37,10 +37,15 @@ public class HoldWsl {
         thread.setName("hold-wsl");
         thread.start();
         running = thread;
-        Runtime.getRuntime().addShutdownHook(hookOff);
+        ShutDownJob.addShutDownHook(OFF);
     }
 
     public static synchronized void off() {
+        interrupt();
+        ShutDownJob.remove(OFF);
+    }
+
+    private static synchronized void interrupt() {
         if (running == null || !running.isAlive()) {
             return;
         }
@@ -64,31 +69,11 @@ public class HoldWsl {
             if (!processHandle.isAlive()) {
                 return;
             }
-            ProcessHandle.Info info = processHandle.info();
-            info.arguments().ifPresent(args -> {
-                if (ARGS.size() != args.length) {
-                    return;
-                }
-                int index = 0;
-                for (String arg : args) {
-                    if (!ARGS.get(index++).equals(arg)) {
-                        return;
-                    }
-                }
-                try {
-                    processHandle.onExit().get();
-                } catch (InterruptedException e) {
-                    LOG.info("existing wsl holder got interrupted", e);
-                    Thread.currentThread().interrupt();
-                    processHandle.descendants().forEach(ProcessHandle::destroyForcibly);
-                    processHandle.destroyForcibly();
-                } catch (ExecutionException ignored) {
-                }
-            });
+            // info().arguments()获取不到参数，暂时就直接强杀吧，风险在于或许会有坏蛋会把不该杀的pid写进了这里。
+            // Get-CimInstance Win32_Process -Filter "ProcessId=1234" | Select-Object CommandLine 这个命令倒是可以获取到参数，留作后续优化吧。
+            processHandle.descendants().forEach(ProcessHandle::destroyForcibly);
+            processHandle.destroyForcibly();
         });
-        if (Thread.currentThread().isInterrupted()) {
-            throw new InterruptedException();
-        }
     }
 
     private static void startAndHold() {
