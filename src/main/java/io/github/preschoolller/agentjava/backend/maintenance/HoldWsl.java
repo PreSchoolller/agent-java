@@ -52,11 +52,19 @@ public class HoldWsl {
     }
 
     private static synchronized void interrupt() {
-        if (running == null || !running.isAlive()) {
+        Thread thread = running;
+        if (thread == null || !thread.isAlive()) {
             return;
         }
-        running.interrupt();
+        thread.interrupt();
         running = null;
+        try {
+            // 等holder线程收尾（杀进程+最后几条日志），保证日志在tinylog关闭前落盘；
+            // 带超时兜底，避免shutdown时因异常卡住导致JVM退不出去
+            thread.join(TimeUnit.SECONDS.toMillis(10));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static void detectIfExist() throws InterruptedException {
