@@ -6,9 +6,12 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -23,7 +26,7 @@ public class HoldWsl {
     private static final Path HOLDER_PID = Constants.APP_USER_DIR.resolve("wsl_holder_pid");
     private static final Logger LOG = LoggerFactory.getLogger(HoldWsl.class);
     private static volatile Thread running;
-    public static final Consumer<Void> OFF = i -> HoldWsl.off();
+    private static final Consumer<Void> OFF = i -> HoldWsl.interrupt();
 
     private HoldWsl() {
     }
@@ -32,17 +35,20 @@ public class HoldWsl {
         if (running != null && running.isAlive()) {
             return;
         }
+        ShutDownJob.removeShutDownHook(OFF);
+        if (!ShutDownJob.addShutDownHook(OFF)) {
+            return;
+        }
         Thread thread = new Thread(HoldWsl::startAndHold);
         thread.setDaemon(true);
         thread.setName("hold-wsl");
         thread.start();
         running = thread;
-        ShutDownJob.addShutDownHook(OFF);
     }
 
     public static synchronized void off() {
         interrupt();
-        ShutDownJob.remove(OFF);
+        ShutDownJob.removeShutDownHook(OFF);
     }
 
     private static synchronized void interrupt() {
@@ -69,11 +75,49 @@ public class HoldWsl {
             if (!processHandle.isAlive()) {
                 return;
             }
-            // info().arguments()获取不到参数，暂时就直接强杀吧，风险在于或许会有坏蛋会把不该杀的pid写进了这里。
-            // Get-CimInstance Win32_Process -Filter "ProcessId=1234" | Select-Object CommandLine 这个命令倒是可以获取到参数，留作后续优化吧。
-            processHandle.descendants().forEach(ProcessHandle::destroyForcibly);
-            processHandle.destroyForcibly();
+            if (argsMatch(processHandle.pid())) {
+                try {
+                    processHandle.onExit().get();
+                } catch (InterruptedException e) {
+                    LOG.info("existing wsl holder got interrupted", e);
+                    Thread.currentThread().interrupt();
+                    processHandle.descendants().forEach(ProcessHandle::destroyForcibly);
+                    processHandle.destroyForcibly();
+                } catch (ExecutionException ignored) {
+                }
+            }
         });
+    }
+
+    private static boolean argsMatch(long pid) {
+        Process process = null;
+        try {
+            ProcessBuilder processBuilder = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                    "(Get-CimInstance Win32_Process -Filter ProcessId=" + pid + ").CommandLine");
+            processBuilder.redirectError(ProcessBuilder.Redirect.DISCARD);
+            process = processBuilder.start();
+            process.waitFor(10, TimeUnit.SECONDS);
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).toLowerCase();
+            for (String arg : ARGS) {
+                if (!output.contains(arg)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOG.info("perform args match got interrupted", e);
+        } catch (IOException e) {
+            LOG.error("perform args match got io exception", e);
+        } catch (Throwable throwable) {
+            LOG.error("perform args match got exception", throwable);
+        } finally {
+            if (process != null) {
+                process.descendants().forEach(ProcessHandle::destroyForcibly);
+                process.destroyForcibly();
+            }
+        }
+        return false;
     }
 
     private static void startAndHold() {

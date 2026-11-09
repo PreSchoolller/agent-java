@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava.backend.maintenance;
 
 import org.tinylog.provider.ProviderRegistry;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -14,7 +15,7 @@ import java.util.function.Consumer;
  * <p/>
  * 1. 按 callId 管理在册的前台/后台进程，支持"终止"（工具卡按钮）与退出时兜底清理
  * <p/>
- * 2.
+ * 2. 自定义应用层面的shutdownhook，乱序执行。
  */
 public class ShutDownJob {
     private static final Map<String, TaskHandle> bgProcesses = new HashMap<>();
@@ -81,10 +82,12 @@ public class ShutDownJob {
         shutDownTinyLog();// 最后执行，保证日志都能记录
     }
 
-    private static synchronized void runHooks() {
+    private static void runHooks() {
         Collection<Consumer<Void>> tmpHooks;
-        tmpHooks = hooks;
-        hooks = null;
+        synchronized (ShutDownJob.class) {
+            tmpHooks = hooks;
+            hooks = null;
+        }
         for (Consumer<Void> tmpHook : tmpHooks) {
             try {
                 tmpHook.accept(null);
@@ -111,20 +114,20 @@ public class ShutDownJob {
         }
     }
 
-    public static synchronized void addShutDownHook(Consumer<Void> hook) {
+    public static synchronized boolean addShutDownHook(Consumer<Void> hook) {
         if(hooks == null || hooks.contains(hook))
-            return;
+            return false;
 
-        hooks.add(hook);
+        return hooks.add(hook);
     }
 
-    public static synchronized boolean remove(Consumer<Void> hook) {
+    public static synchronized boolean removeShutDownHook(Consumer<Void> hook) {
         if (hook == null || (hooks != null && !hooks.contains(hook))) {
             return true;
         }
 
         if(hooks == null)
-            hook.accept(null);
+            return true;
 
         return hooks.remove(hook);
     }
