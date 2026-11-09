@@ -9,7 +9,6 @@ import io.github.preschoolller.agentjava.backend.maintenance.TaskHandle;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.BackGroundTaskDone;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,8 +19,10 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -77,6 +78,10 @@ public class ToolBash implements Tool {
     private static final String WSL = "WSL";
     private static final String GIT_BASH = "GITBASH";
     private static final String CUSTOM = "CUSTOM:";
+    private static final String REGEX = "REGEX:";
+    private static volatile Pattern toFilePattern;
+    /** 转文件正则的长度帽：文件名启发式用不了多长，超长只可能是在塞回溯炸弹 */
+    private static final int BASH_PATTERN_MAX_LENGTH = 256;
 
     private ToolBash() {
     }
@@ -381,12 +386,11 @@ public class ToolBash implements Tool {
      * 手改配置文件的坏值按不匹配处理，不让 PatternSyntaxException 打穿每次工具调用。
      */
     static boolean needPutInFile(String command) {
-        String pattern = AppSettings.get().getBashFilePattern();
-        if (pattern == null || pattern.isBlank()) {
+        if (toFilePattern == null) {
             return false;
         }
         try {
-            return Pattern.compile(pattern).matcher(command.toLowerCase()).find();
+            return toFilePattern.matcher(command.toLowerCase()).find();
         } catch (PatternSyntaxException e) {
             return false;
         }
@@ -554,20 +558,29 @@ public class ToolBash implements Tool {
     public String uiTips() {
         return """
                输入示例：
-               1. “” 空/空白 字符串触发bash重选。
+               1. “” 空/空白 字符串触发bash重选及转文件执行正则置null（短命令一律使用base64转码执行）。
                2. “WSL” 指定"wsl bash"执行命令，若WSL有问题则工具拒绝执行之后的一切调用。建议开一个wsl bash窗口保持wsl在线，不然会有启动开销。
                3. “GITBASH” 指定"C:\\Program Files\\Git\\bin\\bash.exe"执行命令，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
-               4. “CUSTOM:{your_bash_path}” 指定自定义bash可执行文件地址，若有问题，则仍使用内部定义的bash地址。
+               4. “CUSTOM:{your_bash_path}” 指定自定义bash可执行文件地址执行命令，若有问题，则仍使用内部定义的bash地址。
+               5. “REGEX:{your_to_file_regex}” 指定命中正则的短命令转文件执行。
+               6. 可用 “;” 分隔上述指令，如 “WSL;REGEX:{your_to_file_regex}”，重复命令以最后一个有效的为准。
                """;
     }
 
     @Override
     public String uiInteractive(String input) {
-        if (input == null || input.isBlank()) {
+        Property property = parseProperty(input);
+        String headStringBack = doHead(property.head);
+        String regexStringBack = doRegex(property.regex);
+        return headStringBack + "\n" + regexStringBack;
+    }
+
+    private static String doHead(String head) {
+        if (head == null || head.isBlank()) {
             exploreBash(true, true);
             return "已执行bash重选，当前：" + (bashHead == null ? "null" : bashHead.head.toString());
         }
-        if (input.equals(WSL)) {
+        if (head.equals(WSL)) {
             synchronized (ToolBash.class) {
                 bashHead = BashHead.WSL;
                 valid = tryBash(BashHead.WSL.head, DETECT_TIMEOUT, TimeUnit.SECONDS);
@@ -577,7 +590,7 @@ public class ToolBash implements Tool {
             }
             return "已重新指定为wsl bash，状态：" + (valid ? "可用" : "不可用");
         }
-        if (input.equals(GIT_BASH)) {
+        if (head.equals(GIT_BASH)) {
             synchronized (ToolBash.class) {
                 HoldWsl.off();
                 bashHead = BashHead.GIT;
@@ -585,8 +598,8 @@ public class ToolBash implements Tool {
             }
             return "已重新指定为git bash，状态：" + (valid ? "可用" : "不可用");
         }
-        if (input.startsWith(CUSTOM)) {
-            String bashPath = input.substring(CUSTOM.length());
+        if (head.startsWith(CUSTOM)) {
+            String bashPath = head.substring(CUSTOM.length());
             boolean result = setCustomBashHead(bashPath);
             if (result) {
                 return "已重新指定bash成功";
@@ -595,4 +608,125 @@ public class ToolBash implements Tool {
         }
         return "还没实现呢。。。";
     }
+
+
+    /**
+     * 转文件正则的"正常且安全"校验：非空白、长度在帽内、能编译、无灾难性回溯的嵌套
+     * 无限量词。这条正则会被 bash 工具拿去逐条命令做 find——回溯炸弹（(a+)+ 这类）会让
+     * 每次工具调用都卡在正则引擎里，所以存入前拦下。嵌套量词检测是保守启发式（覆盖常见
+     * 炸弹形态，不追求识别全部 ReDoS；误杀的写法换等价写法即可）。
+     */
+    private static String doRegex(String regex) {
+        if (regex == null || regex.isBlank()) {
+            setPattern(null);
+            return "已重设转文件执行正则为空";
+        }
+        regex = regex.substring(REGEX.length());
+        String trimmed = regex.strip();
+        if (trimmed.isEmpty() || trimmed.length() > BASH_PATTERN_MAX_LENGTH) {
+            return "正则为空或超长" + BASH_PATTERN_MAX_LENGTH + "故未进行配置";
+        }
+        Pattern pattern;
+        try {
+            pattern = Pattern.compile(trimmed);
+        } catch (PatternSyntaxException e) {
+            return "正则编译失败，请检查正则表达式";
+        }
+        if (hasNestedUnboundedQuantifier(trimmed)) {
+            return "正则编译失败，请检查是否有嵌套无限量词";
+        }
+        setPattern(pattern);
+        return "正则配置成功";
+    }
+
+
+    /**
+     * 嵌套无限量词扫描：含无限量词（* / + / {n,}）的分组又被无限量词修饰（(a+)+、(a|b+)*
+     * 等）判为不安全。逐字符走一遍，跳过转义符与字符类 []（里面的 * + { } 是字面量）；
+     * {@code {n,m}} 有上界的量词回溯有限，不算。已通过 Pattern.compile，扫到的 { 一定是合法量词。
+     */
+    private static boolean hasNestedUnboundedQuantifier(String pattern) {
+        Deque<Boolean> stack = new ArrayDeque<>(); // 外层各分组"是否已出现过无限量词"
+        boolean groupStarvable = false; // 当前分组内是否出现过无限量词
+        boolean justClosedStarvable = false; // 前一个字符刚闭合的分组是否含无限量词（量词修饰的对象）
+        for (int i = 0; i < pattern.length(); i++) {
+            char c = pattern.charAt(i);
+            boolean appliesToStarvableGroup = justClosedStarvable; // 本字符若是量词，修饰它
+            justClosedStarvable = false; // 闭口标志只活一步：到不了紧跟其后的量词就没用了
+            if (c == '\\') {
+                i++; // 转义：连下一个字符一起吃掉
+                continue;
+            }
+            if (c == '[') { // 字符类整段跳过（内部 \] 转义由上面的 \\ 分支处理）
+                while (++i < pattern.length() && pattern.charAt(i) != ']') {
+                    if (pattern.charAt(i) == '\\') {
+                        i++;
+                    }
+                }
+                continue;
+            }
+            if (c == '(') {
+                stack.push(groupStarvable);
+                groupStarvable = false; // 进组重置：组内量词记到组自己头上
+                continue;
+            }
+            if (c == ')') {
+                justClosedStarvable = groupStarvable;
+                Boolean parent = stack.poll();
+                groupStarvable = parent != null && (parent || justClosedStarvable); // 子组的量词算外层体内的
+                continue;
+            }
+            boolean unbounded;
+            int next = i + 1;
+            if (c == '*' || c == '+') {
+                unbounded = true;
+            } else if (c == '{') { // {n,} 无上界=无限量词；{n}/{n,m} 有界不算
+                int close = pattern.indexOf('}', i);
+                if (close < 0) { // 编译已拦截游离 {，走到这只是防御：按普通字符继续
+                    unbounded = false;
+                    next = i + 1;
+                } else {
+                    unbounded = pattern.substring(i + 1, close).matches("\\d*,");
+                    next = close + 1;
+                }
+            } else {
+                unbounded = false;
+            }
+            if (unbounded) {
+                if (appliesToStarvableGroup) {
+                    return true; // 含无限量词的分组又被无限量词修饰：回溯炸弹
+                }
+                groupStarvable = true;
+            }
+            i = next - 1; // 量词可能是多字符（{2,}），推进到量词末尾
+        }
+        return false;
+    }
+
+    private static Property parseProperty(String input) {
+        String head = null;
+        String regex = null;
+        if (input == null || input.isBlank()) {
+            return new Property(null, null);
+        }
+        for (String str : input.split(";")) {
+            switch (str) {
+                case WSL, GIT_BASH -> head = WSL;
+                default -> {
+                    if (str.startsWith(CUSTOM)) {
+                        head = str;
+                    } else if (str.startsWith(REGEX)) {
+                        regex = str;
+                    }
+                }
+            }
+        }
+        return new Property(head, regex);
+    }
+
+    private static synchronized void setPattern(Pattern pattern) {
+        toFilePattern = pattern;
+    }
+
+    private record Property(String head, String regex) {}
 }
