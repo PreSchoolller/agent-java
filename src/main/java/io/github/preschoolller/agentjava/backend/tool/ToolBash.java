@@ -423,32 +423,10 @@ public class ToolBash implements Tool {
         } catch (Throwable t) {
             return; // 设置侧不可用（裸类路径回归等）不挡 bash 工具本身的默认链，踩坑 #26 同源
         }
-        if (input == null || input.isBlank()) {
-            return;
-        }
-        synchronized (ToolBash.class) {
-            if (WSL.equals(input)) {
-                bashHead = BashHead.WSL;
-                valid = tryBash(BashHead.WSL.head);
-                if (valid) {
-                    HoldWsl.on();
-                }
-            } else if (GIT_BASH.equals(input)) {
-                bashHead = BashHead.GIT;
-                valid = tryBash(BashHead.GIT.head);
-            } else if (input.startsWith("CUSTOM:")) {
-                String path = input.substring(7);
-                if (path.isBlank()) {
-                    if (BashHead.CUSTOM.equals(bashHead)) {
-                        clearCustomBash();
-                    }
-                    return;
-                }
-                if (!path.equals(attemptedCustomPath)) {
-                    setCustomBashHead(path);
-                }
-            }
-        }
+        Property property = parseProperty(input);
+        String afterDoHead = doHead(property.head);
+        String afterDoRegex = doRegex(property.regex);
+        LOG.info("applyConfiguredCustomBash: afterDoHead: {}, afterDoRegex: {}", afterDoHead, afterDoRegex);
     }
 
     /**
@@ -557,13 +535,14 @@ public class ToolBash implements Tool {
     @Override
     public String uiTips() {
         return """
-               输入示例：
-               1. “” 空/空白 字符串触发bash重选及转文件执行正则置null（短命令一律使用base64转码执行）。
-               2. “WSL” 指定"wsl bash"执行命令，若WSL有问题则工具拒绝执行之后的一切调用。建议开一个wsl bash窗口保持wsl在线，不然会有启动开销。
-               3. “GITBASH” 指定"C:\\Program Files\\Git\\bin\\bash.exe"执行命令，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
-               4. “CUSTOM:{your_bash_path}” 指定自定义bash可执行文件地址执行命令，若有问题，则仍使用内部定义的bash地址。
-               5. “REGEX:{your_to_file_regex}” 指定命中正则的短命令转文件执行。
-               6. 可用 “;” 分隔上述指令，如 “WSL;REGEX:{your_to_file_regex}”，重复命令以最后一个有效的为准。
+               输入示例：k1=v1;k2=v2...
+               bash=[WSL|GITBASH|{your_bash_path}];regex={your_to_file_regex}
+               1. “” 空/空白 字符串零操作，返回当前bash和regex供查看。
+               2. “bash=WSL” 指定"wsl bash"执行命令，若WSL有问题则工具拒绝执行之后的一切调用。建议开一个wsl bash窗口保持wsl在线，不然会有启动开销。
+               3. “bash=GITBASH” 指定"C:\\Program Files\\Git\\bin\\bash.exe"执行命令，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
+               4. “bash={your_bash_path}” 指定自定义bash可执行文件地址执行命令，若有问题，则仍使用内部定义的bash地址。为空则执行bash重选
+               5. “regex={your_to_file_regex}” 指定命中正则的短命令转文件执行。为空则置null即短命令一律采用base64转码执行。
+               重复key以最后一个有效value为准
                """;
     }
 
@@ -576,7 +555,10 @@ public class ToolBash implements Tool {
     }
 
     private static String doHead(String head) {
-        if (head == null || head.isBlank()) {
+        if (head == null) {
+            return "当前bash" + (bashHead == null ? "null" : bashHead.head.toString());
+        }
+        if (head.isBlank()) {
             exploreBash(true, true);
             return "已执行bash重选，当前：" + (bashHead == null ? "null" : bashHead.head.toString());
         }
@@ -598,15 +580,11 @@ public class ToolBash implements Tool {
             }
             return "已重新指定为git bash，状态：" + (valid ? "可用" : "不可用");
         }
-        if (head.startsWith(CUSTOM)) {
-            String bashPath = head.substring(CUSTOM.length());
-            boolean result = setCustomBashHead(bashPath);
-            if (result) {
-                return "已重新指定bash成功";
-            }
-            return "指定自定义bash失败，仍使用内部bash，当前：" + bashHead.head + "，状态：" + (valid ? "可用" : "不可用");
+        boolean result = setCustomBashHead(head);
+        if (result) {
+            return "已重新指定bash成功";
         }
-        return "还没实现呢。。。";
+        return "指定自定义bash失败，仍使用内部bash，当前：" + bashHead.head + "，状态：" + (valid ? "可用" : "不可用");
     }
 
 
@@ -617,7 +595,10 @@ public class ToolBash implements Tool {
      * 炸弹形态，不追求识别全部 ReDoS；误杀的写法换等价写法即可）。
      */
     private static String doRegex(String regex) {
-        if (regex == null || regex.isBlank()) {
+        if (regex == null) {
+            return "当前正则：" + (toFilePattern == null ? "" : toFilePattern.pattern());
+        }
+        if (regex.isBlank()) {
             setPattern(null);
             return "已重设转文件执行正则为空";
         }
@@ -710,15 +691,16 @@ public class ToolBash implements Tool {
             return new Property(null, null);
         }
         for (String str : input.split(";")) {
-            switch (str) {
-                case WSL, GIT_BASH -> head = WSL;
-                default -> {
-                    if (str.startsWith(CUSTOM)) {
-                        head = str;
-                    } else if (str.startsWith(REGEX)) {
-                        regex = str;
-                    }
-                }
+            int i = str.indexOf("=");
+            if (i == -1) {
+                continue;
+            }
+            String key = str.substring(0, i);
+            String value = (i == str.length() - 1) ? "" : str.substring(i + 1);
+            switch (key) {
+                case "bash" -> head = value;
+                case "regex" -> regex = value;
+                default -> LOG.info("unknown key found in input: {}, value: {}", key, value);
             }
         }
         return new Property(head, regex);
