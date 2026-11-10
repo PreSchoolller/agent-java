@@ -57,8 +57,9 @@ class AppSettingsTest {
         testSettings.getProfile("默认").setModels(List.of("model-a", "model-b"));
         testSettings.getProfile("默认").setModel("model-b");
         // 模型目录元数据（计划外）：名字/上下文/最大输出/推理等级/输入能力整块落盘往返
+        // （上下文窗口纯数字，见 t12）
         ModelMeta richA = new ModelMeta("model-a");
-        richA.setCtxWindow("256K");
+        richA.setCtxWindow("256000");
         richA.setMaxOutput("32K");
         richA.setReasoning("HIGH");
         richA.setText(true);
@@ -77,7 +78,7 @@ class AppSettingsTest {
         assertEquals(List.of("model-a", "model-b"), reloaded.getProfile("写作").getModels(), "模型列表往返");
         assertEquals("model-b", reloaded.getProfile("写作").getModel(), "默认模型往返");
         ModelMeta savedA = reloaded.getProfile("写作").getModelMetas().get(0);
-        assertTrue("model-a".equals(savedA.getName()) && "256K".equals(savedA.getCtxWindow())
+        assertTrue("model-a".equals(savedA.getName()) && "256000".equals(savedA.getCtxWindow())
                 && "32K".equals(savedA.getMaxOutput()) && "HIGH".equals(savedA.getReasoning())
                 && savedA.isText() && !savedA.isImage(), "模型元数据往返");
         assertTrue(reloaded.getProfile("写作").getModelMetas().get(1).isImage(), "模型图片能力往返");
@@ -280,6 +281,55 @@ class AppSettingsTest {
         assertEquals("chat-completion-mine", reread.getActiveProviderName(Profile.API_MESSAGES), "strip 落值");
         reread.setActiveProviderName("unknown-api", "whatever");
         assertNull(reread.getActiveProviderName("unknown-api"), "未知 apiType 丢弃");
+    }
+
+    @Test
+    void t10_activeContextHandler() {
+        Path settingsFile = file("settings.properties");
+        AppSettings testSettings = AppSettings.at(settingsFile);
+        // 上下文页单选（全局落 AppSettings.activeContextHandler，不随方案）：
+        // 默认不启用（null=消息原样发出）；设值 strip 落值；空白/null=不启用（清除）
+        assertNull(testSettings.getActiveContextHandler(), "默认不启用");
+        testSettings.setActiveContextHandler("  trim-handler  ");
+        assertEquals("trim-handler", testSettings.getActiveContextHandler(), "strip 落值");
+        testSettings.setActiveContextHandler("   ");
+        assertNull(testSettings.getActiveContextHandler(), "空白=不启用（清除）");
+        testSettings.setActiveContextHandler(null);
+        assertNull(testSettings.getActiveContextHandler(), "null=不启用");
+        // 落盘往返：缺键=不启用，有键=选择保留（名字是否在注册表里由后端消费时兜底）
+        testSettings.setActiveContextHandler("storable-handler");
+        testSettings.save();
+        assertEquals("storable-handler", AppSettings.at(settingsFile).getActiveContextHandler(), "落盘往返");
+        testSettings.setActiveContextHandler("");
+        testSettings.save();
+        assertNull(AppSettings.at(settingsFile).getActiveContextHandler(), "清除后落盘无该键");
+    }
+
+    @Test
+    void t12_ctxWindowPureDigits() {
+        // 上下文窗口只接受纯数字 token 数（消费方 Profile.getModelCtxWindow 是 Integer.parseInt
+        // 直读，"256K" 之类只会解析成 0 还带错觉，宁可拒收）
+        ModelMeta meta = new ModelMeta("m");
+        meta.setCtxWindow("128000");
+        assertEquals("128000", meta.getCtxWindow(), "纯数字设值");
+        meta.setCtxWindow(" 2048 ");
+        assertEquals("2048", meta.getCtxWindow(), "两侧空白 strip");
+        meta.setCtxWindow("256K");
+        assertEquals("2048", meta.getCtxWindow(), "带单位自由文本拒收保持原值（不静默洗掉旧落盘值）");
+        meta.setCtxWindow("-1");
+        assertEquals("2048", meta.getCtxWindow(), "负号拒收");
+        meta.setCtxWindow("12 34");
+        assertEquals("2048", meta.getCtxWindow(), "内嵌空格拒收");
+        meta.setCtxWindow("   ");
+        assertEquals("", meta.getCtxWindow(), "空白=清除（未设置）");
+        meta.setCtxWindow(null);
+        assertEquals("", meta.getCtxWindow(), "null=清除");
+        // 校验器边界：空/null 是合法清除语义；含非数字不是合法配置值
+        assertTrue(ModelMeta.isValidCtxWindow("0") && ModelMeta.isValidCtxWindow("99999999999"),
+                "纯数字放行（上限由消费方解释）");
+        assertFalse(ModelMeta.isValidCtxWindow(null) || ModelMeta.isValidCtxWindow("")
+                || ModelMeta.isValidCtxWindow("1e5") || ModelMeta.isValidCtxWindow("２０４８"),
+                "null/空串/科学计数/全角数字不是合法配置值");
     }
 
     @Test

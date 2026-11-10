@@ -8,15 +8,16 @@ import java.util.Map;
 /**
  * 单个模型的元数据（设置面板"模型目录"维护）。
  * 名字是服务端标识（发给后端的 model 参数）；其余是这份模型的能力档案：
- * 上下文窗口 / 最大输出 token 数先落盘存档（自由文本，"256K"/"128000" 都行，空=未设置），
- * 等消费方（后端截断/展示）接入再定解析；图片输入能力同理（当前会话还不发图片）。
+ * 上下文窗口是纯数字 token 数（消费方 Profile.getModelCtxWindow 是 Integer.parseInt 直读，
+ * 空=未设置；最大输出 token 数先落盘存档（自由文本，空=未设置），消费方接入再定解析；
+ * 图片输入能力同理（当前会话还不发图片）。
  * 默认推理等级接了输出区：选中该模型时思考强度下拉自动带出（空=跟随对话当前选择），
  * 取值是 ReasoningEffortEnum 的枚举名。
  */
 public class ModelMeta {
 
     private String name;
-    /** 上下文窗口（自由文本，空=未设置） */
+    /** 上下文窗口（纯数字 token 数，空=未设置）；非法值不入库见 setCtxWindow */
     private String ctxWindow = "";
     /** 最大输出 token 数（自由文本，空=未设置） */
     private String maxOutput = "";
@@ -56,8 +57,24 @@ public class ModelMeta {
         return ctxWindow;
     }
 
+    /** 空串/纯数字才是合法上下文窗口值（null/空白=未设置算合法，是清除语义） */
+    public static boolean isValidCtxWindow(String value) {
+        return value != null && value.matches("\\d+");
+    }
+
+    /**
+     * 上下文窗口只接受纯数字 token 数（两侧空白 strip）：消费方 Profile.getModelCtxWindow
+     * 是 Integer.parseInt 直读，非法值忽略保持原值（不静默洗掉旧落盘的自由文本，回滚显示由设置面板负责）。
+     */
     public void setCtxWindow(String ctxWindow) {
-        this.ctxWindow = ctxWindow;
+        if (ctxWindow == null || ctxWindow.isBlank()) {
+            this.ctxWindow = "";
+            return;
+        }
+        String stripped = ctxWindow.strip();
+        if (isValidCtxWindow(stripped)) {
+            this.ctxWindow = stripped;
+        }
     }
 
     public String getMaxOutput() {
