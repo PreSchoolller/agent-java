@@ -6,30 +6,19 @@ import com.openai.models.FunctionParameters;
 import com.openai.models.chat.completions.ChatCompletionFunctionTool;
 import com.openai.models.responses.FunctionTool;
 import com.openai.models.responses.ResponseFunctionToolCall;
-import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 public class ToolManager {
     public static final Tool BAD_TOOL = BadTool.getInstance();
@@ -48,10 +37,13 @@ public class ToolManager {
 
     /**
      * 允许插件覆盖同名内部工具，便于增强
-     * @param tool 工具
+     * @param object 工具
      */
-    public static void register(Tool tool) {
-        if (tool == null || tool.name() == null) {
+    public static void register(Object object) {
+        if (!(object instanceof Tool tool)) {
+            return;
+        }
+        if (tool.name() == null) {
             return;
         }
         Tool preValue = tools.put(tool.name(), tool);
@@ -114,42 +106,6 @@ public class ToolManager {
         return toolCall.getTool().execute(toolCall.getArguments(), workspace);
     }
 
-    public static void loadExternal() {
-        try {
-            Files.createDirectories(Constants.PLUGIN_DIR);
-        } catch (IOException e) {
-            LOG.error("...-_-!...");
-        }
-        try (Stream<Path> files = Files.find(Constants.PLUGIN_DIR, 1,
-                (path, basicFileAttributes) -> path.getFileName().toString().endsWith(".jar"))) {
-            Iterator<Path> iterator = files.iterator();
-            while (iterator.hasNext()) {
-                Path jar = iterator.next();
-                String jarNameWithSuffix = jar.getFileName().toString();
-                String jarName = jarNameWithSuffix.substring(0, jarNameWithSuffix.length() - ".jar".length());
-                AtomicInteger count = new AtomicInteger();
-
-                try {
-                    URL[] jarUrl = new URL[]{jar.toUri().toURL()};
-                    URLClassLoader urlClassLoader = new URLClassLoader("plugin-" + jarName, jarUrl, ToolManager.class.getClassLoader());
-                    ServiceLoader.load(Tool.class, urlClassLoader).forEach(tool -> {
-                        register(tool);
-                        LOG.info("{} loaded by {}", tool.getClass(), tool.getClass().getClassLoader());
-                        count.incrementAndGet();
-                    });
-                } catch (MalformedURLException e) {
-                    LOG.error("should not be here, riiiight ?");
-                } catch (Throwable throwable) {
-                    LOG.error("plugin {} failed", jarNameWithSuffix, throwable);
-                } finally {
-                    LOG.info("plugin {} loaded {} tools", jarNameWithSuffix, count.get());
-                }
-            }
-        } catch (IOException e) {
-            LOG.error("load plugin error", e);
-        }
-    }
-
     /**
      * 目前规划：
      * 1. 历史中用过的工具不受前端未勾选影响
@@ -173,9 +129,5 @@ public class ToolManager {
             result.add(tool);
         }
         return Collections.unmodifiableList(result);
-    }
-
-    public static String getPersistentToolInput(Tool toolImplement) {
-        return appSettings.getPersistentToolInput(toolImplement.name());
     }
 }

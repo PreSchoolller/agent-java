@@ -1,0 +1,32 @@
+package io.github.preschoolller.agentjava.backend.context.interfaces;
+
+import io.github.preschoolller.agentjava.backend.context.ContextHandlerManager;
+import io.github.preschoolller.agentjava.backend.maintenance.interfaces.PluginBase;
+import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
+
+import java.util.List;
+
+public interface ContextHandler extends PluginBase {
+
+
+
+    record ContextDetail(List<PromptParams.RoleMessage> roleMessages, long inputTokens, long outputTokens, long ctxWindow) {
+    }
+
+    record ContextManaged(List<PromptParams.RoleMessage> roleMessages) {
+    }
+
+    /**
+     * @return 此handler是否只读，只读返回值会被忽略，非只读只允许存在一个；
+     */
+    default boolean readOnly() {
+        return true;
+    }
+
+    /**
+     * 对上下文进行记录（readOnly）或操作（返回值会传入后端api）
+     * @param contextDetail 上下文信息
+     * @return 修改后的上下文
+     */
+    ContextManaged handle(ContextDetail contextDetail);
+}

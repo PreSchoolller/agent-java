@@ -1,23 +1,12 @@
 package io.github.preschoolller.agentjava.backend.provider;
 
-import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
 
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLClassLoader;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.Map;
-import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 public class ProviderFactory {
 
@@ -34,6 +23,11 @@ public class ProviderFactory {
     private static final AppSettings appSettings = AppSettings.get();
 
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ProviderFactory.class);
+
+    static {
+        register(createResponseProvider());
+        register(createChatCompletionProvider());
+    }
 
     private ProviderFactory() {}
 
@@ -129,8 +123,11 @@ public class ProviderFactory {
         return ACTIVE_PROVIDERS.computeIfPresent(provider.implement(), (key, old) -> provider);
     }
 
-    private static void register(Provider provider) {
-        if (provider == null || provider.name() == null || provider.name().isBlank() || provider.implement() == null) {
+    public static void register(Object object) {
+        if (!(object instanceof Provider provider)) {
+            return;
+        }
+        if (provider.name() == null || provider.name().isBlank() || provider.implement() == null) {
             LOG.info("null provider: ignore");
             return;
         }
@@ -139,44 +136,6 @@ public class ProviderFactory {
             case CHAT_COMPLETION -> CHAT_COMPLETION_PROVIDERS.put(provider.name(), provider);
             case MESSAGES -> MESSAGES_PROVIDERS.put(provider.name(), provider);
             default -> throw new IllegalArgumentException("unsupported implementation");
-        }
-    }
-
-    public static void loadExternal() {
-        register(createResponseProvider());
-        register(createChatCompletionProvider());
-        try {
-            Files.createDirectories(Constants.PLUGIN_DIR);
-        } catch (IOException e) {
-            LOG.error("...-_-!...");
-        }
-        try (Stream<Path> files = Files.find(Constants.PLUGIN_DIR, 1,
-                (path, basicFileAttributes) -> path.getFileName().toString().endsWith(".jar"))) {
-            Iterator<Path> iterator = files.iterator();
-            while (iterator.hasNext()) {
-                Path jar = iterator.next();
-                String jarNameWithSuffix = jar.getFileName().toString();
-                String jarName = jarNameWithSuffix.substring(0, jarNameWithSuffix.length() - ".jar".length());
-                AtomicInteger count = new AtomicInteger();
-
-                try {
-                    URL[] jarUrl = new URL[]{jar.toUri().toURL()};
-                    URLClassLoader urlClassLoader = new URLClassLoader("plugin-" + jarName, jarUrl, ProviderFactory.class.getClassLoader());
-                    ServiceLoader.load(Provider.class, urlClassLoader).forEach(provider -> {
-                        register(provider);
-                        LOG.info("{} loaded by {}", provider.getClass(), provider.getClass().getClassLoader());
-                        count.incrementAndGet();
-                    });
-                } catch (MalformedURLException e) {
-                    LOG.error("should not be here, riiiight ?");
-                } catch (Throwable throwable) {
-                    LOG.error("plugin {} failed", jarNameWithSuffix, throwable);
-                } finally {
-                    LOG.info("plugin {} loaded {} providers", jarNameWithSuffix, count.get());
-                }
-            }
-        } catch (IOException e) {
-            LOG.error("load plugin error", e);
         }
     }
 }
