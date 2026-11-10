@@ -64,7 +64,7 @@ import java.util.concurrent.CompletableFuture;
  * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）
  * + 每个支持交互的工具一条可展开交互区（uiTips 提示 + 输入框 + 执行钮 + 结果提示：
  *   输入经 uiInteractive 交给工具自行解释应用（bash 的 bash 选择/转文件正则都走这里，
- *   如 "WSL;REGEX:{...}"），工具处理后由前端立即
+ *   k=v 格式如 "bash=WSL;regex=(here-?doc|<<)"，键缺省=不动，键在值空=清除），工具处理后由前端立即
  *   setPersistentToolInput + save 落盘——持久化是前端输入之后的事，后端只读消费）；
  * 「日志」= 控制台/文件两块输出参数（log.* 自定义键落盘，TinyLogConfigurationLoader 启动时
  * 映射成日志后端属性——换后端只改映射；改后重启生效）。

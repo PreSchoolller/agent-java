@@ -153,7 +153,7 @@ class ToolBashTest {
         assertEquals(new File(workSpace), processBuilder.directory());
     }
 
-    /** 转文件正则经 doRegex（uiInteractive REGEX:）设置；测试用反射直接注入/读取静态字段 */
+    /** 转文件正则经 doRegex（uiInteractive 的 regex= 值）设置；测试用反射直接注入/读取静态字段 */
     private static void setPatternField(Pattern pattern) {
         try {
             Field patternField = ToolBash.class.getDeclaredField("toFilePattern");
@@ -174,7 +174,7 @@ class ToolBashTest {
         }
     }
 
-    /** 反射调私有 doRegex：uiInteractive 的 REGEX: 分支，验证配置语义与安全拦截 */
+    /** 反射调私有 doRegex：uiInteractive 的 regex= 分支，验证配置语义与安全拦截 */
     private static String invokeDoRegex(String regex) {
         try {
             Method method = ToolBash.class.getDeclaredMethod("doRegex", String.class);
@@ -187,10 +187,14 @@ class ToolBashTest {
 
     @Test
     void testDoRegexSetAndClear() {
-        assertEquals("正则配置成功", invokeDoRegex("REGEX:(here-?doc|<<)"));
+        assertEquals("正则配置成功", invokeDoRegex("(here-?doc|<<)"));
         assertNotNull(getPatternField());
         assertTrue(ToolBash.needPutInFile("echo (here-?doc|<<)"));
-        assertEquals("已重设转文件执行正则为空", invokeDoRegex(null));
+        // null = 键未出现 = 不动
+        assertEquals("当前正则：(here-?doc|<<)", invokeDoRegex(null));
+        assertNotNull(getPatternField());
+        // 空串 = 键在值空 = 显式清除
+        assertEquals("已重设转文件执行正则为空", invokeDoRegex(""));
         assertNull(getPatternField());
         assertFalse(ToolBash.needPutInFile("echo (here-?doc|<<)"));
     }
@@ -198,18 +202,60 @@ class ToolBashTest {
     @Test
     void testDoRegexRejectsUnsafe() {
         // 编译不过
-        assertEquals("正则编译失败，请检查正则表达式", invokeDoRegex("REGEX:[unclosed"));
+        assertEquals("正则编译失败，请检查正则表达式", invokeDoRegex("[unclosed"));
         // 回溯炸弹（嵌套无限量词）：普通分组与非捕获分组都拦
-        assertEquals("正则编译失败，请检查是否有嵌套无限量词", invokeDoRegex("REGEX:(a+)+"));
-        assertEquals("正则编译失败，请检查是否有嵌套无限量词", invokeDoRegex("REGEX:(?:ab|x+)+"));
+        assertEquals("正则编译失败，请检查是否有嵌套无限量词", invokeDoRegex("(a+)+"));
+        assertEquals("正则编译失败，请检查是否有嵌套无限量词", invokeDoRegex("(?:ab|x+)+"));
         // 超长
-        assertEquals("正则为空或超长256故未进行配置", invokeDoRegex("REGEX:" + "a".repeat(257)));
+        assertEquals("正则为空或超长256故未进行配置", invokeDoRegex("a".repeat(257)));
         // 有界重复与普通量词分组放行（误杀面别太宽）
-        assertEquals("正则配置成功", invokeDoRegex("REGEX:(a|b)+c{2,3}"));
+        assertEquals("正则配置成功", invokeDoRegex("(a|b)+c{2,3}"));
         // 字符类里的量词字符是字面量
-        assertEquals("正则配置成功", invokeDoRegex("REGEX:[a+*.]{2,}\\w"));
-        // REGEX: 空指令（前缀后无内容）不炸，按超长/为空分支处理
-        assertEquals("正则为空或超长256故未进行配置", invokeDoRegex("REGEX:"));
+        assertEquals("正则配置成功", invokeDoRegex("[a+*.]{2,}\\w"));
+    }
+
+    /** 反射调私有 parseProperty，返回 [head, regex]；覆盖 k=v 解析与旧格式兼容 */
+    private static String[] invokeParseProperty(String input) {
+        try {
+            Method method = ToolBash.class.getDeclaredMethod("parseProperty", String.class);
+            method.setAccessible(true);
+            Object property = method.invoke(null, input);
+            Method head = property.getClass().getDeclaredMethod("head");
+            Method regex = property.getClass().getDeclaredMethod("regex");
+            head.setAccessible(true);
+            regex.setAccessible(true);
+            return new String[]{(String) head.invoke(property), (String) regex.invoke(property)};
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void testParseProperty() {
+        // k=v 双键；无 '=' 的杂散段忽略；未知键忽略
+        String[] both = invokeParseProperty("bash=WSL;regex=(here-?doc|<<)");
+        assertEquals("WSL", both[0]);
+        assertEquals("(here-?doc|<<)", both[1]);
+        assertNull(invokeParseProperty("randomtext")[0]);
+        assertNull(invokeParseProperty("randomtext")[1]);
+        assertNull(invokeParseProperty("foo=bar")[0]);
+        assertNull(invokeParseProperty("foo=bar")[1]);
+        // key/value 两侧空白容忍
+        assertEquals("WSL", invokeParseProperty(" bash =WSL ;")[0]);
+        // 空 value = 显式清除（head 重选 / regex 置 null）
+        assertEquals("", invokeParseProperty("bash=")[0]);
+        assertEquals("", invokeParseProperty("regex=")[1]);
+        // 重复 key 以最后一个有效 value 为准
+        assertEquals("GITBASH", invokeParseProperty("bash=WSL;bash=GITBASH")[0]);
+        // 旧格式兼容（k=v 之前落盘的输入）
+        assertEquals("WSL", invokeParseProperty("WSL")[0]);
+        assertEquals("GITBASH", invokeParseProperty("GITBASH")[0]);
+        assertEquals("C:\\x\\y\\bash.exe", invokeParseProperty("CUSTOM:C:\\x\\y\\bash.exe")[0]);
+        assertEquals("\\d+\\.sh", invokeParseProperty("REGEX:\\d+\\.sh")[1]);
+        // 新旧混排
+        String[] mixed = invokeParseProperty("bash=WSL;REGEX:a|b");
+        assertEquals("WSL", mixed[0]);
+        assertEquals("a|b", mixed[1]);
     }
 
     private static void setBashHead(ToolBash.BashHead bashHead) {
@@ -289,32 +335,53 @@ class ToolBashTest {
     @Test
     void testUiTips() {
         String expected = """
-                输入示例：
-                1. “” 空/空白 字符串触发bash重选及转文件执行正则置null（短命令一律使用base64转码执行）。
-                2. “WSL” 指定"wsl bash"执行命令，若WSL有问题则工具拒绝执行之后的一切调用。建议开一个wsl bash窗口保持wsl在线，不然会有启动开销。
-                3. “GITBASH” 指定"C:\\Program Files\\Git\\bin\\bash.exe"执行命令，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
-                4. “CUSTOM:{your_bash_path}” 指定自定义bash可执行文件地址执行命令，若有问题，则仍使用内部定义的bash地址。
-                5. “REGEX:{your_to_file_regex}” 指定命中正则的短命令转文件执行。
-                6. 可用 “;” 分隔上述指令，如 “WSL;REGEX:{your_to_file_regex}”，重复命令以最后一个有效的为准。
+                输入示例：k1=v1;k2=v2...
+                bash=[WSL|GITBASH|{your_bash_path}];regex={your_to_file_regex}
+                1. “” 空/空白 字符串零操作，返回当前bash和regex供查看。
+                2. “bash=WSL” 指定"wsl bash"执行命令，若WSL有问题则工具拒绝执行之后的一切调用。建议开一个wsl bash窗口保持wsl在线，不然会有启动开销。
+                3. “bash=GITBASH” 指定"C:\\Program Files\\Git\\bin\\bash.exe"执行命令，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
+                4. “bash={your_bash_path}” 指定自定义bash可执行文件地址执行命令，若有问题，则仍使用内部定义的bash地址。为空则执行bash重选
+                5. “regex={your_to_file_regex}” 指定命中正则的短命令转文件执行。为空则置null即短命令一律采用base64转码执行。
+                重复key以最后一个有效value为准
                 """;
         assertEquals(expected, ToolBash.getInstance().uiTips());
     }
 
     @Test
-    void testUiInteractiveRedefineWhenInputBlank() {
-        String result = ToolBash.getInstance().uiInteractive("");
+    void testUiInteractiveNoOpWhenInputBlank() {
+        // 空白 = 零操作，只回显当前配置
+        String result = ToolBash.getInstance().uiInteractive("  ");
+        assertTrue(result.startsWith("当前bash："));
+        assertTrue(result.contains("当前正则："));
+    }
+
+    @Test
+    void testUiInteractiveWhenInputBashWsl() {
+        String result = ToolBash.getInstance().uiInteractive("bash=WSL");
+        assertTrue(result.startsWith("已重新指定为wsl bash，状态："));
+        assertTrue(result.contains("当前正则："));
+    }
+
+    @Test
+    void testUiInteractiveWhenInputBashGitBash() {
+        String result = ToolBash.getInstance().uiInteractive("bash=GITBASH");
+        assertTrue(result.startsWith("已重新指定为git bash，状态："));
+    }
+
+    @Test
+    void testUiInteractiveWhenInputBashEmpty() {
+        // bash= 值空 = 触发重选
+        String result = ToolBash.getInstance().uiInteractive("bash=");
         assertTrue(result.startsWith("已执行bash重选，当前："));
     }
 
     @Test
-    void testUiInteractiveRedefineWhenInputWsl() {
-        String result = ToolBash.getInstance().uiInteractive("WSL");
-        assertTrue(result.startsWith("已重新指定为wsl bash，状态："));
-    }
-
-    @Test
-    void testUiInteractiveRedefineWhenInputGitBash() {
-        String result = ToolBash.getInstance().uiInteractive("GITBASH");
-        assertTrue(result.startsWith("已重新指定为git bash，状态："));
+    void testUiInteractiveWhenInputRegexEmpty() {
+        // regex= 值空 = 置 null；bash 键缺省不动
+        setPatternField(Pattern.compile("hello"));
+        String result = ToolBash.getInstance().uiInteractive("regex=");
+        assertTrue(result.contains("已重设转文件执行正则为空"));
+        assertNull(getPatternField());
+        assertTrue(result.startsWith("当前bash："));
     }
 }

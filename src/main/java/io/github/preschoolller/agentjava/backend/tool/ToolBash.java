@@ -556,7 +556,7 @@ public class ToolBash implements Tool {
 
     private static String doHead(String head) {
         if (head == null) {
-            return "当前bash" + (bashHead == null ? "null" : bashHead.head.toString());
+            return "当前bash：" + (bashHead == null ? "null" : bashHead.head.toString());
         }
         if (head.isBlank()) {
             exploreBash(true, true);
@@ -584,7 +584,9 @@ public class ToolBash implements Tool {
         if (result) {
             return "已重新指定bash成功";
         }
-        return "指定自定义bash失败，仍使用内部bash，当前：" + bashHead.head + "，状态：" + (valid ? "可用" : "不可用");
+        // setCustomBashHead 失败会走 clearCustomBash 复位重探，两次探测全败时 bashHead 仍为 null
+        return "指定自定义bash失败，仍使用内部bash，当前：" + (bashHead == null ? "null" : bashHead.head.toString())
+                + "，状态：" + (valid ? "可用" : "不可用");
     }
 
 
@@ -602,7 +604,6 @@ public class ToolBash implements Tool {
             setPattern(null);
             return "已重设转文件执行正则为空";
         }
-        regex = regex.substring(REGEX.length());
         String trimmed = regex.strip();
         if (trimmed.isEmpty() || trimmed.length() > BASH_PATTERN_MAX_LENGTH) {
             return "正则为空或超长" + BASH_PATTERN_MAX_LENGTH + "故未进行配置";
@@ -693,10 +694,21 @@ public class ToolBash implements Tool {
         for (String str : input.split(";")) {
             int i = str.indexOf("=");
             if (i == -1) {
+                // 旧格式兼容（k=v 之前落盘的持久化输入）：无 '=' 的段按旧前缀指令识别，避免升级后静默丢配置
+                String legacy = str.strip();
+                if (legacy.equals(WSL) || legacy.equals(GIT_BASH)) {
+                    head = legacy;
+                } else if (legacy.startsWith(CUSTOM)) {
+                    head = legacy.substring(CUSTOM.length());
+                } else if (legacy.startsWith(REGEX)) {
+                    regex = legacy.substring(REGEX.length());
+                } else {
+                    LOG.info("unknown segment found in input: {}", str);
+                }
                 continue;
             }
-            String key = str.substring(0, i);
-            String value = (i == str.length() - 1) ? "" : str.substring(i + 1);
+            String key = str.substring(0, i).strip();
+            String value = str.substring(i + 1).strip();
             switch (key) {
                 case "bash" -> head = value;
                 case "regex" -> regex = value;
