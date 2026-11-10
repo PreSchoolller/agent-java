@@ -48,9 +48,10 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
  * 前端 GUI 回归（原 foragent/tools/Shot.java 的 UI 段整体平移为 JUnit，按 Shot 原顺序编为有序用例）。
  * 跑法：mvn test（surefire 单 fork JVM 内按类跑）；截图产物落在 -Dregression.dir（默认 target/regression，
  * gitignore 内）。产出：窗口默认态/侧栏分组、拖宽、切会话、生成中、折叠、设置面板分页（通用页审核通知
- * 三开关/工具页）、Markdown 渲染与划词搜索、流式落库、工具卡折叠、权限确认卡、窄窗口不裁按钮、
+ * 三开关/Provider 页/上下文页/工具页）、Markdown 渲染与划词搜索、流式落库、工具卡折叠、权限确认卡、
+ * 窄窗口不裁按钮、
  * 悬停菜单、置顶/搜索高亮/片段/右键菜单、长会话窗口化、深色主题、托盘最小化、工作区弹窗与
- * 侧栏分组/组头加号/组头折叠、输入框高度自适应、后台任务查看输出满高，共 29 张截图。
+ * 侧栏分组/组头加号/组头折叠、输入框高度自适应、后台任务查看输出满高，共 30 张截图。
  * 注意：Swing 视图树非线程安全，所有 UI 操作必须包在 EDT 里执行（见踩坑记录 #1）。
  * <p>
  * 交互巡检向导（用户点名）：-Dgui.interactive=true 时每个观察点在截图后弹说明卡，人工点
@@ -285,21 +286,30 @@ class WindowGuiTest {
         assertTrue(uiHasShowingTextAnyWindow("response · OpenAI Responses")
                 && uiHasShowingTextAnyWindow("chatcompletion · OpenAI Chat Completions")
                 && uiHasShowingTextAnyWindow("messages · Anthropic Messages"), "Provider 页三个 API 分组头在");
-        assertEquals(3, countShowingTextAnyWindow("该类型下暂无注册的 Provider（注册表不可用或没有注册）"),
-                "注册池空时每组给兜底提示");
+        // 980ccf0 起 ProviderFactory 静态注册内置实现：回归环境（不跑 loadExternal）response/
+        // chatcompletion 两组各有内置行，仅 messages 组无实现给兜底提示（原断言"三组全空"已过时）
+        assertEquals(1, countShowingTextAnyWindow("该类型下暂无注册的 Provider（注册表不可用或没有注册）"),
+                "无实现的 API 类型组给兜底提示（messages；其余两组有静态内置单选行）");
         captureDialogGated("window-5e-settings-providers.png", "设置",
-                "Provider 页：全部注册 provider 按 API 类型分组单选（回归环境注册池为空显示各组兜底提示；真实应用显示 responses-mine 等单选行）。");
+                "Provider 页：全部注册 provider 按 API 类型分组单选（response/chatcompletion 为静态内置行，messages 组暂无实现显示兜底提示；真实应用的插件行由截图目检兜底）。");
+        // 上下文页：可修改上下文处理器全局单选。回归环境后端枚举读口待补（ContextCatalog 恒空列表）
+        // → 只有「不启用」+ 兜底提示；读口补上后列出已注册处理器行，由截图目检兜底
+        edt(() -> uiClickAnyWindow("上下文"));
+        Thread.sleep(400);
+        assertFalse(uiHasShowingTextAnyWindow("后端地址") && uiHasShowingTextAnyWindow("正文字号"),
+                "上下文页不含其他页控件");
+        assertTrue(uiHasShowingTextAnyWindow("不启用（消息原样发出）")
+                && uiHasShowingTextAnyWindow("未拿到已注册的可修改上下文处理器（后端读口待补）"),
+                "上下文页「不启用」单选 + 读口待补兜底提示在");
+        captureDialogGated("window-5g-settings-context.png", "设置",
+                "上下文页：可修改上下文处理器全局单选（回归环境后端读口待补，只有「不启用」和兜底提示；读口补上后列出已注册处理器）。");
         // 工具页：注册表直连读（ToolCatalog 包 catch(Throwable)），切页断言只看不依赖注册表可见性的两侧
         edt(() -> uiClickAnyWindow("工具"));
         Thread.sleep(400);
         assertFalse(uiHasShowingTextAnyWindow("后端地址") && uiHasShowingTextAnyWindow("正文字号"),
                 "工具页不含其他页控件");
-        // bash 转文件正则行（用户点名）：工具页第二张卡；行为说明是 HTML 折行文案，
-        // 全等断言够不着，由 5d 截图目检兜底
-        assertTrue(uiHasShowingTextAnyWindow("文件正则"), "工具页含文件正则行");
-        // 每工具可展开交互区（支持 uiTips/uiInteractive 的工具才有）：bash 实现了，read 没有。
-        // 只展开断言不点「执行」——执行会真拉进程探测（最坏 10 秒）且改 bash 头，回归不碰。
-        // uiTips 提示是 HTML 折行标签（getText 返回整段 HTML），全等断言够不着，截图目检兜底
+        // bash 转文件正则已收进 bash 工具的「展开交互」区（k=v 的 regex= 键，见 ToolBash.uiTips），
+        // 工具页不再有独立「文件正则」卡；交互区/执行钮断言在下方，这里只看不依赖注册表可见性的两侧
         assertTrue(uiHasShowingTextAnyWindow("展开交互"), "bash 工具有交互开关");
         assertEquals(1, countShowingTextAnyWindow("展开交互"), "只实现了交互的工具有开关（read 没有）");
         edt(() -> uiClickAnyWindow("展开交互"));
@@ -324,8 +334,8 @@ class WindowGuiTest {
         //（卡片级此时已是展开态，钮文本为「收起」，这声「展开」命中的是目录条目行）
         edt(() -> uiClickAnyWindow("展开"));
         Thread.sleep(300);
-        assertTrue(uiHasShowingTextAnyWindow("上下文") && uiHasShowingTextAnyWindow("最大输出"),
-                "展开后上下文/最大输出在");
+        // 「上下文」同时也是新页签名（顶部胶囊恒显示），目录参数行断言用参数区独有的「最大输出」
+        assertTrue(uiHasShowingTextAnyWindow("最大输出"), "展开后上下文/最大输出参数区在");
         assertTrue(uiHasShowingTextAnyWindow("推理等级") && uiHasShowingTextAnyWindow("文本")
                 && uiHasShowingTextAnyWindow("图片"), "展开后推理等级/输入能力在");
         captureDialogGated("window-5c-settings-catalog.png", "设置",

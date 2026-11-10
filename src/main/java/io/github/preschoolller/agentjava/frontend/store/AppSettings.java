@@ -20,7 +20,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 应用设置（单例）：持久化到 ~/.agentjava/settings.properties。
  * 结构：若干套命名配置方案（Profile，后端请求参数）+ 各 API 类型的 provider 选择 + 全局 UI 偏好（正文字号）。
- * 落盘格式：profileNames（逗号连接保持顺序）、profile.&lt;名&gt;.&lt;字段&gt; 前缀键、activeProvider.&lt;apiType&gt;；
+ * 落盘格式：profileNames（逗号连接保持顺序）、profile.&lt;名&gt;.&lt;字段&gt; 前缀键、activeProvider.&lt;apiType&gt;、
+ * activeContextHandler（选用的上下文管理处理器，缺键=不启用）；
  * v1 之前的平面键（backendUrl/model/...）在 load 时自动迁移进"默认"方案，下次 save 覆写消失。
  * 没有活动方案概念：用哪套配置由输入区选中的模型所属方案决定（跨方案路由见 Main.streamReply）。
  * 设置面板（SettingsDialog）编辑方案，监听 fireChanged 感知变化。
@@ -84,6 +85,10 @@ public final class AppSettings {
 
     /** 各 API 类型下选用的 provider 名（Provider 页分组单选落盘，全局不随方案）；缺键=未指定，后端回落默认 */
     private Map<String, String> activeProviderNames = new HashMap<>();
+
+    /** 选用的可修改上下文处理器名（上下文页单选落盘，全局不随方案）；null/空白=不启用，
+     *  消息原样发出。名字是否在注册表里由后端消费时兜底 */
+    private String activeContextHandler;
 
     /** 原始键值快照：load() 填充、save() 末尾整体替换（引用原子读，读侧无锁安全）；
      *  默认空表兜全新安装首次读（load 的早退分支不碰它，getPersistentToolInput 不 NPE） */
@@ -242,6 +247,16 @@ public final class AppSettings {
         } else {
             activeProviderNames.put(apiType, name.strip());
         }
+    }
+
+    /** 选用的可修改上下文处理器名（上下文页单选落盘，全局不随方案）；null/空白=不启用 */
+    public String getActiveContextHandler() {
+        return activeContextHandler;
+    }
+
+    /** 设置选用的上下文处理器；null/空白=不启用（清除）。名字是否在注册表里由后端消费时兜底 */
+    public void setActiveContextHandler(String name) {
+        activeContextHandler = name == null || name.isBlank() ? null : name.strip();
     }
 
     // —— 全局 UI 偏好 ——
@@ -577,6 +592,10 @@ public final class AppSettings {
         for (Map.Entry<String, String> providerEntry : activeProviderNames.entrySet()) {
             properties.setProperty("activeProvider." + providerEntry.getKey(), providerEntry.getValue());
         }
+        // 上下文管理处理器选择（全局，不随方案；上下文页单选）：缺键=不启用
+        if (activeContextHandler != null) {
+            properties.setProperty("activeContextHandler", activeContextHandler);
+        }
 
         properties.setProperty("windowWidth", String.valueOf(windowWidth));
         properties.setProperty("windowHeight", String.valueOf(windowHeight));
@@ -658,6 +677,9 @@ public final class AppSettings {
                 activeProviderNames.put(apiType, providerName.strip());
             }
         }
+        // 上下文管理处理器选择（全局，不随方案）：缺键/空白=不启用
+        String contextHandler = properties.getProperty("activeContextHandler");
+        activeContextHandler = contextHandler == null || contextHandler.isBlank() ? null : contextHandler.strip();
         // 日志设置：等级非法值落默认；旧版全局 logLevel 键迁移成控制台等级（新键缺位时才用）
         logConsoleEnabled = Boolean.parseBoolean(properties.getProperty("log.console.enabled", "true"));
         String consoleLevel = properties.getProperty("log.console.level");

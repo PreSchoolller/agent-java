@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava.frontend.gui;
 
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.frontend.store.ContextCatalog;
 import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
 import io.github.preschoolller.agentjava.frontend.store.ProviderCatalog;
@@ -25,6 +26,10 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.Scrollable;
 import javax.swing.SpinnerNumberModel;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.DocumentFilter;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Color;
@@ -54,13 +59,16 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * 设置面板（模态对话框）：编辑 AppSettings 并持久化。
- * 顶部标签页分五页（胶囊切页，当前页主题色实心）：
+ * 顶部标签页分六页（胶囊切页，当前页主题色实心）：
  * 「通用」= 全局对话体验（主题/正文字号/关闭按钮/审核通知）；
  * 「模型服务」= 全部配置方案罗列成卡片、展开折叠（方案名/摘要 + 重命名/删除在卡头，新建在页顶）：
  * 展开哪张卡，共享的参数表单就移进哪张卡（后端地址/Key/API 类型/默认模型/温度/最大 Tokens/系统提示词
  * + 模型目录：每个模型一条可展开行，编辑名字/上下文窗口/最大输出/默认推理等级/输入能力，落 Profile.modelsMeta）；
  * 「Provider」= 全部注册 provider 按 API 类型分组单选（全局落 AppSettings.activeProviderNames，不随方案；
  * 请求走模型所属方案 apiType 那组的选择，后端 resolveActiveProvider 优先消费）；
+ * 「上下文」= 可修改（非 readOnly）上下文处理器全局单选（落 AppSettings.activeContextHandler，不随方案；
+ * 每轮请求前对历史消息做管理如截断/压缩，不启用=消息原样发出；处理器列表经 ContextCatalog 读桥取，
+ * 后端读口待补时列表为空只显示兜底提示，后端消费接线也待补）；
  * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）
  * + 每个支持交互的工具一条可展开交互区（uiTips 提示 + 输入框 + 执行钮 + 结果提示：
  *   输入经 uiInteractive 交给工具自行解释应用（bash 的 bash 选择/转文件正则都走这里，
@@ -129,6 +137,8 @@ public class SettingsDialog extends JDialog {
     private final Map<String, ButtonGroup> providerButtonGroups = new LinkedHashMap<>();
     /** Provider 单选区的容器（对话框打开时按注册表建一次，组内选择即最终落盘值） */
     private JPanel providerListPanel;
+    /** 上下文页的单选钮（首枚固定"不启用"，其余按注册表；保存时按 clientProperty 里的处理器名收集） */
+    private final List<JRadioButton> contextHandlerRadios = new ArrayList<>();
     /** 当前行删除按钮（随目录重建刷新；Shot 断言初始可用态用） */
     private final List<JButton> rowDeleteButtons = new ArrayList<>();
     private final JSpinner temperatureSpinner;
@@ -137,10 +147,11 @@ public class SettingsDialog extends JDialog {
     private final JTextArea systemPromptArea = new JTextArea(6, 24);
     private boolean saved;
 
-    /** 标签页 id：通用（全局对话体验）/ 模型服务（配置方案参数）/ Provider（单选实现）/ 工具（注册表勾选名单）；默认页=模型服务 */
+    /** 标签页 id：通用（全局对话体验）/ 模型服务（配置方案参数）/ Provider（单选实现）/ 上下文（处理器单选）/ 工具（注册表勾选名单）；默认页=模型服务 */
     private static final String TAB_GENERAL = "general";
     private static final String TAB_PROFILE = "profile";
     private static final String TAB_PROVIDERS = "providers";
+    private static final String TAB_CONTEXT = "context";
     private static final String TAB_TOOLS = "tools";
     private static final String TAB_LOGGING = "logging";
     private String currentTab = TAB_PROFILE;
@@ -244,6 +255,7 @@ public class SettingsDialog extends JDialog {
         tabsPanel.add(new TabButton("通用", TAB_GENERAL));
         tabsPanel.add(new TabButton("模型服务", TAB_PROFILE));
         tabsPanel.add(new TabButton("Provider", TAB_PROVIDERS));
+        tabsPanel.add(new TabButton("上下文", TAB_CONTEXT));
         tabsPanel.add(new TabButton("工具", TAB_TOOLS));
         tabsPanel.add(new TabButton("日志", TAB_LOGGING));
 
@@ -255,6 +267,7 @@ public class SettingsDialog extends JDialog {
         pagesPanel.add(wrapPage(buildGeneralPage()), TAB_GENERAL);
         pagesPanel.add(wrapPage(buildProfilePage()), TAB_PROFILE);
         pagesPanel.add(wrapPage(buildProvidersPage()), TAB_PROVIDERS);
+        pagesPanel.add(wrapPage(buildContextPage()), TAB_CONTEXT);
         pagesPanel.add(wrapPage(buildToolsPage()), TAB_TOOLS);
         pagesPanel.add(wrapPage(buildLoggingPage()), TAB_LOGGING);
         pageLayout.show(pagesPanel, currentTab);
@@ -654,6 +667,78 @@ public class SettingsDialog extends JDialog {
             case Profile.API_MESSAGES -> "messages · Anthropic Messages";
             default -> apiType;
         };
+    }
+
+    /**
+     * 上下文页：可修改（非 readOnly）上下文处理器全局单选（AppSettings.activeContextHandler，
+     * 不随方案）。每轮请求前由后端 ContextHandlerManager.handle 调用选中处理器对历史消息做
+     * 管理（截断/压缩等）；「不启用」=消息原样发出。列表经 ContextCatalog 读桥取（同
+     * ProviderCatalog 模式，失败退空列表给兜底提示——后端读口待补，见 ContextCatalog 注释）。
+     */
+    private JPanel buildContextPage() {
+        JPanel groups = new JPanel();
+        groups.setLayout(new BoxLayout(groups, BoxLayout.Y_AXIS));
+        groups.setBackground(Ui.BG);
+        groups.setBorder(BorderFactory.createEmptyBorder(6, 18, 4, 18));
+
+        JPanel card = Ui.card(Ui.CARD_BG);
+        card.setLayout(new GridBagLayout());
+        JLabel hint = new JLabel("<html><div style='width:330px'><span style='color:"
+                + Ui.hex(Ui.TEXT_SECONDARY) + "'>可修改的上下文处理器全局单选：每次请求前对历史消息做管理"
+                + "（截断/压缩等），「不启用」=消息原样发出。只读处理器不在此列，它们的记录行为始终开启</span></div></html>");
+        hint.setFont(Ui.FONT_PLAIN);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(10, 14, 6, 14);
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        card.add(hint, gbc);
+
+        JPanel handlerPanel = new JPanel();
+        handlerPanel.setOpaque(false);
+        handlerPanel.setLayout(new BoxLayout(handlerPanel, BoxLayout.Y_AXIS));
+        gbc.insets = new Insets(0, 0, 0, 0);
+        gbc.gridy = 1;
+        card.add(handlerPanel, gbc);
+
+        // 首枚固定「不启用」（clientProperty 空串=清除落盘值）；已注册处理器逐一枚举。
+        // 预选=落盘的名字；落盘名字不在列表里（插件被删/后端读口待补时列表为空）回落"不启用"，
+        // 与 Provider 页"失效回落"同一规则——只是这里回落到关闭而不是默认启用
+        List<ContextCatalog.HandlerInfo> handlers = ContextCatalog.registered();
+        ButtonGroup buttonGroup = new ButtonGroup();
+        JRadioButton offRadio = new JRadioButton("不启用（消息原样发出）");
+        offRadio.putClientProperty("handlerName", "");
+        offRadio.setToolTipText("不使用任何可修改的上下文处理器，历史消息每次全量发出");
+        Ui.styleRadioButton(offRadio);
+        String stored = settings.getActiveContextHandler();
+        offRadio.setSelected(stored == null || stored.isBlank());
+        buttonGroup.add(offRadio);
+        contextHandlerRadios.add(offRadio);
+        handlerPanel.add(offRadio);
+        for (ContextCatalog.HandlerInfo info : handlers) {
+            JRadioButton radio = new JRadioButton(info.name());
+            radio.putClientProperty("handlerName", info.name());
+            radio.setToolTipText(info.className() + "：" + info.description());
+            Ui.styleRadioButton(radio);
+            radio.setSelected(info.name().equals(stored));
+            buttonGroup.add(radio);
+            contextHandlerRadios.add(radio);
+            handlerPanel.add(radio);
+        }
+        if (handlers.isEmpty()) {
+            // 注册表没拿到（后端读口待补，ContextCatalog 注释里的 TODO）：提示兜底，不改落盘语义。
+            // 纯文本单行（不用 HTML 折行）：与 Provider 页空提示同款，GUI 回归的文字断言才够得着
+            JLabel empty = new JLabel("未拿到已注册的可修改上下文处理器（后端读口待补）");
+            empty.setFont(Ui.FONT_PLAIN);
+            empty.setForeground(Ui.TEXT_SECONDARY);
+            handlerPanel.add(Box.createVerticalStrut(4));
+            handlerPanel.add(empty);
+        }
+        groups.add(card);
+        groups.add(Box.createVerticalGlue());
+        return groups;
     }
 
     /**
@@ -1094,15 +1179,43 @@ public class SettingsDialog extends JDialog {
         panel.add(headerButtons, gbc);
 
         if (expanded) {
-            // 参数区：上下文窗口/最大输出（自由文本，失焦落条目）、默认推理等级（下拉即改）、
-            // 输入能力（勾选即改）；元数据即工作副本，保存时整体写回方案
+            // 参数区：上下文窗口（纯数字，键入期就拦非数字）、最大输出（自由文本，失焦落条目）、
+            // 默认推理等级（下拉即改）、输入能力（勾选即改）；元数据即工作副本，保存时整体写回方案
             JTextField ctxField = new JTextField(meta.getCtxWindow());
             Ui.styleInput(ctxField);
-            ctxField.setToolTipText("上下文窗口，如 256K 或 128000；留空=未设置（存档，消费方接入后生效）");
+            ctxField.setToolTipText("上下文窗口，纯数字 token 数（如 128000）；留空=未设置。");
+            // 只放行数字：消费方 Profile.getModelCtxWindow 是 Integer.parseInt 直读
+            // 键入期拦掉比失焦报错省一轮来回；粘贴整段含非数字时整体不进
+            if (ctxField.getDocument() instanceof AbstractDocument doc) {
+                doc.setDocumentFilter(new DocumentFilter() {
+                    // ASCII 数字才算（Character.isDigit 会放行全角数字，与 setter 的 \d 校验口径不一致）
+                    private boolean digits(String text) {
+                        return text != null && !text.isEmpty() && text.chars().allMatch(c -> c >= '0' && c <= '9');
+                    }
+
+                    @Override
+                    public void insertString(FilterBypass fb, int offset, String string, AttributeSet attr)
+                            throws BadLocationException {
+                        if (digits(string)) {
+                            super.insertString(fb, offset, string, attr);
+                        }
+                    }
+
+                    @Override
+                    public void replace(FilterBypass fb, int offset, int length, String text, AttributeSet attrs)
+                            throws BadLocationException {
+                        if (digits(text)) {
+                            super.replace(fb, offset, length, text, attrs);
+                        }
+                    }
+                });
+            }
             ctxField.addFocusListener(new FocusAdapter() {
                 @Override
                 public void focusLost(FocusEvent event) {
-                    meta.setCtxWindow(ctxField.getText().strip());
+                    // setter 只收纯数字/空白：拒收的（旧落盘自由文本等）回滚显示，原值不洗
+                    meta.setCtxWindow(ctxField.getText());
+                    ctxField.setText(meta.getCtxWindow());
                 }
             });
             JTextField maxOutField = new JTextField(meta.getMaxOutput());
@@ -1479,6 +1592,17 @@ public class SettingsDialog extends JDialog {
             for (JRadioButton radio : providerGroup.getValue()) {
                 if (radio.isSelected()) {
                     settings.setActiveProviderName(providerGroup.getKey(), (String) radio.getClientProperty("providerName"));
+                    break;
+                }
+            }
+        }
+        // 上下文页单选：选中名写回全局（AppSettings.activeContextHandler，不随方案），
+        // 「不启用」是空串（setter 清除）。列表没拿到（后端读口待补）时跳过不动原值，
+        // 避免把已有选择洗净
+        if (contextHandlerRadios.size() > 1) {
+            for (JRadioButton radio : contextHandlerRadios) {
+                if (radio.isSelected()) {
+                    settings.setActiveContextHandler((String) radio.getClientProperty("handlerName"));
                     break;
                 }
             }
