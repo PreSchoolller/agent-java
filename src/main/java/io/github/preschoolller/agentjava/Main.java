@@ -170,7 +170,7 @@ public class Main {
                 try {
                     SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), true));
                     prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 每轮快照：只重取历史+建卡，配置不动
-                    doContextManage(prepareParams, conversation.getUsage(), loopConfig.modelCtxWindow);
+                    doContextManage(prepareParams, conversation.getUsage(), loopConfig.modelCtxWindow, loopConfig.mHandlerName);
                     doStream(window, conversation, cancelled, prepareParams, loopControl);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -195,11 +195,11 @@ public class Main {
         });
     }
 
-    private static void doContextManage(PrepareParams prepareParams, Conversation.Usage usage, long context) {
+    private static void doContextManage(PrepareParams prepareParams, Conversation.Usage usage, long context, String mHandlerName) {
         ArrayList<PromptParams.RoleMessage> roleMessages = new ArrayList<>(prepareParams.paramsBuilder.build().getRoleMessages());
         long inputTokens = usage == null ? 0 : usage.inputTokens();
         long outputTokens = usage == null ? 0 : usage.outputTokens();
-        ContextHandler.ContextDetail contextDetail = new ContextHandler.ContextDetail(roleMessages, inputTokens, outputTokens, context);
+        ContextHandler.ContextDetail contextDetail = new ContextHandler.ContextDetail(roleMessages, inputTokens, outputTokens, context, mHandlerName);
         ContextHandler.ContextManaged contextManaged = ContextHandlerManager.handle(contextDetail);
         prepareParams.paramsBuilder.clearRoleMessages();
         contextManaged.roleMessages().forEach(prepareParams.paramsBuilder::roleMessages);
@@ -249,10 +249,11 @@ public class Main {
         String systemPrompt = profile.getSystemPrompt();
         int modelCtxWindow = profile.getModelCtxWindow(model);
         List<String> enabledTools = appSettings.getEnabledTools();
+        String mHandlerName = appSettings.getActiveContextHandler();
         PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
                 .agentMode(mode).workspace(workspace).key(key).backendUrl(backendUrl)
                 .systemPrompt(systemPrompt).enabledTools(enabledTools);
-        return new LoopConfig(provider, paramsBuilder.build(), modelCtxWindow);
+        return new LoopConfig(provider, paramsBuilder.build(), modelCtxWindow, mHandlerName);
     }
 
     /**
@@ -276,7 +277,7 @@ public class Main {
 
     /** 链级冻结配置：provider 实例 + 不含消息的请求模板（PromptParams.Builder(PromptParams) 拷贝列表，
      *  toBuilder 出来的 builder 每轮独立改写消息，不会污染这里）。整条链只读 */
-    private record LoopConfig(Provider provider, PromptParams noMessages, int modelCtxWindow) {
+    private record LoopConfig(Provider provider, PromptParams noMessages, int modelCtxWindow, String mHandlerName) {
     }
 
     private record PrepareParams(Provider provider, Window.AiStream stream, PromptParams.Builder paramsBuilder) {

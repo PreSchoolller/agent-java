@@ -728,7 +728,7 @@ public class SettingsDialog extends JDialog {
             handlerPanel.add(radio);
         }
         if (handlers.isEmpty()) {
-            // 注册表没拿到（后端读口待补，ContextCatalog 注释里的 TODO）：提示兜底，不改落盘语义。
+            // 注册表没拿到：提示兜底，不改落盘语义。
             // 纯文本单行（不用 HTML 折行）：与 Provider 页空提示同款，GUI 回归的文字断言才够得着
             JLabel empty = new JLabel("未拿到已注册的可修改上下文处理器（后端读口待补）");
             empty.setFont(Ui.FONT_PLAIN);
