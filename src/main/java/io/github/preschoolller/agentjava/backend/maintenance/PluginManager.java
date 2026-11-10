@@ -1,8 +1,11 @@
 package io.github.preschoolller.agentjava.backend.maintenance;
 
 import io.github.preschoolller.agentjava.backend.maintenance.interfaces.PluginBase;
+import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 
 public class PluginManager {
+
+    private static final AppSettings appSettings = AppSettings.get();
 
     /**
      * ServiceBase.getPersistentInput() 支撑
@@ -10,7 +13,6 @@ public class PluginManager {
      * @return 持久化的插件信息
      */
     public static String getPersistentInput(PluginBase serviceBase) {
-        // 待前端将tool-properties泛化，不用支持老数据。
-        return null;
+        return appSettings.getPersistentToolInput(serviceBase.name());
     }
 }

@@ -3,18 +3,17 @@ package io.github.preschoolller.agentjava.backend.context;
 import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandler;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ContextHandlerManager {
 
     private ContextHandlerManager() {
     }
 
-    private static final List<ContextHandler> readOnlyHandlers = new ArrayList<>();
-    private static final List<ContextHandler> modifiableHandlers = new ArrayList<>();
+    private static final List<ContextHandler> readOnlyHandlers = new CopyOnWriteArrayList<>();
+    private static final List<ContextHandler> modifiableHandlers = new CopyOnWriteArrayList<>();
 
     public static synchronized void register(Object object) {
         if (!(object instanceof ContextHandler handler)) {
@@ -30,19 +29,25 @@ public class ContextHandlerManager {
     public static ContextHandler.ContextManaged handle(ContextHandler.ContextDetail contextDetail) {
         List<PromptParams.RoleMessage> roleMessages = contextDetail.roleMessages();
         ContextHandler.ContextDetail snapShot = new ContextHandler.ContextDetail(Collections.unmodifiableList(roleMessages),
-                contextDetail.inputTokens(), contextDetail.outputTokens(), contextDetail.ctxWindow());
-        for (ContextHandler contextHandler : new ArrayList<>(readOnlyHandlers)) {
+                contextDetail.inputTokens(), contextDetail.outputTokens(), contextDetail.ctxWindow(), contextDetail.mHandleName());
+        for (ContextHandler contextHandler : readOnlyHandlers) {
             contextHandler.handle(snapShot);
         }
-        Optional<ContextHandler> contextHandler = getModifiableHandlers();
-        if (contextHandler.isPresent()) {
-            return contextHandler.get().handle(snapShot);
+        if (contextDetail.mHandleName() != null) {
+            for (ContextHandler modifiableHandler : modifiableHandlers) {
+                if (modifiableHandler.name().equals(contextDetail.mHandleName())) {
+                    return modifiableHandler.handle(snapShot);
+                }
+            }
         }
         return new ContextHandler.ContextManaged(roleMessages);
     }
 
-    // 待设计，需要与前端一起设计页面。
-    private static Optional<ContextHandler> getModifiableHandlers() {
-        return modifiableHandlers.stream().findFirst();
+    public static List<ContextHandler> getReadOnlyHandlers() {
+        return Collections.unmodifiableList(readOnlyHandlers);
+    }
+
+    public static List<ContextHandler> getModifiableHandlers() {
+        return Collections.unmodifiableList(modifiableHandlers);
     }
 }

@@ -1,6 +1,5 @@
 package io.github.preschoolller.agentjava.backend.context.interfaces;
 
-import io.github.preschoolller.agentjava.backend.context.ContextHandlerManager;
 import io.github.preschoolller.agentjava.backend.maintenance.interfaces.PluginBase;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 
@@ -8,9 +7,13 @@ import java.util.List;
 
 public interface ContextHandler extends PluginBase {
 
+    @Override
+    String name();
 
+    @Override
+    String description();
 
-    record ContextDetail(List<PromptParams.RoleMessage> roleMessages, long inputTokens, long outputTokens, long ctxWindow) {
+    record ContextDetail(List<PromptParams.RoleMessage> roleMessages, long inputTokens, long outputTokens, long ctxWindow, String mHandleName) {
     }
 
     record ContextManaged(List<PromptParams.RoleMessage> roleMessages) {
