@@ -292,17 +292,18 @@ class WindowGuiTest {
                 "无实现的 API 类型组给兜底提示（messages；其余两组有静态内置单选行）");
         captureDialogGated("window-5e-settings-providers.png", "设置",
                 "Provider 页：全部注册 provider 按 API 类型分组单选（response/chatcompletion 为静态内置行，messages 组暂无实现显示兜底提示；真实应用的插件行由截图目检兜底）。");
-        // 上下文页：可修改上下文处理器全局单选。回归环境后端枚举读口待补（ContextCatalog 恒空列表）
-        // → 只有「不启用」+ 兜底提示；读口补上后列出已注册处理器行，由截图目检兜底
+        // 上下文页：可修改上下文处理器全局单选。回归环境没有注册上下文处理器（ContextCatalog
+        // 空列表）→ 只有「不启用」+ 兜底提示；真实应用列出已注册处理器行，由截图目检兜底
         edt(() -> uiClickAnyWindow("上下文"));
         Thread.sleep(400);
         assertFalse(uiHasShowingTextAnyWindow("后端地址") && uiHasShowingTextAnyWindow("正文字号"),
                 "上下文页不含其他页控件");
         assertTrue(uiHasShowingTextAnyWindow("不启用（消息原样发出）")
-                && uiHasShowingTextAnyWindow("未拿到已注册的可修改上下文处理器（后端读口待补）"),
-                "上下文页「不启用」单选 + 读口待补兜底提示在");
+                && uiHasShowingTextAnyWindow("未拿到已注册的可修改上下文处理器（注册表为空或不可用）"),
+                "上下文页「不启用」单选 + 空注册表兜底提示在");
+        assertFalse(uiHasShowingTextAnyWindow("只读处理器（自动运行，不可选择）"), "回归环境没有只读处理器，展示区不出现");
         captureDialogGated("window-5g-settings-context.png", "设置",
-                "上下文页：可修改上下文处理器全局单选（回归环境后端读口待补，只有「不启用」和兜底提示；读口补上后列出已注册处理器）。");
+                "上下文页：可修改上下文处理器全局单选（回归环境注册表为空，只有「不启用」和兜底提示；真实应用列出已注册处理器与只读处理器展示区）。");
         // 工具页：注册表直连读（ToolCatalog 包 catch(Throwable)），切页断言只看不依赖注册表可见性的两侧
         edt(() -> uiClickAnyWindow("工具"));
         Thread.sleep(400);
