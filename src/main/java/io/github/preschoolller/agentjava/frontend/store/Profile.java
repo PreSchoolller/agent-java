@@ -157,4 +157,26 @@ public class Profile {
     public void setSystemPrompt(String systemPrompt) {
         this.systemPrompt = systemPrompt;
     }
+
+    public int getModelCtxWindow(String name) {
+        if (name == null) {
+            return 0;
+        }
+        String ctxWindow = "";
+        for (ModelMeta modelMeta : models) {
+            if (modelMeta.getName().equals(name)) {
+                ctxWindow = modelMeta.getCtxWindow();
+                break;
+            }
+        }
+        if (ctxWindow == null || ctxWindow.isBlank()) {
+            return 0;
+        }
+        int result = 0;
+        try {
+            result = Integer.parseInt(ctxWindow);
+        } catch (NumberFormatException ignored) {
+        }
+        return result;
+    }
 }

@@ -1,5 +1,7 @@
 package io.github.preschoolller.agentjava;
 
+import io.github.preschoolller.agentjava.backend.context.ContextHandlerManager;
+import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandler;
 import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.maintenance.TaskHandle;
 import io.github.preschoolller.agentjava.backend.maintenance.WarmUpStuff;
@@ -168,6 +170,7 @@ public class Main {
                 try {
                     SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), true));
                     prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 每轮快照：只重取历史+建卡，配置不动
+                    doContextManage(prepareParams, conversation.getUsage(), loopConfig.modelCtxWindow);
                     doStream(window, conversation, cancelled, prepareParams, loopControl);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -190,6 +193,16 @@ public class Main {
                 // 抢锁失败：新链已持有会话，其快照必然包含该结果（注入先于标记），不会漏消化
             }
         });
+    }
+
+    private static void doContextManage(PrepareParams prepareParams, Conversation.Usage usage, long context) {
+        ArrayList<PromptParams.RoleMessage> roleMessages = new ArrayList<>(prepareParams.paramsBuilder.build().getRoleMessages());
+        long inputTokens = usage == null ? 0 : usage.inputTokens();
+        long outputTokens = usage == null ? 0 : usage.outputTokens();
+        ContextHandler.ContextDetail contextDetail = new ContextHandler.ContextDetail(roleMessages, inputTokens, outputTokens, context);
+        ContextHandler.ContextManaged contextManaged = ContextHandlerManager.handle(contextDetail);
+        prepareParams.paramsBuilder.clearRoleMessages();
+        contextManaged.roleMessages().forEach(prepareParams.paramsBuilder::roleMessages);
     }
 
     /** 每轮在 EDT 上重取消息快照（配置已由 LoopConfig 冻结，这里只取历史+建卡），勿进行耗时操作 */
@@ -234,11 +247,12 @@ public class Main {
         String key = profile.getKey();
         String backendUrl = profile.getBackendUrl();
         String systemPrompt = profile.getSystemPrompt();
+        int modelCtxWindow = profile.getModelCtxWindow(model);
         List<String> enabledTools = appSettings.getEnabledTools();
         PromptParams.Builder paramsBuilder = PromptParams.builder().model(model).re(re)
                 .agentMode(mode).workspace(workspace).key(key).backendUrl(backendUrl)
                 .systemPrompt(systemPrompt).enabledTools(enabledTools);
-        return new LoopConfig(provider, paramsBuilder.build());
+        return new LoopConfig(provider, paramsBuilder.build(), modelCtxWindow);
     }
 
     /**
@@ -262,7 +276,7 @@ public class Main {
 
     /** 链级冻结配置：provider 实例 + 不含消息的请求模板（PromptParams.Builder(PromptParams) 拷贝列表，
      *  toBuilder 出来的 builder 每轮独立改写消息，不会污染这里）。整条链只读 */
-    private record LoopConfig(Provider provider, PromptParams noMessages) {
+    private record LoopConfig(Provider provider, PromptParams noMessages, int modelCtxWindow) {
     }
 
     private record PrepareParams(Provider provider, Window.AiStream stream, PromptParams.Builder paramsBuilder) {

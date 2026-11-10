@@ -1,8 +1,6 @@
 package io.github.preschoolller.agentjava.backend.maintenance;
 
-import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.backend.tool.ToolBash;
-import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -11,8 +9,7 @@ import java.util.concurrent.CompletableFuture;
  */
 public class WarmUpStuff {
     public static void warmup() {
-        ToolManager.loadExternal();
-        ProviderFactory.loadExternal();
+        ServiceLoader.load();
         CompletableFuture.runAsync(ToolBash::exploreBash);
     }
 }
