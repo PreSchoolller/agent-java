@@ -1,17 +1,15 @@
 package io.github.preschoolller.agentjava.backend.tool;
 
 import io.github.preschoolller.agentjava.backend.constant.Constants;
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
-import org.mockito.MockedStatic;
-import org.mockito.Mockito;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -19,6 +17,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -115,13 +114,8 @@ class ToolBashTest {
         String workSpace = "workspace";
         Path tempPath = Path.of("C:\\Windows\\Temp");
         List<String> expectedCommand = new ArrayList<>(ToolBash.BashHead.WSL.head);
-        ProcessBuilder processBuilder;
-        try (MockedStatic<AppSettings> mocked = Mockito.mockStatic(AppSettings.class)) {
-            AppSettings mock = Mockito.mock(AppSettings.class);
-            mocked.when(AppSettings::get).thenReturn(mock);
-            Mockito.when(mock.getBashFilePattern()).thenReturn("hello");
-            processBuilder = ToolBash.assembleProcessBuilder(command, workSpace, ToolBash.BashHead.WSL, tempPath);
-        }
+        setPatternField(Pattern.compile("hello"));
+        ProcessBuilder processBuilder = ToolBash.assembleProcessBuilder(command, workSpace, ToolBash.BashHead.WSL, tempPath);
         List<String> resultCommand = processBuilder.command();
         assertEquals(expectedCommand.get(0), resultCommand.get(0));
         assertEquals(expectedCommand.get(1), resultCommand.get(1));
@@ -136,13 +130,8 @@ class ToolBashTest {
         String workSpace = "workspace";
         Path tempPath = Path.of("C:\\Windows\\Temp");
         List<String> expectedCommand = new ArrayList<>(ToolBash.BashHead.GIT.head);
-        ProcessBuilder processBuilder;
-        try (MockedStatic<AppSettings> mocked = Mockito.mockStatic(AppSettings.class)) {
-            AppSettings mock = Mockito.mock(AppSettings.class);
-            mocked.when(AppSettings::get).thenReturn(mock);
-            Mockito.when(mock.getBashFilePattern()).thenReturn("hello");
-            processBuilder = ToolBash.assembleProcessBuilder(command, workSpace, ToolBash.BashHead.GIT, tempPath);
-        }
+        setPatternField(Pattern.compile("hello"));
+        ProcessBuilder processBuilder = ToolBash.assembleProcessBuilder(command, workSpace, ToolBash.BashHead.GIT, tempPath);
         List<String> resultCommand = processBuilder.command();
         assertEquals(expectedCommand.get(0), resultCommand.get(0));
         assertTrue(resultCommand.get(1).startsWith("/c/Windows/Temp/workspace/"));
@@ -156,17 +145,71 @@ class ToolBashTest {
         String workSpace = "workspace";
         Path tempPath = Path.of("/tmp");
         List<String> expectedCommand = new ArrayList<>(ToolBash.BashHead.L.head);
-        ProcessBuilder processBuilder;
-        try (MockedStatic<AppSettings> mocked = Mockito.mockStatic(AppSettings.class)) {
-            AppSettings mock = Mockito.mock(AppSettings.class);
-            mocked.when(AppSettings::get).thenReturn(mock);
-            Mockito.when(mock.getBashFilePattern()).thenReturn("hello");
-            processBuilder = ToolBash.assembleProcessBuilder(command, workSpace, ToolBash.BashHead.L, tempPath);
-        }
+        setPatternField(Pattern.compile("hello"));
+        ProcessBuilder processBuilder = ToolBash.assembleProcessBuilder(command, workSpace, ToolBash.BashHead.L, tempPath);
         List<String> resultCommand = processBuilder.command();
         assertEquals(expectedCommand.get(0), resultCommand.get(0));
         assertTrue(resultCommand.get(1).startsWith("/tmp/workspace/"));
         assertEquals(new File(workSpace), processBuilder.directory());
+    }
+
+    /** 转文件正则经 doRegex（uiInteractive REGEX:）设置；测试用反射直接注入/读取静态字段 */
+    private static void setPatternField(Pattern pattern) {
+        try {
+            Field patternField = ToolBash.class.getDeclaredField("toFilePattern");
+            patternField.setAccessible(true);
+            patternField.set(null, pattern);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static Pattern getPatternField() {
+        try {
+            Field patternField = ToolBash.class.getDeclaredField("toFilePattern");
+            patternField.setAccessible(true);
+            return (Pattern) patternField.get(null);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** 反射调私有 doRegex：uiInteractive 的 REGEX: 分支，验证配置语义与安全拦截 */
+    private static String invokeDoRegex(String regex) {
+        try {
+            Method method = ToolBash.class.getDeclaredMethod("doRegex", String.class);
+            method.setAccessible(true);
+            return (String) method.invoke(null, regex);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void testDoRegexSetAndClear() {
+        assertEquals("正则配置成功", invokeDoRegex("REGEX:(here-?doc|<<)"));
+        assertNotNull(getPatternField());
+        assertTrue(ToolBash.needPutInFile("echo (here-?doc|<<)"));
+        assertEquals("已重设转文件执行正则为空", invokeDoRegex(null));
+        assertNull(getPatternField());
+        assertFalse(ToolBash.needPutInFile("echo (here-?doc|<<)"));
+    }
+
+    @Test
+    void testDoRegexRejectsUnsafe() {
+        // 编译不过
+        assertEquals("正则编译失败，请检查正则表达式", invokeDoRegex("REGEX:[unclosed"));
+        // 回溯炸弹（嵌套无限量词）：普通分组与非捕获分组都拦
+        assertEquals("正则编译失败，请检查是否有嵌套无限量词", invokeDoRegex("REGEX:(a+)+"));
+        assertEquals("正则编译失败，请检查是否有嵌套无限量词", invokeDoRegex("REGEX:(?:ab|x+)+"));
+        // 超长
+        assertEquals("正则为空或超长256故未进行配置", invokeDoRegex("REGEX:" + "a".repeat(257)));
+        // 有界重复与普通量词分组放行（误杀面别太宽）
+        assertEquals("正则配置成功", invokeDoRegex("REGEX:(a|b)+c{2,3}"));
+        // 字符类里的量词字符是字面量
+        assertEquals("正则配置成功", invokeDoRegex("REGEX:[a+*.]{2,}\\w"));
+        // REGEX: 空指令（前缀后无内容）不炸，按超长/为空分支处理
+        assertEquals("正则为空或超长256故未进行配置", invokeDoRegex("REGEX:"));
     }
 
     private static void setBashHead(ToolBash.BashHead bashHead) {
@@ -193,6 +236,7 @@ class ToolBashTest {
     void beforeEach() {
         setBashHead(null);
         setValid(true);
+        setPatternField(null);
     }
 
     @Test
@@ -246,10 +290,12 @@ class ToolBashTest {
     void testUiTips() {
         String expected = """
                 输入示例：
-                1. “” 空/空白 字符串触发bash重选。
+                1. “” 空/空白 字符串触发bash重选及转文件执行正则置null（短命令一律使用base64转码执行）。
                 2. “WSL” 指定"wsl bash"执行命令，若WSL有问题则工具拒绝执行之后的一切调用。建议开一个wsl bash窗口保持wsl在线，不然会有启动开销。
                 3. “GITBASH” 指定"C:\\Program Files\\Git\\bin\\bash.exe"执行命令，若内置git bash路径有问题，则工具拒绝执行之后的一切调用。
-                4. “CUSTOM:{your_bash_path}” 指定自定义bash可执行文件地址，若有问题，则仍使用内部定义的bash地址。
+                4. “CUSTOM:{your_bash_path}” 指定自定义bash可执行文件地址执行命令，若有问题，则仍使用内部定义的bash地址。
+                5. “REGEX:{your_to_file_regex}” 指定命中正则的短命令转文件执行。
+                6. 可用 “;” 分隔上述指令，如 “WSL;REGEX:{your_to_file_regex}”，重复命令以最后一个有效的为准。
                 """;
         assertEquals(expected, ToolBash.getInstance().uiTips());
     }

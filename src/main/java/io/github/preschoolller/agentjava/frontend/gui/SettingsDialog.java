@@ -25,8 +25,6 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.Scrollable;
 import javax.swing.SpinnerNumberModel;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Color;
@@ -64,9 +62,9 @@ import java.util.concurrent.CompletableFuture;
  * 「Provider」= 全部注册 provider 按 API 类型分组单选（全局落 AppSettings.activeProviderNames，不随方案；
  * 请求走模型所属方案 apiType 那组的选择，后端 resolveActiveProvider 优先消费）；
  * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）
- * + bash 转文件正则（落 AppSettings.bashFilePattern：命中即写临时文件执行，替代 base64 管道）
  * + 每个支持交互的工具一条可展开交互区（uiTips 提示 + 输入框 + 执行钮 + 结果提示：
- *   输入经 uiInteractive 交给工具自行解释应用，工具处理后由前端立即
+ *   输入经 uiInteractive 交给工具自行解释应用（bash 的 bash 选择/转文件正则都走这里，
+ *   如 "WSL;REGEX:{...}"），工具处理后由前端立即
  *   setPersistentToolInput + save 落盘——持久化是前端输入之后的事，后端只读消费）；
  * 「日志」= 控制台/文件两块输出参数（log.* 自定义键落盘，TinyLogConfigurationLoader 启动时
  * 映射成日志后端属性——换后端只改映射；改后重启生效）。
@@ -131,11 +129,6 @@ public class SettingsDialog extends JDialog {
     private final Map<String, ButtonGroup> providerButtonGroups = new LinkedHashMap<>();
     /** Provider 单选区的容器（对话框打开时按注册表建一次，组内选择即最终落盘值） */
     private JPanel providerListPanel;
-    /** bash 转文件正则（工具页）：命令文本命中即改写临时文件执行，替代 base64 管道；
-     *  非空时必须是合法且安全的正则（AppSettings.isValidBashFilePattern），保存前拦截 */
-    private final JTextField bashPatternField = new JTextField();
-    /** 正则行的内联提示：默认解释转文件行为，校验失败换红色错误文案 */
-    private JLabel bashPatternHint;
     /** 当前行删除按钮（随目录重建刷新；Shot 断言初始可用态用） */
     private final List<JButton> rowDeleteButtons = new ArrayList<>();
     private final JSpinner temperatureSpinner;
@@ -225,12 +218,6 @@ public class SettingsDialog extends JDialog {
         Ui.styleSpinner(logFileBackupsSpinner);
         logFileBackupsSpinner.setToolTipText("滚动后保留的历史日志文件份数，超出删最旧");
         styleLogFormatField(logFileFormatField, "文件格式模式，tinylog 占位符同控制台格式；留空 = 默认格式");
-        // bash 转文件正则：等宽字体（正则里的符号多），未配置显示空串
-        Ui.styleInput(bashPatternField);
-        bashPatternField.setFont(new Font("Monospaced", Font.PLAIN, 13));
-        bashPatternField.setText(settings.getBashFilePattern() == null ? "" : settings.getBashFilePattern());
-        bashPatternField.setToolTipText("命令文本命中此正则时，bash 工具把命令写入临时文件后用 bash 执行"
-                + "（替代 echo base64 | base64 -d | bash 管道，适合 heredoc 等管道不友好的写法）；留空=仅超长命令转文件");
 
         Ui.styleInput(backendUrlField);
         Ui.styleInput(keyField);
@@ -701,71 +688,8 @@ public class SettingsDialog extends JDialog {
             toolsCard.add(hint, gbc);
         }
         groups.add(toolsCard);
-
-        groups.add(Box.createVerticalStrut(10)); // 卡片间距：两张卡贴死不好看
-
-        // bash 转文件正则卡：命中正则的命令写临时文件执行（替代 base64 管道）。非空时必须是
-        // 合法且安全的正则——内联红字实时提示，保存时再拦一道（AppSettings setter 是最后防线）
-        JPanel bashCard = Ui.card(Ui.CARD_BG);
-        bashCard.setLayout(new GridBagLayout());
-        addRow(bashCard, 0, "文件正则", bashPatternRow());
-        groups.add(bashCard);
         groups.add(Box.createVerticalGlue()); // 吸掉多余高度，避免卡片被拉高
         return groups;
-    }
-
-    /**
-     * 文件正则行：输入框 + 内联提示。提示两态——默认解释这条配置的用途（命中即转临时文件
-     * 执行，替代 base64 管道），输入了非法/不安全正则时换红色错误文案。HTML 固定 330px 折行
-     * （踩坑 #17 的 Swing HTML + 防踩坑 #3 的首选宽正反馈），颜色现场读 Ui 镜像。
-     */
-    private JComponent bashPatternRow() {
-        bashPatternHint = new JLabel();
-        bashPatternHint.setFont(Ui.FONT_PLAIN);
-        refreshBashPatternHint();
-        bashPatternField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                refreshBashPatternHint();
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                refreshBashPatternHint();
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                refreshBashPatternHint();
-            }
-        });
-        JPanel column = new JPanel(new BorderLayout(0, 4));
-        column.setOpaque(false);
-        column.add(bashPatternField, BorderLayout.NORTH);
-        column.add(bashPatternHint, BorderLayout.SOUTH);
-        return column;
-    }
-
-    /** 按当前输入切换内联提示：非法/不安全正则给红字，空/合法给用途说明 */
-    private void refreshBashPatternHint() {
-        if (bashPatternHint == null) {
-            return;
-        }
-        String text = bashPatternField.getText();
-        if (text != null && !text.isBlank() && !AppSettings.isValidBashFilePattern(text)) {
-            bashPatternHint.setText("<html><div style='width:330px'><span style='color:"
-                    + Ui.hex(Ui.DANGER) + "'>正则不合法或含嵌套量词（灾难性回溯风险），不能保存——请修正或清空</span></div></html>");
-            return;
-        }
-        bashPatternHint.setText("<html><div style='width:330px'><span style='color:"
-                + Ui.hex(Ui.TEXT_SECONDARY) + "'>命令文本命中此正则时，bash 工具把命令写入临时文件后用 bash 执行"
-                + "（替代 echo base64 | base64 -d | bash 管道，适合 heredoc 等管道不友好的写法）；留空=仅超长命令转文件</span></div></html>");
-    }
-
-    /** 当前输入是否可保存：空串（清除配置）或合法且安全的正则 */
-    private boolean bashPatternValid() {
-        String text = bashPatternField.getText();
-        return text == null || text.isBlank() || AppSettings.isValidBashFilePattern(text);
     }
 
     /** 工具一行：等宽工具名 + 勾选框（勾选框文字=说明文字）。长说明按固定 330px 宽的 HTML 分段
@@ -1503,15 +1427,6 @@ public class SettingsDialog extends JDialog {
     }
 
     private void save() {
-        // 非正常/不安全正则不入库：整次保存拦在这里（先于一切写值），人带回字段修正或清空——
-        // setter 里还有一道校验兜底，但那会"静默丢值关窗"，这里拦下才算把原因说清楚
-        if (!bashPatternValid()) {
-            Ui.messageDialog(this, "保存受阻", "「文件正则」不是合法且安全的正则"
-                    + "（编译不过或含灾难性回溯的嵌套量词），未保存任何改动。请修正或清空后再保存。");
-            refreshBashPatternHint();
-            bashPatternField.requestFocusInWindow();
-            return;
-        }
         // 当前展开方案的表单值先落回工作副本（全部收起时没有表单可落，方案保持原值）
         flushFormIntoSelected();
         settings.setContentFontSize(((Number) fontSizeSpinner.getValue()).intValue());
@@ -1555,8 +1470,6 @@ public class SettingsDialog extends JDialog {
         settings.setLogFileMaxSize(logMaxSize);
         settings.setLogFileBackups(((Number) logFileBackupsSpinner.getValue()).intValue());
         settings.setLogFileFormat(logFileFormatField.getText());
-        // 空白=清除配置；setter 内还有一道合法性校验（防御其他调用方）
-        settings.setBashFilePattern(bashPatternField.getText());
         // Provider 分组单选：每组收集选中名写回全局（AppSettings.activeProvider.<apiType>，不随方案）。
         // 注册表没拿到的组（单选列表为空）跳过不动原值，避免把已有选择洗净
         for (Map.Entry<String, List<JRadioButton>> providerGroup : providerRadioGroups.entrySet()) {
