@@ -54,6 +54,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.concurrent.CompletableFuture;
 
@@ -68,7 +69,8 @@ import java.util.concurrent.CompletableFuture;
  * 请求走模型所属方案 apiType 那组的选择，后端 resolveActiveProvider 优先消费）；
  * 「上下文」= 可修改（非 readOnly）上下文处理器全局单选（落 AppSettings.activeContextHandler，不随方案；
  * 每轮请求前对历史消息做管理如截断/压缩，不启用=消息原样发出；处理器列表经 ContextCatalog 读桥取，
- * 后端读口待补时列表为空只显示兜底提示，后端消费接线也待补）；
+ * 只读处理器注册了就列在下方展示；实现了 uiTips 的处理器挂交互区——与工具页同一套 InteractiveTarget，
+ * 持久化键=插件 name()，persistent 已泛化到任意插件类型）；
  * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）
  * + 每个支持交互的工具一条可展开交互区（uiTips 提示 + 输入框 + 执行钮 + 结果提示：
  *   输入经 uiInteractive 交给工具自行解释应用（bash 的 bash 选择/转文件正则都走这里，
@@ -673,7 +675,9 @@ public class SettingsDialog extends JDialog {
      * 上下文页：可修改（非 readOnly）上下文处理器全局单选（AppSettings.activeContextHandler，
      * 不随方案）。每轮请求前由后端 ContextHandlerManager.handle 调用选中处理器对历史消息做
      * 管理（截断/压缩等）；「不启用」=消息原样发出。列表经 ContextCatalog 读桥取（同
-     * ProviderCatalog 模式，失败退空列表给兜底提示——后端读口待补，见 ContextCatalog 注释）。
+     * ProviderCatalog 模式，失败退空列表给兜底提示）。实现了 uiTips 的处理器挂可展开交互区
+     * （与工具页同一套 InteractiveTarget，持久化键=插件 name()）；只读处理器不可选择，
+     * 注册了就列在下方展示（记录行为始终开启）。
      */
     private JPanel buildContextPage() {
         JPanel groups = new JPanel();
@@ -685,7 +689,8 @@ public class SettingsDialog extends JDialog {
         card.setLayout(new GridBagLayout());
         JLabel hint = new JLabel("<html><div style='width:330px'><span style='color:"
                 + Ui.hex(Ui.TEXT_SECONDARY) + "'>可修改的上下文处理器全局单选：每次请求前对历史消息做管理"
-                + "（截断/压缩等），「不启用」=消息原样发出。只读处理器不在此列，它们的记录行为始终开启</span></div></html>");
+                + "（截断/压缩等），「不启用」=消息原样发出。只读处理器不参与选择（记录行为始终"
+                + "开启），注册了就列在下方</span></div></html>");
         hint.setFont(Ui.FONT_PLAIN);
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(10, 14, 6, 14);
@@ -704,9 +709,9 @@ public class SettingsDialog extends JDialog {
         card.add(handlerPanel, gbc);
 
         // 首枚固定「不启用」（clientProperty 空串=清除落盘值）；已注册处理器逐一枚举。
-        // 预选=落盘的名字；落盘名字不在列表里（插件被删/后端读口待补时列表为空）回落"不启用"，
+        // 预选=落盘的名字；落盘名字不在列表里（插件被删/注册表不可用时列表为空）回落"不启用"，
         // 与 Provider 页"失效回落"同一规则——只是这里回落到关闭而不是默认启用
-        List<ContextCatalog.HandlerInfo> handlers = ContextCatalog.registered();
+        List<ContextCatalog.HandlerInfo> handlers = ContextCatalog.modifiable();
         ButtonGroup buttonGroup = new ButtonGroup();
         JRadioButton offRadio = new JRadioButton("不启用（消息原样发出）");
         offRadio.putClientProperty("handlerName", "");
@@ -727,18 +732,86 @@ public class SettingsDialog extends JDialog {
             contextHandlerRadios.add(radio);
             handlerPanel.add(radio);
         }
+        // 可修改处理器的交互区（uiTips 实现了的才有）：与工具页同一套，持久化按插件 name() 泛化
+        for (ContextCatalog.HandlerInfo info : handlers) {
+            if (info.interactiveTips() != null) {
+                addBoxInteractiveRows(handlerPanel, contextTarget(info));
+            }
+        }
         if (handlers.isEmpty()) {
-            // 注册表没拿到：提示兜底，不改落盘语义。
+            // 注册表为空或不可用（裸类路径回归/没有注册处理器）：提示兜底，不改落盘语义。
             // 纯文本单行（不用 HTML 折行）：与 Provider 页空提示同款，GUI 回归的文字断言才够得着
-            JLabel empty = new JLabel("未拿到已注册的可修改上下文处理器（后端读口待补）");
+            JLabel empty = new JLabel("未拿到已注册的可修改上下文处理器（注册表为空或不可用）");
             empty.setFont(Ui.FONT_PLAIN);
             empty.setForeground(Ui.TEXT_SECONDARY);
             handlerPanel.add(Box.createVerticalStrut(4));
             handlerPanel.add(empty);
         }
+        // 只读处理器展示区：不可选择（单选列表不含它们），记录行为始终开启；实现了 uiTips 的
+        // 同样挂交互区（persistent 泛化后读写路径与可修改处理器完全一致）
+        List<ContextCatalog.HandlerInfo> readOnly = ContextCatalog.readOnly();
+        if (!readOnly.isEmpty()) {
+            handlerPanel.add(Box.createVerticalStrut(10));
+            JLabel roHeader = new JLabel("只读处理器（自动运行，不可选择）");
+            roHeader.setFont(Ui.FONT_PLAIN);
+            roHeader.setForeground(Ui.TEXT_SECONDARY);
+            handlerPanel.add(roHeader);
+            for (ContextCatalog.HandlerInfo info : readOnly) {
+                handlerPanel.add(Box.createVerticalStrut(4));
+                JLabel roName = new JLabel(info.name());
+                roName.setFont(new Font("Monospaced", Font.BOLD, 13));
+                roName.setForeground(Ui.TEXT);
+                roName.setToolTipText(info.className());
+                roName.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+                handlerPanel.add(roName);
+                JLabel roDesc = new JLabel("<html><div style='width:330px'><span style='color:"
+                        + Ui.hex(Ui.TEXT_SECONDARY) + "'>" + escapeHtml(info.description()) + "</span></div></html>");
+                roDesc.setFont(Ui.FONT_PLAIN);
+                roDesc.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+                handlerPanel.add(roDesc);
+                if (info.interactiveTips() != null) {
+                    addBoxInteractiveRows(handlerPanel, contextTarget(info));
+                }
+            }
+        }
         groups.add(card);
         groups.add(Box.createVerticalGlue());
         return groups;
+    }
+
+    /**
+     * 把"展开/收起交互"开关+交互区挂进垂直 Box 容器（上下文页用；工具页是 gridbag 走
+     * addInteractiveRows）。开关前先给插件名行（Monospaced 粗体，与工具页行首同款），
+     * 多个交互区堆叠时归属一眼可辨。
+     */
+    private void addBoxInteractiveRows(JPanel box, InteractiveTarget target) {
+        box.add(Box.createVerticalStrut(8));
+        JLabel owner = new JLabel(target.name());
+        owner.setFont(new Font("Monospaced", Font.BOLD, 13));
+        owner.setForeground(Ui.TEXT);
+        owner.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        box.add(owner);
+        // Ui.button 是自绘工厂（无 selected 视觉），展开态换文字；不用 ▸▾ 箭头——
+        // 微软雅黑缺字形渲染成方框（踩坑 #5），设置面板内「展开/收起」纯文字是既有惯例
+        JButton toggle = Ui.button("展开交互");
+        toggle.setToolTipText("展开 " + target.name() + " 的交互区（uiTips 描述的功能，输入交给插件自行解释）");
+        toggle.setPreferredSize(new Dimension(96, 24));
+        toggle.setMinimumSize(toggle.getPreferredSize());
+        toggle.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        JPanel section = buildInteractiveSection(target);
+        section.setVisible(false);
+        toggle.addActionListener(e -> {
+            boolean open = !Boolean.TRUE.equals(toggle.getClientProperty("open"));
+            toggle.putClientProperty("open", open);
+            toggle.setText(open ? "收起交互" : "展开交互");
+            section.setVisible(open);
+            box.revalidate();
+            box.repaint();
+        });
+        box.add(Box.createVerticalStrut(2));
+        box.add(toggle);
+        box.add(Box.createVerticalStrut(2));
+        box.add(section);
     }
 
     /**
@@ -799,23 +872,44 @@ public class SettingsDialog extends JDialog {
         card.add(enabledToolCheckBox(info), gbc);
         row++;
         if (info.interactiveTips() != null) {
-            row = addInteractiveRows(card, row, info);
+            row = addInteractiveRows(card, row, toolTarget(info));
         }
         return row;
+    }
+
+    /** 工具的交互目标（uiInteractive/persistentInput 走 ToolCatalog 写桥） */
+    private static InteractiveTarget toolTarget(ToolCatalog.ToolInfo info) {
+        return new InteractiveTarget(info.name(), info.interactiveTips(),
+                ToolCatalog.persistentInput(info.name()), ToolCatalog::uiInteractive);
+    }
+
+    /** 上下文处理器的交互目标（走 ContextCatalog 写桥，持久化键同为插件 name()） */
+    private static InteractiveTarget contextTarget(ContextCatalog.HandlerInfo info) {
+        return new InteractiveTarget(info.name(), info.interactiveTips(),
+                ContextCatalog.persistentInput(info.name()), ContextCatalog::uiInteractive);
+    }
+
+    /**
+     * 交互区数据源：工具页与上下文页共用（persistent 泛化——持久化与交互按插件 name() 走
+     * 同一套 AppSettings 键值，后端 PluginBase.getPersistentInput 消费，不区分插件类型）。
+     * interactive=uiInteractive 写桥（工具走 ToolCatalog、上下文处理器走 ContextCatalog）。
+     */
+    private record InteractiveTarget(String name, String tips, String savedInput,
+                                     BiFunction<String, String, String> interactive) {
     }
 
     /**
      * 支持交互的工具在勾选行下挂两行：「展开交互」开关钮（跨第 2 列，展开态换「收起交互」）+
      * 默认隐藏的交互区（跨整卡两列——踩坑 #17 的教训，提示文字别塞进单列受硬裁）。
      */
-    private int addInteractiveRows(JPanel card, int row, ToolCatalog.ToolInfo info) {
+    private int addInteractiveRows(JPanel card, int row, InteractiveTarget target) {
         // Ui.button 是自绘工厂（无 selected 视觉），展开态换文字；不用 ▸▾ 箭头——
         // 微软雅黑缺字形渲染成方框（踩坑 #5），设置面板内「展开/收起」纯文字是既有惯例
         JButton toggle = Ui.button("展开交互");
-        toggle.setToolTipText("展开 " + info.name() + " 的交互区（uiTips 描述的功能，输入交给工具自行解释）");
+        toggle.setToolTipText("展开 " + target.name() + " 的交互区（uiTips 描述的功能，输入交给插件自行解释）");
         toggle.setPreferredSize(new Dimension(96, 24));
         toggle.setMinimumSize(toggle.getPreferredSize());
-        JPanel section = buildInteractiveSection(info);
+        JPanel section = buildInteractiveSection(target);
         section.setVisible(false);
         toggle.addActionListener(e -> {
             boolean open = !Boolean.TRUE.equals(toggle.getClientProperty("open"));
@@ -846,9 +940,9 @@ public class SettingsDialog extends JDialog {
 
     /**
      * 交互区：uiTips 提示（HTML 固定宽折行，踩坑 #17）+ 输入框（预填落盘的持久化输入）+
-     * 执行钮 + 结果提示。输入允许空串——各工具自己定语义（如 bash 的空输入=触发重选）。
+     * 执行钮 + 结果提示。输入允许空串——各插件自己定语义（如 bash 的空输入=触发重选）。
      */
-    private JPanel buildInteractiveSection(ToolCatalog.ToolInfo info) {
+    private JPanel buildInteractiveSection(InteractiveTarget target) {
         JPanel section = new JPanel();
         section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
         section.setOpaque(false);
@@ -856,7 +950,7 @@ public class SettingsDialog extends JDialog {
 
         JLabel tips = new JLabel("<html><div style='width:430px'><span style='color:"
                 + Ui.hex(Ui.TEXT_SECONDARY) + "'>"
-                + escapeHtml(info.interactiveTips()).replace("\n", "<br/>")
+                + escapeHtml(target.tips()).replace("\n", "<br/>")
                 + "</span></div></html>");
         tips.setFont(Ui.FONT_PLAIN);
         tips.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
@@ -866,10 +960,9 @@ public class SettingsDialog extends JDialog {
         JTextField inputField = new JTextField();
         Ui.styleInput(inputField);
         inputField.setFont(new Font("Monospaced", Font.PLAIN, 13));
-        String saved = ToolCatalog.persistentInput(info.name());
-        inputField.setText(saved == null ? "" : saved);
+        inputField.setText(target.savedInput() == null ? "" : target.savedInput());
         JButton execButton = Ui.button("执行");
-        execButton.setToolTipText("把输入交给工具的交互入口（可能拉起进程，最坏 10 秒）；工具处理后输入会被保存");
+        execButton.setToolTipText("把输入交给插件的交互入口（可能拉起进程，最坏 10 秒）；插件处理后输入会被保存");
         execButton.setPreferredSize(new Dimension(58, 26));
         execButton.setMinimumSize(execButton.getPreferredSize());
         JPanel inputRow = new JPanel(new BorderLayout(8, 0));
@@ -886,17 +979,18 @@ public class SettingsDialog extends JDialog {
         result.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
         section.add(result);
 
-        execButton.addActionListener(e -> runInteractive(info, inputField, execButton, result));
+        execButton.addActionListener(e -> runInteractive(target, inputField, execButton, result));
         return section;
     }
 
     /**
-     * 后台执行工具交互（uiInteractive 可能拉起进程探测，最坏 10 秒，不占 EDT）：期间执行钮
-     * 和输入框置灰、结果标签先给"执行中…"；反馈回来按是否被工具实际处理分色显示。工具实际
+     * 后台执行插件交互（uiInteractive 可能拉起进程探测，最坏 10 秒，不占 EDT）：期间执行钮
+     * 和输入框置灰、结果标签先给"执行中…"；反馈回来按是否被插件实际处理分色显示。插件实际
      * 处理了输入（非接口默认哨兵 "not implemented"、调用未失败）才由前端落盘
-     * （setPersistentToolInput + save——持久化是前端的事这个契约的落地处）。
+     * （setPersistentToolInput + save——持久化是前端的事这个契约的落地处，键=插件 name()，
+     * 后端 PluginBase.getPersistentInput 同名消费）。
      */
-    private void runInteractive(ToolCatalog.ToolInfo info, JTextField inputField, JButton execButton, JLabel result) {
+    private void runInteractive(InteractiveTarget target, JTextField inputField, JButton execButton, JLabel result) {
         String input = inputField.getText();
         execButton.setEnabled(false);
         inputField.setEnabled(false);
@@ -904,10 +998,10 @@ public class SettingsDialog extends JDialog {
         result.setText("<html><div style='width:430px'><span style='color:"
                 + Ui.hex(Ui.TEXT_SECONDARY) + "'>执行中…（可能拉起进程，最坏 10 秒）</span></div></html>");
         CompletableFuture.runAsync(() -> {
-            String feedback = ToolCatalog.uiInteractive(info.name(), input);
+            String feedback = target.interactive().apply(target.name(), input);
             boolean processed = feedback != null && !"not implemented".equals(feedback);
-            if (processed) { // 没实现的输入不占配置槽；存了工具侧也会在自己的解释器里忽略，但保持干净
-                settings.setPersistentToolInput(info.name(), input);
+            if (processed) { // 没实现的输入不占配置槽；存了插件侧也会在自己的解释器里忽略，但保持干净
+                settings.setPersistentToolInput(target.name(), input);
                 settings.save();
             }
             javax.swing.SwingUtilities.invokeLater(() -> {
@@ -1597,7 +1691,7 @@ public class SettingsDialog extends JDialog {
             }
         }
         // 上下文页单选：选中名写回全局（AppSettings.activeContextHandler，不随方案），
-        // 「不启用」是空串（setter 清除）。列表没拿到（后端读口待补）时跳过不动原值，
+        // 「不启用」是空串（setter 清除）。列表没拿到（注册表不可用）时跳过不动原值，
         // 避免把已有选择洗净
         if (contextHandlerRadios.size() > 1) {
             for (JRadioButton radio : contextHandlerRadios) {

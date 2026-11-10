@@ -13,14 +13,14 @@ public interface ContextHandler extends PluginBase {
     @Override
     String description();
 
-    record ContextDetail(List<PromptParams.RoleMessage> roleMessages, long inputTokens, long outputTokens, long ctxWindow, String mHandleName) {
+    record ContextDetail(List<PromptParams.RoleMessage> roleMessages, long inputTokens, long outputTokens, long ctxWindow, String mHandlerName) {
     }
 
     record ContextManaged(List<PromptParams.RoleMessage> roleMessages) {
     }
 
     /**
-     * @return 此handler是否只读，只读返回值会被忽略，非只读只允许存在一个；
+     * @return 此handler是否只读，只读返回值会被忽略，非只读按 name() 选择启用（前端设置页单选）；
      */
     default boolean readOnly() {
         return true;
