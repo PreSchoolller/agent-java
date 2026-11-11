@@ -13,6 +13,6 @@ public class PluginManager {
      * @return 持久化的插件信息
      */
     public static String getPersistentInput(PluginBase serviceBase) {
-        return appSettings.getPersistentToolInput(serviceBase.name());
+        return appSettings.getPersistentPluginInput(serviceBase.name());
     }
 }

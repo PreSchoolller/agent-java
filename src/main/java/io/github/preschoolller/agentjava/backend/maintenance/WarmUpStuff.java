@@ -9,7 +9,7 @@ import java.util.concurrent.CompletableFuture;
  */
 public class WarmUpStuff {
     public static void warmup() {
-        ServiceLoader.load();
+        PluginLoader.load();
         CompletableFuture.runAsync(ToolBash::exploreBash);
     }
 }

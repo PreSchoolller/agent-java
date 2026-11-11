@@ -694,17 +694,6 @@ public class ToolBash implements Tool {
         for (String str : input.split(";")) {
             int i = str.indexOf("=");
             if (i == -1) {
-                // 旧格式兼容（k=v 之前落盘的持久化输入）：无 '=' 的段按旧前缀指令识别，避免升级后静默丢配置
-                String legacy = str.strip();
-                if (legacy.equals(WSL) || legacy.equals(GIT_BASH)) {
-                    head = legacy;
-                } else if (legacy.startsWith(CUSTOM)) {
-                    head = legacy.substring(CUSTOM.length());
-                } else if (legacy.startsWith(REGEX)) {
-                    regex = legacy.substring(REGEX.length());
-                } else {
-                    LOG.info("unknown segment found in input: {}", str);
-                }
                 continue;
             }
             String key = str.substring(0, i).strip();

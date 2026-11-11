@@ -22,9 +22,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
-public class ServiceLoader {
+public class PluginLoader {
 
-    private ServiceLoader() {
+    private PluginLoader() {
     }
 
     private static final Map<Class<?>, Consumer<Object>> CLASSES = Map.of(
@@ -32,7 +32,7 @@ public class ServiceLoader {
             Provider.class, ProviderFactory::register,
             ContextHandler.class, ContextHandlerManager::register
     );
-    private static final Logger LOG = LoggerFactory.getLogger(ServiceLoader.class);
+    private static final Logger LOG = LoggerFactory.getLogger(PluginLoader.class);
 
     public static void load() {
         try {
@@ -51,7 +51,7 @@ public class ServiceLoader {
 
                 try {
                     URL[] jarUrl = new URL[]{jar.toUri().toURL()};
-                    URLClassLoader urlClassLoader = new URLClassLoader("plugin-" + jarName, jarUrl, ServiceLoader.class.getClassLoader());
+                    URLClassLoader urlClassLoader = new URLClassLoader("plugin-" + jarName, jarUrl, PluginLoader.class.getClassLoader());
                     for (Class<?> aClass : CLASSES.keySet()) {
                         java.util.ServiceLoader.load(aClass, urlClassLoader).forEach(plugin -> {
                             CLASSES.get(aClass).accept(plugin);
