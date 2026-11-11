@@ -32,4 +32,12 @@ public interface ContextHandler extends PluginBase {
      * @return 修改后的上下文
      */
     ContextManaged handle(ContextDetail contextDetail);
+
+    /**
+     * @param contextDetail 上下文信息
+     * @return 是否要进行压缩
+     */
+    default boolean needCompress(ContextDetail contextDetail) {
+        return false;
+    }
 }

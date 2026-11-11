@@ -64,7 +64,7 @@ public class PluginLoader {
                 } catch (Throwable throwable) {
                     LOG.error("plugin {} failed", jarNameWithSuffix, throwable);
                 } finally {
-                    LOG.info("plugin {} loaded {} tools", jarNameWithSuffix, count.get());
+                    LOG.info("plugin {} loaded {} plugins", jarNameWithSuffix, count.get());
                 }
             }
         } catch (IOException e) {

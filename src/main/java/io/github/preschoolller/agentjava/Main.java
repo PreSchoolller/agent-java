@@ -200,6 +200,10 @@ public class Main {
         long inputTokens = usage == null ? 0 : usage.inputTokens();
         long outputTokens = usage == null ? 0 : usage.outputTokens();
         ContextHandler.ContextDetail contextDetail = new ContextHandler.ContextDetail(roleMessages, inputTokens, outputTokens, context, mHandlerName);
+        boolean needCompress = ContextHandlerManager.needCompress(contextDetail);
+        if (needCompress) {
+            // conversation.messages后插入标记，contextDetail补记标记
+        }
         ContextHandler.ContextManaged contextManaged = ContextHandlerManager.handle(contextDetail);
         prepareParams.paramsBuilder.clearRoleMessages();
         contextManaged.roleMessages().forEach(prepareParams.paramsBuilder::roleMessages);
@@ -558,6 +562,7 @@ public class Main {
      */
     private static List<PromptParams.RoleMessage> buildRoleMessages(Conversation conversation) {
         List<PromptParams.RoleMessage> roleMessages = new ArrayList<>();
+        // 此处返回最后一个标记（不包含）后的messages段
         for (Message message : conversation.getMessages()) {
             String text = message.text();
             if (text == null || text.isBlank()) {
