@@ -1,8 +1,13 @@
 package io.github.preschoolller.agentjava.plugin;
 
 import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandler;
+import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
+import io.github.preschoolller.agentjava.backend.provider.common.RoleEnum;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class AiBriefContext implements ContextHandler {
 
@@ -10,6 +15,22 @@ public class AiBriefContext implements ContextHandler {
     private static final Logger LOG = LoggerFactory.getLogger(AiBriefContext.class);
 
     public AiBriefContext() {
+        String input = getPersistentInput();
+        if (input == null || input.isBlank()) {
+            return;
+        }
+        String number = input.strip().substring(0, 1);
+
+        try {
+            int i = Integer.parseInt(number);
+            if (i == 0 || (i >= 5 && i <= 10)) {
+                threshold = i;
+            } else {
+                LOG.warn("wrong number of persistent input of AiBriefContext: {}", input);
+            }
+        } catch (NumberFormatException e) {
+            LOG.warn("failed to parse persistent input of AiBriefContext: {}", input);
+        }
     }
 
     @Override
@@ -50,9 +71,9 @@ public class AiBriefContext implements ContextHandler {
         } catch (NumberFormatException e) {
             LOG.info("failed to parse input threshold string to int: {}", input);
         }
-        if (newThreshold < 0 || newThreshold > 100) {
+        if (newThreshold < 0 || newThreshold > 10 || (newThreshold > 0 && newThreshold < 5)) {
             LOG.info("input threshold exceeds range: {}", newThreshold);
-            return "格式错误，只接受[0-100]纯数字正整数";
+            return "格式错误，只接受[0|5-10]纯数字";
         }
         synchronized (AiBriefContext.class) {
             threshold = newThreshold;
@@ -62,8 +83,23 @@ public class AiBriefContext implements ContextHandler {
 
     @Override
     public ContextManaged handle(ContextDetail contextDetail) {
-        LOG.info("handling 啦啦啦啦啦啦啦啊啦啦啦啦啦啦占位测试可达");
-        return new ContextManaged(contextDetail.roleMessages());
+        List<PromptParams.RoleMessage> roleMessages = contextDetail.roleMessages();
+        if (RoleEnum.CONTEXT_MARKER.equals(roleMessages.get(roleMessages.size() - 1).role())) {
+            // last message is context marker, do compress this round
+            ArrayList<PromptParams.RoleMessage> result = new ArrayList<>(roleMessages);
+            result.remove(result.size() - 1);
+            String compressPrompt = """
+                    上下文将要达到极限，本轮对话将要进行上下文压缩，总结并返回上下文摘要，以便快速完成任务续接，以下是几个要点。
+                    1. 以“使用过的文件”为标题，列出使用过的文件名称。
+                    2. 以“使用过的命令”为标题，列出命令目的及结果摘要。
+                    3. 以“用户明确要遵循的规则”为标题，列出用户明确要求agent助手遵循的规则，以及隐含（自由决定）的规则摘要。
+                    4. 以“当前目标”为标题，列出当前工作内容摘要。
+                    """;
+            result.add(new PromptParams.RoleMessage(RoleEnum.USER, compressPrompt));
+            return new ContextManaged(result);
+        } else {
+            return new ContextManaged(roleMessages);
+        }
     }
 
     @Override
@@ -71,6 +107,6 @@ public class AiBriefContext implements ContextHandler {
         if (contextDetail.ctxWindow() == 0) {
             return false;
         }
-        return contextDetail.ctxWindow() * threshold <= contextDetail.inputTokens() * 100;
+        return contextDetail.ctxWindow() * threshold <= contextDetail.inputTokens() * 10;
     }
 }
