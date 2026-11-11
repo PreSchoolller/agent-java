@@ -196,11 +196,12 @@ public class Main {
     }
 
     /**
-     * 上下文管理：needCompress 命中（由选中的可修改处理器决策）时，给对话消息末尾落一条
-     * 压缩水位线标记，并把标记补记进本轮窗口——插件收到的快照以标记收尾，压缩范围就此圈定
-     * （上个标记+1 → 本标记）。handle 的返回值整体替换本轮发出的消息列表；标记必须在
-     * handle 正常返回后才落库：插件抛异常时水位线不推进，下一轮仍是全窗口可重试压缩，
-     * 避免"标记已落但压缩结果未生成"把没压过的内容裁掉。
+     * 上下文管理：needCompress 命中（由选中的可修改处理器决策）时，把压缩水位线标记插进
+     * 会话（本轮 AI 占位卡之前——占位卡在快照期已落库，摘要稍后填进它；标记排它后面摘要
+     * 就落在标记前，下轮裁剪把摘要裁掉），并把标记补记进本轮窗口——插件收到的快照以标记
+     * 收尾，压缩范围就此圈定（上个标记+1 → 本标记）。handle 的返回值整体替换本轮发出的
+     * 消息列表；标记必须在 handle 正常返回后才落库：插件抛异常时水位线不推进，下一轮仍是
+     * 全窗口可重试压缩，避免"标记已落但压缩结果未生成"把没压过的内容裁掉。
      */
     private static void doContextManage(Conversation conversation, PrepareParams prepareParams,
                                         Conversation.Usage usage, long context, String mHandlerName) {
@@ -218,9 +219,11 @@ public class Main {
         }
         ContextHandler.ContextManaged contextManaged = ContextHandlerManager.handle(contextDetail);
         if (needCompress) {
-            // 标记落库（EDT）：本任务的入队早于 doStream 的任何 EDT 任务，EDT FIFO 保证
-            // 标记先于本轮 AI 卡落库——下一轮快照（buildRoleMessages 的水位线）必然看得见
-            SwingUtilities.invokeLater(() -> window.getStore().appendContextMarker(conversation.getId()));
+            // 标记落库（EDT）：必须插在本轮 AI 占位卡之前——占位卡在本轮快照期（appendMessages）
+            // 就已落库，早于这里排队的 EDT 任务，尾部追加会排到占位卡后面；压缩摘要作为本轮
+            // 响应填进占位卡后，摘要就落在标记前，下轮水位线裁剪会把摘要裁掉（压缩白做）。
+            // 入队早于 doStream 的任何 EDT 任务，FIFO 保证占位卡此刻必是最后一条消息
+            SwingUtilities.invokeLater(() -> window.getStore().insertContextMarkerBeforeLastAi(conversation.getId()));
         }
         prepareParams.paramsBuilder.clearRoleMessages();
         contextManaged.roleMessages().forEach(prepareParams.paramsBuilder::roleMessages);
