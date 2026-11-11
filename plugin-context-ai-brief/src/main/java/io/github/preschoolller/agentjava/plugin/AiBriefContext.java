@@ -32,8 +32,10 @@ public class AiBriefContext implements ContextHandler {
     @Override
     public String uiTips() {
         return """
-                设置上下文压缩阈值[0-100]只接受纯数字正整数。
+                设置上下文压缩阈值，只接受 0，5，6，7，8，9，10
                 空/空白 内容回显当前阈值
+                0 表示不压缩
+                5到10之间的任意数x表示阈值为x除以10;
                 """;
     }
 
@@ -62,5 +64,13 @@ public class AiBriefContext implements ContextHandler {
     public ContextManaged handle(ContextDetail contextDetail) {
         LOG.info("handling 啦啦啦啦啦啦啦啊啦啦啦啦啦啦占位测试可达");
         return new ContextManaged(contextDetail.roleMessages());
+    }
+
+    @Override
+    public boolean needCompress(ContextDetail contextDetail) {
+        if (contextDetail.ctxWindow() == 0) {
+            return false;
+        }
+        return contextDetail.ctxWindow() * threshold <= contextDetail.inputTokens() * 100;
     }
 }

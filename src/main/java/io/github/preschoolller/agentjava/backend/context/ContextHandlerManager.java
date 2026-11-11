@@ -57,4 +57,20 @@ public class ContextHandlerManager {
     public static List<ContextHandler> getModifiableHandlers() {
         return Collections.unmodifiableList(modifiableHandlers);
     }
+
+    public static boolean needCompress(ContextHandler.ContextDetail contextDetail) {
+        ContextHandler.ContextDetail snapShot = new ContextHandler.ContextDetail(Collections.unmodifiableList(contextDetail.roleMessages()),
+                contextDetail.inputTokens(), contextDetail.outputTokens(), contextDetail.ctxWindow(), contextDetail.mHandlerName());
+        if (contextDetail.mHandlerName() != null) {
+            for (ContextHandler modifiableHandler : modifiableHandlers) {
+                // 常量在前的写法：劣质插件 name() 返回 null 也不 NPE（EmptyTool/BadTool 就有 return null 的先例）
+                if (contextDetail.mHandlerName().equals(modifiableHandler.name())) {
+                    return modifiableHandler.needCompress(snapShot);
+                }
+            }
+            // 配置的名字当前没有注册（插件被卸载/改名）：回落消息原样发出，与前端"回落不启用"语义一致
+            LOG.warn("configured modifiable context handler not found: {}, messages sent as-is", contextDetail.mHandlerName());
+        }
+        return false;
+    }
 }
