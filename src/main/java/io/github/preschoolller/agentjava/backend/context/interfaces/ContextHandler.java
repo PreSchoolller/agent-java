@@ -7,6 +7,11 @@ import java.util.List;
 
 public interface ContextHandler extends PluginBase {
 
+    /** 压缩窗口末尾标记消息的正文：Main 在 needCompress 命中后补记给窗口（角色
+     *  RoleEnum.CONTEXT_MARKER）。插件按角色识别边界、返回结果时必须剥掉标记；
+     *  就算透传了，provider 序列化对 CONTEXT_MARKER 也是静默跳过 */
+    String MARKER_CONTENT = "[context-managed]";
+
     @Override
     String name();
 

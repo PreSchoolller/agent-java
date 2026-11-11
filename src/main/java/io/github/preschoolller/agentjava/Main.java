@@ -170,7 +170,7 @@ public class Main {
                 try {
                     SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), true));
                     prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 每轮快照：只重取历史+建卡，配置不动
-                    doContextManage(prepareParams, conversation.getUsage(), loopConfig.modelCtxWindow, loopConfig.mHandlerName);
+                    doContextManage(conversation, prepareParams, conversation.getUsage(), loopConfig.modelCtxWindow, loopConfig.mHandlerName);
                     doStream(window, conversation, cancelled, prepareParams, loopControl);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -195,16 +195,32 @@ public class Main {
         });
     }
 
-    private static void doContextManage(PrepareParams prepareParams, Conversation.Usage usage, long context, String mHandlerName) {
+    /**
+     * 上下文管理：needCompress 命中（由选中的可修改处理器决策）时，给对话消息末尾落一条
+     * 压缩水位线标记，并把标记补记进本轮窗口——插件收到的快照以标记收尾，压缩范围就此圈定
+     * （上个标记+1 → 本标记）。handle 的返回值整体替换本轮发出的消息列表；标记必须在
+     * handle 正常返回后才落库：插件抛异常时水位线不推进，下一轮仍是全窗口可重试压缩，
+     * 避免"标记已落但压缩结果未生成"把没压过的内容裁掉。
+     */
+    private static void doContextManage(Conversation conversation, PrepareParams prepareParams,
+                                        Conversation.Usage usage, long context, String mHandlerName) {
         ArrayList<PromptParams.RoleMessage> roleMessages = new ArrayList<>(prepareParams.paramsBuilder.build().getRoleMessages());
         long inputTokens = usage == null ? 0 : usage.inputTokens();
         long outputTokens = usage == null ? 0 : usage.outputTokens();
         ContextHandler.ContextDetail contextDetail = new ContextHandler.ContextDetail(roleMessages, inputTokens, outputTokens, context, mHandlerName);
         boolean needCompress = ContextHandlerManager.needCompress(contextDetail);
         if (needCompress) {
-            // conversation.messages后插入标记，contextDetail补记标记
+            // contextDetail 补记标记（needCompress 的判定窗口不含标记——决策看的是真实内容）。
+            // 标记用 CONTEXT_MARKER 角色：插件按角色识别边界并在返回时剥掉；就算劣质插件
+            // 原样透传，provider 序列化对它也是静默跳过，不会污染请求
+            roleMessages.add(new PromptParams.RoleMessage(RoleEnum.CONTEXT_MARKER, ContextHandler.MARKER_CONTENT));
         }
         ContextHandler.ContextManaged contextManaged = ContextHandlerManager.handle(contextDetail);
+        if (needCompress) {
+            // 标记落库（EDT）：本任务的入队早于 doStream 的任何 EDT 任务，EDT FIFO 保证
+            // 标记先于本轮 AI 卡落库——下一轮快照（buildRoleMessages 的水位线）必然看得见
+            SwingUtilities.invokeLater(() -> window.getStore().appendContextMarker(conversation.getId()));
+        }
         prepareParams.paramsBuilder.clearRoleMessages();
         contextManaged.roleMessages().forEach(prepareParams.paramsBuilder::roleMessages);
     }
@@ -269,7 +285,7 @@ public class Main {
      */
     private static PrepareParams appendMessages(Conversation conversation, LoopConfig loopConfig) {
         PENDING_BG_DELIVERY.remove(conversation.getId());
-        List<PromptParams.RoleMessage> history = buildRoleMessages(conversation);
+        List<PromptParams.RoleMessage> history = buildRoleMessages(conversation, loopConfig);
         PromptParams.Builder builder = loopConfig.noMessages.toBuilder();
         builder.clearRoleMessages();
         for (PromptParams.RoleMessage roleMessage : history) {
@@ -559,11 +575,29 @@ public class Main {
      * 会话消息 → 后端轮次列表：空文本跳过，assistant 轮只发正文。
      * 思考内容存在 Message.thinking 独立字段，本来就不进 text，回传天然只带正文
      * （模型每轮重新思考，历史里的 CoT 是噪音，DeepSeek 等服务端甚至直接拒绝回传）。
+     * 配置了可修改上下文处理器时按压缩水位线裁剪：只取最后一个标记（不包含）之后的
+     * messages 段——标记之前的历史已由插件压缩（摘要以常规消息形态存于标记之后，或由
+     * 插件自持），标记本身与更早的消息不进请求（后端 api 请求忽略压缩标记 message，
+     * 这里是主裁剪口，provider 序列化还有一道 CONTEXT_MARKER 兜底）。未配置处理器时
+     * 不裁剪："不启用"=全量历史，残留的旧标记（处理器后来被停用）不会裁掉内容。
      */
-    private static List<PromptParams.RoleMessage> buildRoleMessages(Conversation conversation) {
+    private static List<PromptParams.RoleMessage> buildRoleMessages(Conversation conversation, LoopConfig loopConfig) {
         List<PromptParams.RoleMessage> roleMessages = new ArrayList<>();
-        // 此处返回最后一个标记（不包含）后的messages段
-        for (Message message : conversation.getMessages()) {
+        List<Message> messages = conversation.getMessages();
+        int start = 0;
+        if (loopConfig.mHandlerName() != null && !loopConfig.mHandlerName().isBlank()) {
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                if (messages.get(i).isContextMarker()) {
+                    start = i + 1;
+                    break;
+                }
+            }
+        }
+        for (int i = start; i < messages.size(); i++) {
+            Message message = messages.get(i);
+            if (message.isContextMarker()) {
+                continue; // 压缩标记不进请求（理论上已被水位线裁掉，这里是显式兜底）
+            }
             String text = message.text();
             if (text == null || text.isBlank()) {
                 continue; // 停止后零增量的空占位卡等

@@ -164,6 +164,24 @@ public class ConversationStore {
         return message;
     }
 
+    /**
+     * 追加上下文压缩水位线标记（Main 的压缩轮在 handle 成功后于 EDT 调用）：
+     * 落盘走 saveAndSyncSession 与消息同机制（后台会话的标记也落自己的库），
+     * 不挪"最近使用"位、fireChanged 对显示中的会话是无操作（onStoreChanged 只在
+     * 活动会话变化时重建瀑布流），所以标记不会出卡——它本来就不渲染。
+     * 返回标记消息记录；会话不存在返回 null。
+     */
+    public Message appendContextMarker(String id) {
+        Conversation conversation = findById(id);
+        if (conversation == null) {
+            return null;
+        }
+        Message message = conversation.addContextMarker();
+        saveAndSyncSession(conversation);
+        fireChanged();
+        return message;
+    }
+
     /** 从指定会话的一条 AI 回复处分叉出新会话并设为当前：分叉点之前（含这条回复）的消息
      *  原样复制进新会话，从该对话状态继续，原会话不动 */
     public Conversation fork(String id, Message target) {

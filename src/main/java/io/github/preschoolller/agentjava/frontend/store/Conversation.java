@@ -15,6 +15,10 @@ public class Conversation {
     public static final String ROLE_USER = "user";
     public static final String ROLE_AI = "ai";
     public static final String ROLE_TOOL = "tool";
+    /** 上下文压缩水位线标记：上下文管理插件把此标记之前的历史压缩后的边界。
+     *  请求构建按最后一个标记裁剪（标记本身与更早的消息不进请求），瀑布流/导出不渲染；
+     *  落盘按普通消息往返（role 字符串序列化，text 恒空串） */
+    public static final String ROLE_CONTEXT_MANAGER = "context-manager";
 
     /** 工具卡状态：命令已转入后台、当次只回了提交成功（终态等后台任务完成的回调回填） */
     public static final String STATUS_BG_RUNNING = "bg-running";
@@ -218,6 +222,15 @@ public class Conversation {
     /** 追加一条工具调用消息（"运行中"占位，结果由 updateToolResult 回填），返回消息记录 */
     public Message addToolCall(String toolName, String toolArgs, String callId) {
         Message message = new Message(ROLE_TOOL, "", System.currentTimeMillis(), toolName, toolArgs, "running", callId);
+        ensureLoaded().add(message);
+        touch();
+        return message;
+    }
+
+    /** 追加上下文压缩水位线标记（上下文管理插件在压缩轮结束时落库）：
+     *  下一轮请求构建以它为裁剪起点；标记本身不进请求，UI 也不渲染 */
+    public Message addContextMarker() {
+        Message message = new Message(ROLE_CONTEXT_MANAGER, "", System.currentTimeMillis());
         ensureLoaded().add(message);
         touch();
         return message;

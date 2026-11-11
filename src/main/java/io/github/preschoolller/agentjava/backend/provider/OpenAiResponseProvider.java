@@ -163,6 +163,9 @@ public class OpenAiResponseProvider implements Provider {
                             .build();
                     allMessages.add(ResponseInputItem.ofFunctionCallOutput(functionCallOutput));
                 }
+                case CONTEXT_MARKER -> {
+                    // 压缩水位线标记不进请求（给上下文管理插件的边界信号，理应被插件剥掉，这里兜底）
+                }
                 default -> throw new RuntimeException("unknown role enum");
             }
         }
