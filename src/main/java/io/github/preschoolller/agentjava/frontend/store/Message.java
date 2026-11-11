@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
 /**
- * 一条消息。role 取 Conversation.ROLE_USER / ROLE_AI / ROLE_TOOL。
+ * 一条消息。role 取 Conversation.ROLE_USER / ROLE_AI / ROLE_TOOL / ROLE_CONTEXT_MANAGER。
  * 工具调用消息（role=tool）的 text 存工具结果，toolName/toolArgs/toolStatus 才有值；
  * 聊天消息这三个字段为 null。toolStatus：running（运行中）/ok/error。
  * AI 的思考内容独立放 thinking：appendThinking 的增量只进这个字段，正文 text 里不再
@@ -24,6 +24,11 @@ public record Message(String role, String text, long time, String toolName, Stri
 
     public boolean isToolCall() {
         return Conversation.ROLE_TOOL.equals(role);
+    }
+
+    /** 上下文压缩水位线标记：不进请求（请求构建按它裁剪水位线之前的历史）、瀑布流/导出不渲染 */
+    public boolean isContextMarker() {
+        return Conversation.ROLE_CONTEXT_MANAGER.equals(role);
     }
 
     /** 有独立思考内容（卡片才渲染思考区、落盘才写 thinking 键） */

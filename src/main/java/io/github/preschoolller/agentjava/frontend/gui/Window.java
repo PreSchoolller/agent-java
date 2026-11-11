@@ -1338,6 +1338,9 @@ public class Window extends JFrame {
             pendingScrollToBottom = true;
         }
         for (Message message : conversation.getMessages()) {
+            if (message.isContextMarker()) {
+                continue; // 压缩水位线标记不渲染（内部簿记，用户看到的历史不变）
+            }
             insertMessageCard(message);
         }
         rebindLiveStreams(conversation.getId()); // 切回还在生成的会话：把进行中的句柄挂回新卡片（要在物化前，待确认态才画得出来）

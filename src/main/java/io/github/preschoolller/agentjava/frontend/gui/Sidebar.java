@@ -586,6 +586,9 @@ public class Sidebar extends JPanel {
         File file = new File(dialog.getDirectory(), fileName);
         StringBuilder md = new StringBuilder("# ").append(conversation.getTitle()).append("\n\n");
         for (Message message : conversation.getMessages()) {
+            if (message.isContextMarker()) {
+                continue; // 压缩水位线标记不导出
+            }
             String speaker = Conversation.ROLE_USER.equals(message.role()) ? "我" : "AI";
             md.append("**").append(speaker).append("：**").append("\n\n")
                     .append(message.text()).append("\n\n---\n\n");
