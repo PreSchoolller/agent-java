@@ -164,14 +164,16 @@ public class Main {
         CompletableFuture.runAsync(() -> {
             PrepareParams prepareParams;
             LoopControl loopControl = new LoopControl();
+            boolean justCompressed = false;
             // 这里是唯一调用 doStream 的地方
-            while (loopControl.hasMoreRounds()) {
+            while (loopControl.hasMoreRounds() || justCompressed) {
                 int round = loopControl.nextRound();
                 try {
                     SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), true));
                     prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 每轮快照：只重取历史+建卡，配置不动
-                    doContextManage(conversation, prepareParams, conversation.getUsage(), loopConfig.modelCtxWindow, loopConfig.mHandlerName);
+                    boolean needCompress = doContextManage(conversation, prepareParams, loopConfig, justCompressed);
                     doStream(window, conversation, cancelled, prepareParams, loopControl);
+                    justCompressed = needCompress;
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     LOG.error("agent loop interrupted", e);
@@ -203,13 +205,14 @@ public class Main {
      * 消息列表；标记必须在 handle 正常返回后才落库：插件抛异常时水位线不推进，下一轮仍是
      * 全窗口可重试压缩，避免"标记已落但压缩结果未生成"把没压过的内容裁掉。
      */
-    private static void doContextManage(Conversation conversation, PrepareParams prepareParams,
-                                        Conversation.Usage usage, long context, String mHandlerName) {
+    private static boolean doContextManage(Conversation conversation, PrepareParams prepareParams, LoopConfig loopConfig, boolean justCompressed) {
         ArrayList<PromptParams.RoleMessage> roleMessages = new ArrayList<>(prepareParams.paramsBuilder.build().getRoleMessages());
+        Conversation.Usage usage = conversation.getUsage();
         long inputTokens = usage == null ? 0 : usage.inputTokens();
         long outputTokens = usage == null ? 0 : usage.outputTokens();
-        ContextHandler.ContextDetail contextDetail = new ContextHandler.ContextDetail(roleMessages, inputTokens, outputTokens, context, mHandlerName);
-        boolean needCompress = ContextHandlerManager.needCompress(contextDetail);
+        ContextHandler.ContextDetail contextDetail = new ContextHandler.ContextDetail(roleMessages, inputTokens, outputTokens,
+                loopConfig.modelCtxWindow, loopConfig.mHandlerName);
+        boolean needCompress = !justCompressed && ContextHandlerManager.needCompress(contextDetail);
         if (needCompress) {
             // contextDetail 补记标记（needCompress 的判定窗口不含标记——决策看的是真实内容）。
             // 标记用 CONTEXT_MARKER 角色：插件按角色识别边界并在返回时剥掉；就算劣质插件
@@ -225,8 +228,12 @@ public class Main {
             // 入队早于 doStream 的任何 EDT 任务，FIFO 保证占位卡此刻必是最后一条消息
             SwingUtilities.invokeLater(() -> window.getStore().insertContextMarkerBeforeLastAi(conversation.getId()));
         }
+        if (justCompressed) {
+            return false;
+        }
         prepareParams.paramsBuilder.clearRoleMessages();
         contextManaged.roleMessages().forEach(prepareParams.paramsBuilder::roleMessages);
+        return needCompress;
     }
 
     /** 每轮在 EDT 上重取消息快照（配置已由 LoopConfig 冻结，这里只取历史+建卡），勿进行耗时操作 */

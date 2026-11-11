@@ -41,7 +41,8 @@ public class ContextHandlerManager {
             for (ContextHandler modifiableHandler : modifiableHandlers) {
                 // 常量在前的写法：劣质插件 name() 返回 null 也不 NPE（EmptyTool/BadTool 就有 return null 的先例）
                 if (contextDetail.mHandlerName().equals(modifiableHandler.name())) {
-                    return modifiableHandler.handle(snapShot);
+                    ContextHandler.ContextManaged managed = modifiableHandler.handle(snapShot);
+                    return managed == null ? new ContextHandler.ContextManaged(roleMessages) : managed;
                 }
             }
             // 配置的名字当前没有注册（插件被卸载/改名）：回落消息原样发出，与前端"回落不启用"语义一致
