@@ -214,6 +214,7 @@ public class Main {
             // 标记用 CONTEXT_MARKER 角色：插件按角色识别边界并在返回时剥掉；就算劣质插件
             // 原样透传，provider 序列化对它也是静默跳过，不会污染请求
             roleMessages.add(new PromptParams.RoleMessage(RoleEnum.CONTEXT_MARKER, ContextHandler.MARKER_CONTENT));
+            LOG.info("need context compress--------++++++++++----------+++++++++------------++++++++++--------++++++++----------");
         }
         ContextHandler.ContextManaged contextManaged = ContextHandlerManager.handle(contextDetail);
         if (needCompress) {
