@@ -718,12 +718,8 @@ public class SettingsDialog extends JDialog {
         for (ContextCatalog.HandlerInfo info : handlers) {
             // 工具页同款（enabledToolCheckBox）：描述写进单选文字的 HTML 里直接可见，
             // 不藏进悬停提示；类名+完整描述（含换行原文）仍在 tooltip 供细看
-            String desc = escapeHtml(info.description().replace("\n", " ").strip());
-            String label = "<html><div style='width:330px'><span style='font-family:monospace;font-weight:bold;color:"
-                    + Ui.hex(Ui.TEXT) + "'>" + escapeHtml(info.name()) + "</span>&nbsp;&nbsp;<span style='color:"
-                    + Ui.hex(Ui.TEXT_SECONDARY) + "'>" + desc + "</span></div></html>";
-            row = addContextRadio(card, row, buttonGroup, label, info.name(),
-                    info.className() + "：" + info.description(), info.name().equals(stored));
+            row = addContextRadio(card, row, buttonGroup, handlerLabelText(info.name(), info.description()),
+                    info.name(), info.className() + "：" + info.description(), info.name().equals(stored));
         }
         // 可修改处理器的交互区（uiTips 实现了的才有）：与工具页同一套，持久化按插件 name() 泛化
         for (ContextCatalog.HandlerInfo info : handlers) {
@@ -748,15 +744,11 @@ public class SettingsDialog extends JDialog {
             roHeader.setForeground(Ui.TEXT_SECONDARY);
             row = addContextRow(card, row, roHeader, new Insets(10, 14, 2, 14), false);
             for (ContextCatalog.HandlerInfo info : readOnly) {
-                JLabel roName = new JLabel(info.name());
-                roName.setFont(new Font("Monospaced", Font.BOLD, 13));
-                roName.setForeground(Ui.TEXT);
-                roName.setToolTipText(info.className());
-                row = addContextRow(card, row, roName, new Insets(4, 14, 0, 14), false);
-                JLabel roDesc = new JLabel("<html><div style='width:330px'><span style='color:"
-                        + Ui.hex(Ui.TEXT_SECONDARY) + "'>" + escapeHtml(info.description()) + "</span></div></html>");
-                roDesc.setFont(Ui.FONT_PLAIN);
-                row = addContextRow(card, row, roDesc, new Insets(0, 14, 4, 14), true);
+                // 与可修改单选钮同一种行内样式（名字等宽粗体 + 描述次要色同行），两区看起来是一套
+                JLabel roLabel = new JLabel(handlerLabelText(info.name(), info.description()));
+                roLabel.setFont(Ui.FONT_PLAIN);
+                roLabel.setToolTipText(info.className());
+                row = addContextRow(card, row, roLabel, new Insets(4, 14, 4, 14), true);
                 if (info.interactiveTips() != null) {
                     row = addCardInteractiveRows(card, row, contextTarget(info));
                 }
@@ -1050,6 +1042,17 @@ public class SettingsDialog extends JDialog {
     private static String escapeHtml(String raw) {
         return raw.replace("&", "&amp;").replace("<", "&lt;")
                 .replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
+    /**
+     * 上下文页处理器行的行内文字（可修改单选钮与只读名行共用）：名字等宽粗体 + 描述次要色，
+     * 同一行内 HTML 固定 330px 折行（踩坑 #17 宽度契约；描述里的换行折叠成空格）。
+     */
+    private static String handlerLabelText(String name, String description) {
+        String desc = escapeHtml(description.replace("\n", " ").strip());
+        return "<html><div style='width:330px'><span style='font-family:monospace;font-weight:bold;color:"
+                + Ui.hex(Ui.TEXT) + "'>" + escapeHtml(name) + "</span>&nbsp;&nbsp;<span style='color:"
+                + Ui.hex(Ui.TEXT_SECONDARY) + "'>" + desc + "</span></div></html>";
     }
 
     /** 单页套滚动容器（原 groupsScroll 同款）：装不下出竖向滚动条、行永不挤压重排；
