@@ -796,14 +796,11 @@ public class SettingsDialog extends JDialog {
 
     /**
      * 把"展开/收起交互"开关+交互区挂进单列 GridBag 卡（上下文页用；工具页是双列走
-     * addInteractiveRows）。三行：插件名行（Monospaced 粗体，多个交互区堆叠时归属一眼可辨）、
-     * 开关钮、默认隐藏的交互区（fill HORIZONTAL 占满卡宽——踩坑 #17，提示文字别受硬裁）。
+     * addInteractiveRows）。两行：开关钮、默认隐藏的交互区（fill HORIZONTAL 占满卡宽——
+     * 踩坑 #17，提示文字别受硬裁）。不挂归属名行：调用点保证交互区紧跟在带名字的行
+     * （可修改的单选钮 / 只读的名行）之后，再给一行名字就是重复。
      */
     private int addCardInteractiveRows(JPanel card, int row, InteractiveTarget target) {
-        JLabel owner = new JLabel(target.name());
-        owner.setFont(new Font("Monospaced", Font.BOLD, 13));
-        owner.setForeground(Ui.TEXT);
-        row = addContextRow(card, row, owner, new Insets(8, 14, 2, 14), false);
         // Ui.button 是自绘工厂（无 selected 视觉），展开态换文字；不用 ▸▾ 箭头——
         // 微软雅黑缺字形渲染成方框（踩坑 #5），设置面板内「展开/收起」纯文字是既有惯例
         JButton toggle = Ui.button("展开交互");
@@ -820,7 +817,7 @@ public class SettingsDialog extends JDialog {
             card.revalidate();
             card.repaint();
         });
-        row = addContextRow(card, row, toggle, new Insets(0, 14, 2, 14), false);
+        row = addContextRow(card, row, toggle, new Insets(4, 14, 2, 14), false);
         row = addContextRow(card, row, section, new Insets(0, 14, 8, 14), true);
         return row;
     }
