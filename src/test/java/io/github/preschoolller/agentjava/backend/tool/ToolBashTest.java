@@ -247,15 +247,11 @@ class ToolBashTest {
         assertEquals("", invokeParseProperty("regex=")[1]);
         // 重复 key 以最后一个有效 value 为准
         assertEquals("GITBASH", invokeParseProperty("bash=WSL;bash=GITBASH")[0]);
-        // 旧格式兼容（k=v 之前落盘的输入）
-        assertEquals("WSL", invokeParseProperty("WSL")[0]);
-        assertEquals("GITBASH", invokeParseProperty("GITBASH")[0]);
-        assertEquals("C:\\x\\y\\bash.exe", invokeParseProperty("CUSTOM:C:\\x\\y\\bash.exe")[0]);
-        assertEquals("\\d+\\.sh", invokeParseProperty("REGEX:\\d+\\.sh")[1]);
-        // 新旧混排
-        String[] mixed = invokeParseProperty("bash=WSL;REGEX:a|b");
-        assertEquals("WSL", mixed[0]);
-        assertEquals("a|b", mixed[1]);
+        // 旧前缀格式（WSL/CUSTOM:/REGEX:）已随键前缀换 plugin-properties 一并放弃支持：
+        // 无 '=' 的段一律忽略（老数据本就只在 dev 阶段存在）
+        assertNull(invokeParseProperty("WSL")[0]);
+        assertNull(invokeParseProperty("CUSTOM:C:\\x\\y\\bash.exe")[0]);
+        assertNull(invokeParseProperty("REGEX:\\d+\\.sh")[1]);
     }
 
     private static void setBashHead(ToolBash.BashHead bashHead) {
