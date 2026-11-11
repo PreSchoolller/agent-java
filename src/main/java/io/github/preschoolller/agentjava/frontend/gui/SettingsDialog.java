@@ -75,7 +75,7 @@ import java.util.concurrent.CompletableFuture;
  * + 每个支持交互的工具一条可展开交互区（uiTips 提示 + 输入框 + 执行钮 + 结果提示：
  *   输入经 uiInteractive 交给工具自行解释应用（bash 的 bash 选择/转文件正则都走这里，
  *   k=v 格式如 "bash=WSL;regex=(here-?doc|<<)"，键缺省=不动，键在值空=清除），工具处理后由前端立即
- *   setPersistentToolInput + save 落盘——持久化是前端输入之后的事，后端只读消费）；
+ *   setPersistentPluginInput + save 落盘——持久化是前端输入之后的事，后端只读消费）；
  * 「日志」= 控制台/文件两块输出参数（log.* 自定义键落盘，TinyLogConfigurationLoader 启动时
  * 映射成日志后端属性——换后端只改映射；改后重启生效）。
  * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
@@ -987,7 +987,7 @@ public class SettingsDialog extends JDialog {
      * 后台执行插件交互（uiInteractive 可能拉起进程探测，最坏 10 秒，不占 EDT）：期间执行钮
      * 和输入框置灰、结果标签先给"执行中…"；反馈回来按是否被插件实际处理分色显示。插件实际
      * 处理了输入（非接口默认哨兵 "not implemented"、调用未失败）才由前端落盘
-     * （setPersistentToolInput + save——持久化是前端的事这个契约的落地处，键=插件 name()，
+     * （setPersistentPluginInput + save——持久化是前端的事这个契约的落地处，键=插件 name()，
      * 后端 PluginBase.getPersistentInput 同名消费）。
      */
     private void runInteractive(InteractiveTarget target, JTextField inputField, JButton execButton, JLabel result) {
@@ -1001,7 +1001,7 @@ public class SettingsDialog extends JDialog {
             String feedback = target.interactive().apply(target.name(), input);
             boolean processed = feedback != null && !"not implemented".equals(feedback);
             if (processed) { // 没实现的输入不占配置槽；存了插件侧也会在自己的解释器里忽略，但保持干净
-                settings.setPersistentToolInput(target.name(), input);
+                settings.setPersistentPluginInput(target.name(), input);
                 settings.save();
             }
             javax.swing.SwingUtilities.invokeLater(() -> {

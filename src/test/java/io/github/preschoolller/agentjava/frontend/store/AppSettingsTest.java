@@ -336,24 +336,24 @@ class AppSettingsTest {
     void t11_persistentToolInputRoundTrip() throws Exception {
         Path settingsFile = file("settings.properties");
         AppSettings testSettings = AppSettings.at(settingsFile);
-        assertNull(testSettings.getPersistentToolInput("bash"), "未配置默认 null");
+        assertNull(testSettings.getPersistentPluginInput("bash"), "未配置默认 null");
         // 前端交互后 set + save 成对：get 只读快照，set 不 save 读不见（契约如此，别单用 set）
-        testSettings.setPersistentToolInput("bash", "CUSTOM:/usr/bin/bash");
-        assertNull(testSettings.getPersistentToolInput("bash"), "未 save 前读不到（get 只读快照）");
+        testSettings.setPersistentPluginInput("bash", "CUSTOM:/usr/bin/bash");
+        assertNull(testSettings.getPersistentPluginInput("bash"), "未 save 前读不到（get 只读快照）");
         testSettings.save();
-        assertEquals("CUSTOM:/usr/bin/bash", testSettings.getPersistentToolInput("bash"), "save 后读快照");
+        assertEquals("CUSTOM:/usr/bin/bash", testSettings.getPersistentPluginInput("bash"), "save 后读快照");
         // 用户报的丢字段根因回归：load 必须把 tool-properties.* 回填 toolProperties——
         // save() 是从模型重建整份文件，不回填的话启动后第一次防抖 save 就把键抹了
         AppSettings reloaded = AppSettings.at(settingsFile);
-        assertEquals("CUSTOM:/usr/bin/bash", reloaded.getPersistentToolInput("bash"), "重启（重载）后读得见");
+        assertEquals("CUSTOM:/usr/bin/bash", reloaded.getPersistentPluginInput("bash"), "重启（重载）后读得见");
         reloaded.save();
-        assertEquals("CUSTOM:/usr/bin/bash", reloaded.getPersistentToolInput("bash"), "重载后再 save 仍在");
-        assertEquals("CUSTOM:/usr/bin/bash", AppSettings.at(settingsFile).getPersistentToolInput("bash"),
+        assertEquals("CUSTOM:/usr/bin/bash", reloaded.getPersistentPluginInput("bash"), "重载后再 save 仍在");
+        assertEquals("CUSTOM:/usr/bin/bash", AppSettings.at(settingsFile).getPersistentPluginInput("bash"),
                 "再落盘文件里仍在");
         // 泛化槽多工具互不串
-        reloaded.setPersistentToolInput("read", "UTF-8");
+        reloaded.setPersistentPluginInput("read", "UTF-8");
         reloaded.save();
-        assertEquals("CUSTOM:/usr/bin/bash", reloaded.getPersistentToolInput("bash"), "另一工具的键不受影响");
-        assertEquals("UTF-8", reloaded.getPersistentToolInput("read"), "第二个工具写入独立");
+        assertEquals("CUSTOM:/usr/bin/bash", reloaded.getPersistentPluginInput("bash"), "另一工具的键不受影响");
+        assertEquals("UTF-8", reloaded.getPersistentPluginInput("read"), "第二个工具写入独立");
     }
 }

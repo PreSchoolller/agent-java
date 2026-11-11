@@ -32,7 +32,7 @@ public final class AppSettings {
     private static final Path FILE = Constants.APP_USER_DIR.resolve("settings.properties");
     /** 默认方案名：首次启动与旧配置迁移时创建 */
     public static final String DEFAULT_PROFILE_NAME = "默认";
-    public static final String TOOL_PROPERTIES = "tool-properties.";
+    public static final String PLUGIN_PROPERTIES = "plugin-properties.";
 
     private static AppSettings instance;
 
@@ -91,7 +91,7 @@ public final class AppSettings {
     private String activeContextHandler;
 
     /** 原始键值快照：load() 填充、save() 末尾整体替换（引用原子读，读侧无锁安全）；
-     *  默认空表兜全新安装首次读（load 的早退分支不碰它，getPersistentToolInput 不 NPE） */
+     *  默认空表兜全新安装首次读（load 的早退分支不碰它，getPersistentPluginInput 不 NPE） */
     private Properties properties = new Properties();
 
     /** 工具持久化交互输入的待落盘区：前端交互后写入、save() 合并进 properties 落盘。
@@ -715,11 +715,11 @@ public final class AppSettings {
                 profiles.put(DEFAULT_PROFILE_NAME, new Profile());
             }
         }
-        // 工具持久化交互输入（tool-properties.<工具name()>）：泛化键不逐个解析，整段收进
+        // 插件持久化交互输入（plugin-properties.<插件name()>）：泛化键不逐个解析，整段收进
         // 待落盘 map。必须回填——save() 是"从模型重建整份文件"，只留在 properties 快照里的
         // 键活不过启动后第一次防抖落盘（现象：关应用时文件里有、重启后被自己的 save 抹掉）
         for (String key : properties.stringPropertyNames()) {
-            if (key.startsWith(TOOL_PROPERTIES) && key.length() > TOOL_PROPERTIES.length()) {
+            if (key.startsWith(PLUGIN_PROPERTIES) && key.length() > PLUGIN_PROPERTIES.length()) {
                 toolProperties.put(key, properties.getProperty(key));
             }
         }
@@ -801,22 +801,22 @@ public final class AppSettings {
     }
 
     /**
-     * 读工具的持久化交互输入（键 tool-properties.前缀 + 工具 name()，后端经
-     * ToolManager.getPersistentToolInput → Tool.getPersistentInput 消费）。读的是最近一次
+     * 读插件的持久化交互输入（键 plugin-properties.前缀 + 插件 name()，后端经
+     * PluginManager.getPersistentPluginInput → PluginBase.getPersistentInput 消费）。读的是最近一次
      * save() 后的快照——前端交互后 set + save 成对调用，保证下次读得见。
-     * @param toolName 工具名（工具注册键，比运行时类名稳：不受包装/代理影响）
-     * @return 未配置返回 null（注意空串是合法值，语义由各工具自己的解释器定）
+     * @param pluginName 插件名（插件注册键，比运行时类名稳：不受包装/代理影响）
+     * @return 未配置返回 null（注意空串是合法值，语义由各插件自己的解释器定）
      */
-    public String getPersistentToolInput(String toolName) {
-        return properties.getProperty(TOOL_PROPERTIES + toolName);
+    public String getPersistentPluginInput(String pluginName) {
+        return properties.getProperty(PLUGIN_PROPERTIES + pluginName);
     }
 
     /**
-     * 写工具的持久化交互输入（前端交互成功后调用，随后必须 save() 才落盘——
+     * 插件的持久化交互输入（前端交互成功后调用，随后必须 save() 才落盘——
      * 写只进待落盘区，save 时合并进 properties）。null 值不允许（Properties 语义），
-     * 清除语义=存空串，解释权在工具侧。
+     * 清除语义=存空串，解释权在插件侧。
      */
-    public void setPersistentToolInput(String toolName, String input) {
-        toolProperties.put(TOOL_PROPERTIES + toolName, input);
+    public void setPersistentPluginInput(String pluginName, String input) {
+        toolProperties.put(PLUGIN_PROPERTIES + pluginName, input);
     }
 }

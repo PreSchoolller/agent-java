@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * 上下文处理器注册表读桥：读 ContextHandlerManager 注册的处理器清单与 ui 交互通道
  * （uiTips/uiInteractive/getPersistentInput，同 ToolCatalog 模式——持久化键=插件 name()，
- * 后端经 PluginBase.getPersistentInput 消费，前端 setPersistentToolInput 落盘，两端同名）。
+ * 后端经 PluginBase.getPersistentInput 消费，前端 setPersistentPluginInput 落盘，两端同名）。
  * 与 ProviderCatalog 同一模式：读桥包 catch(Throwable)，拿不到退空列表/null，不抛。
  */
 public final class ContextCatalog {
