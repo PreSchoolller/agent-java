@@ -19,11 +19,9 @@ public class AiBriefContext implements ContextHandler {
         if (input == null || input.isBlank()) {
             return;
         }
-        String number = input.strip().substring(0, 1);
-
         try {
-            int i = Integer.parseInt(number);
-            if (i == 0 || (i >= 5 && i <= 10)) {
+            int i = Integer.parseInt(input.strip());
+            if (i == 0 || (i >= 5 && i <= 9)) {
                 threshold = i;
             } else {
                 LOG.warn("wrong number of persistent input of AiBriefContext: {}", input);
@@ -53,10 +51,10 @@ public class AiBriefContext implements ContextHandler {
     @Override
     public String uiTips() {
         return """
-                设置上下文压缩阈值，只接受 0，5，6，7，8，9，10
+                设置上下文压缩阈值，只接受 0，5，6，7，8，9
                 空/空白 内容回显当前阈值
                 0 表示不压缩
-                5到10之间的任意数x表示阈值为x除以10;
+                5到9之间的任意数x表示阈值为x除以10;
                 """;
     }
 
@@ -71,9 +69,9 @@ public class AiBriefContext implements ContextHandler {
         } catch (NumberFormatException e) {
             LOG.info("failed to parse input threshold string to int: {}", input);
         }
-        if (newThreshold < 0 || newThreshold > 10 || (newThreshold > 0 && newThreshold < 5)) {
+        if (newThreshold < 0 || newThreshold > 9 || (newThreshold > 0 && newThreshold < 5)) {
             LOG.info("input threshold exceeds range: {}", newThreshold);
-            return "格式错误，只接受[0|5-10]纯数字";
+            return "格式错误，只接受[0|5-9]纯数字";
         }
         synchronized (AiBriefContext.class) {
             threshold = newThreshold;
@@ -104,7 +102,7 @@ public class AiBriefContext implements ContextHandler {
 
     @Override
     public boolean needCompress(ContextDetail contextDetail) {
-        if (contextDetail.ctxWindow() == 0) {
+        if (contextDetail.ctxWindow() == 0 || threshold == 0) {
             return false;
         }
         return contextDetail.ctxWindow() * threshold <= contextDetail.inputTokens() * 10;

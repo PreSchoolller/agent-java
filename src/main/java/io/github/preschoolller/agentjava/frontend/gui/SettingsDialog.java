@@ -716,7 +716,13 @@ public class SettingsDialog extends JDialog {
                 "不使用任何可修改的上下文处理器，历史消息每次全量发出",
                 stored == null || stored.isBlank());
         for (ContextCatalog.HandlerInfo info : handlers) {
-            row = addContextRadio(card, row, buttonGroup, info.name(), info.name(),
+            // 工具页同款（enabledToolCheckBox）：描述写进单选文字的 HTML 里直接可见，
+            // 不藏进悬停提示；类名+完整描述（含换行原文）仍在 tooltip 供细看
+            String desc = escapeHtml(info.description().replace("\n", " ").strip());
+            String label = "<html><div style='width:330px'><span style='font-family:monospace;font-weight:bold;color:"
+                    + Ui.hex(Ui.TEXT) + "'>" + escapeHtml(info.name()) + "</span>&nbsp;&nbsp;<span style='color:"
+                    + Ui.hex(Ui.TEXT_SECONDARY) + "'>" + desc + "</span></div></html>";
+            row = addContextRadio(card, row, buttonGroup, label, info.name(),
                     info.className() + "：" + info.description(), info.name().equals(stored));
         }
         // 可修改处理器的交互区（uiTips 实现了的才有）：与工具页同一套，持久化按插件 name() 泛化
@@ -784,7 +790,8 @@ public class SettingsDialog extends JDialog {
         radio.setSelected(selected);
         group.add(radio);
         contextHandlerRadios.add(radio);
-        return addContextRow(card, row, radio, new Insets(0, 14, 2, 14), false);
+        // fill=HORIZONTAL：HTML 文字按 div 宽度契约折行的前提（踩坑 #17）
+        return addContextRow(card, row, radio, new Insets(0, 14, 2, 14), true);
     }
 
     /**
