@@ -172,25 +172,26 @@ class PersistenceTest {
     @Test
     @Order(7)
     void t07_contextMarkerRoundTrip() throws Exception {
-        // 上下文压缩水位线标记：落盘往返（role 字符串序列化，与普通消息同机制）；
-        // 标记之后的消息保留（下轮请求构建按标记裁剪，标记前的历史不再发给模型）
+        // 上下文压缩水位线标记：落盘往返（role 字符串序列化，与普通消息同机制）+ 插入位置——
+        // 压缩轮的标记插在本轮 AI 占位卡之前（摘要稍后填进占位卡，必须落在标记之后，
+        // 下轮请求构建按标记裁剪时摘要才在窗口里；标记前的历史不再发给模型）
         ConversationStore markerStore = new ConversationStore(historyFile());
         String markerId = markerStore.newConversation().getId();
         markerStore.appendMessage(markerId, Conversation.ROLE_USER, "被压缩的旧历史");
-        markerStore.appendMessage(markerId, Conversation.ROLE_AI, "旧回复");
-        markerStore.appendContextMarker(markerId);
+        markerStore.appendMessage(markerId, Conversation.ROLE_AI, "压缩摘要（本轮回复占位卡）");
+        markerStore.insertContextMarkerBeforeLastAi(markerId);
         markerStore.appendMessage(markerId, Conversation.ROLE_USER, "标记后的新问题");
         Conversation reloaded = byId(new ConversationStore(historyFile()), markerId);
         List<Message> messages = reloaded.getMessages();
         assertEquals(4, messages.size(), "标记消息与普通消息一起落盘");
-        Message marker = messages.get(2);
-        assertTrue(marker.isContextMarker(), "标记 role 往返");
+        Message marker = messages.get(1);
+        assertTrue(marker.isContextMarker(), "标记插在 AI 占位卡之前（role 往返）");
         assertEquals(Conversation.ROLE_CONTEXT_MANAGER, marker.role(), "标记 role 值");
-        assertTrue(messages.get(0).isContextMarker() == false && messages.get(3).isContextMarker() == false,
-                "普通消息不受影响");
+        assertTrue(messages.get(0).isContextMarker() == false && messages.get(3).isContextMarker() == false
+                && Conversation.ROLE_AI.equals(messages.get(2).role()), "AI 占位卡排在标记后，普通消息不受影响");
         Object sessionRoot = JsonKit.parse(Files.readString(dir.resolve("sessions").resolve(markerId)));
         assertTrue(sessionRoot instanceof List<?> sessionList && sessionList.size() == 4
-                && Conversation.ROLE_CONTEXT_MANAGER.equals(((Map<?, ?>) sessionList.get(2)).get("role")),
+                && Conversation.ROLE_CONTEXT_MANAGER.equals(((Map<?, ?>) sessionList.get(1)).get("role")),
                 "单会话文件承载标记");
     }
 

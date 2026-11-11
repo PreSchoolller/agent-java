@@ -236,6 +236,19 @@ public class Conversation {
         return message;
     }
 
+    /**
+     * 插入上下文压缩水位线标记到指定位置。压缩轮必须用它把标记插在本轮 AI 占位卡**之前**
+     * （占位卡在 appendMessages 快照期就已落库、早于标记的 EDT 任务，追加会排到占位卡后面，
+     * 压缩摘要作为本轮响应填进占位卡后就落在标记前——下轮水位线裁剪会把摘要裁掉，压缩白做），
+     * 语义：标记=压缩历史的终点，标记之后（含本轮摘要与后续轮次）都是压缩后的新内容。
+     */
+    public Message insertContextMarker(int index) {
+        Message message = new Message(ROLE_CONTEXT_MANAGER, "", System.currentTimeMillis());
+        ensureLoaded().add(Math.max(0, Math.min(index, ensureLoaded().size())), message);
+        touch();
+        return message;
+    }
+
     /** 删除最后一条消息（重新生成流程：后端先删旧回答再重新请求），返回被删消息；空会话返回 null */
     public Message removeLast() {
         List<Message> loadedMessages = ensureLoaded();

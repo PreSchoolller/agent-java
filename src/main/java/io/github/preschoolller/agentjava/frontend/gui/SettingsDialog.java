@@ -33,6 +33,7 @@ import javax.swing.text.DocumentFilter;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -692,50 +693,36 @@ public class SettingsDialog extends JDialog {
                 + "（截断/压缩等），「不启用」=消息原样发出。只读处理器不参与选择（记录行为始终"
                 + "开启），注册了就列在下方</span></div></html>");
         hint.setFont(Ui.FONT_PLAIN);
+        // 全页单列 GridBag 行（踩坑 #4/#17：本页只有 GridBag 一种布局——此前把单选钮/交互区塞进
+        // 嵌套 BoxLayout 面板再整块放进 GridBag 单元格，对齐补偿与首选高全不可控，GUI 回归实测
+        // 整页挤成一团、兜底行溢出卡外；HTML 提示行必须 weightx=1 + fill HORIZONTAL 才按宽度契约折行）
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(10, 14, 6, 14);
-        gbc.anchor = GridBagConstraints.NORTHWEST;
         gbc.gridx = 0;
         gbc.gridy = 0;
         gbc.weightx = 1;
+        gbc.anchor = GridBagConstraints.NORTHWEST;
         gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(10, 14, 6, 14);
         card.add(hint, gbc);
-
-        JPanel handlerPanel = new JPanel();
-        handlerPanel.setOpaque(false);
-        handlerPanel.setLayout(new BoxLayout(handlerPanel, BoxLayout.Y_AXIS));
-        gbc.insets = new Insets(0, 0, 0, 0);
-        gbc.gridy = 1;
-        card.add(handlerPanel, gbc);
 
         // 首枚固定「不启用」（clientProperty 空串=清除落盘值）；已注册处理器逐一枚举。
         // 预选=落盘的名字；落盘名字不在列表里（插件被删/注册表不可用时列表为空）回落"不启用"，
         // 与 Provider 页"失效回落"同一规则——只是这里回落到关闭而不是默认启用
         List<ContextCatalog.HandlerInfo> handlers = ContextCatalog.modifiable();
         ButtonGroup buttonGroup = new ButtonGroup();
-        JRadioButton offRadio = new JRadioButton("不启用（消息原样发出）");
-        offRadio.putClientProperty("handlerName", "");
-        offRadio.setToolTipText("不使用任何可修改的上下文处理器，历史消息每次全量发出");
-        Ui.styleRadioButton(offRadio);
+        int row = 1;
         String stored = settings.getActiveContextHandler();
-        offRadio.setSelected(stored == null || stored.isBlank());
-        buttonGroup.add(offRadio);
-        contextHandlerRadios.add(offRadio);
-        handlerPanel.add(offRadio);
+        row = addContextRadio(card, row, buttonGroup, "不启用（消息原样发出）", "",
+                "不使用任何可修改的上下文处理器，历史消息每次全量发出",
+                stored == null || stored.isBlank());
         for (ContextCatalog.HandlerInfo info : handlers) {
-            JRadioButton radio = new JRadioButton(info.name());
-            radio.putClientProperty("handlerName", info.name());
-            radio.setToolTipText(info.className() + "：" + info.description());
-            Ui.styleRadioButton(radio);
-            radio.setSelected(info.name().equals(stored));
-            buttonGroup.add(radio);
-            contextHandlerRadios.add(radio);
-            handlerPanel.add(radio);
+            row = addContextRadio(card, row, buttonGroup, info.name(), info.name(),
+                    info.className() + "：" + info.description(), info.name().equals(stored));
         }
         // 可修改处理器的交互区（uiTips 实现了的才有）：与工具页同一套，持久化按插件 name() 泛化
         for (ContextCatalog.HandlerInfo info : handlers) {
             if (info.interactiveTips() != null) {
-                addBoxInteractiveRows(handlerPanel, contextTarget(info));
+                row = addCardInteractiveRows(card, row, contextTarget(info));
             }
         }
         if (handlers.isEmpty()) {
@@ -744,33 +731,28 @@ public class SettingsDialog extends JDialog {
             JLabel empty = new JLabel("未拿到已注册的可修改上下文处理器（注册表为空或不可用）");
             empty.setFont(Ui.FONT_PLAIN);
             empty.setForeground(Ui.TEXT_SECONDARY);
-            handlerPanel.add(Box.createVerticalStrut(4));
-            handlerPanel.add(empty);
+            row = addContextRow(card, row, empty, new Insets(4, 14, 8, 14), false);
         }
         // 只读处理器展示区：不可选择（单选列表不含它们），记录行为始终开启；实现了 uiTips 的
         // 同样挂交互区（persistent 泛化后读写路径与可修改处理器完全一致）
         List<ContextCatalog.HandlerInfo> readOnly = ContextCatalog.readOnly();
         if (!readOnly.isEmpty()) {
-            handlerPanel.add(Box.createVerticalStrut(10));
             JLabel roHeader = new JLabel("只读处理器（自动运行，不可选择）");
             roHeader.setFont(Ui.FONT_PLAIN);
             roHeader.setForeground(Ui.TEXT_SECONDARY);
-            handlerPanel.add(roHeader);
+            row = addContextRow(card, row, roHeader, new Insets(10, 14, 2, 14), false);
             for (ContextCatalog.HandlerInfo info : readOnly) {
-                handlerPanel.add(Box.createVerticalStrut(4));
                 JLabel roName = new JLabel(info.name());
                 roName.setFont(new Font("Monospaced", Font.BOLD, 13));
                 roName.setForeground(Ui.TEXT);
                 roName.setToolTipText(info.className());
-                roName.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-                handlerPanel.add(roName);
+                row = addContextRow(card, row, roName, new Insets(4, 14, 0, 14), false);
                 JLabel roDesc = new JLabel("<html><div style='width:330px'><span style='color:"
                         + Ui.hex(Ui.TEXT_SECONDARY) + "'>" + escapeHtml(info.description()) + "</span></div></html>");
                 roDesc.setFont(Ui.FONT_PLAIN);
-                roDesc.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-                handlerPanel.add(roDesc);
+                row = addContextRow(card, row, roDesc, new Insets(0, 14, 4, 14), true);
                 if (info.interactiveTips() != null) {
-                    addBoxInteractiveRows(handlerPanel, contextTarget(info));
+                    row = addCardInteractiveRows(card, row, contextTarget(info));
                 }
             }
         }
@@ -779,25 +761,48 @@ public class SettingsDialog extends JDialog {
         return groups;
     }
 
+    /** 上下文页单列 GridBag 行的统一入口：weightx=1 让短控件也锚左，fill 决定是否横向占满卡宽 */
+    private int addContextRow(JPanel card, int row, Component comp, Insets insets, boolean fill) {
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.weightx = 1;
+        gbc.anchor = GridBagConstraints.WEST;
+        gbc.fill = fill ? GridBagConstraints.HORIZONTAL : GridBagConstraints.NONE;
+        gbc.insets = insets;
+        card.add(comp, gbc);
+        return row + 1;
+    }
+
+    /** 上下文页单选行：登记进 buttonGroup/contextHandlerRadios（save 按 clientProperty 收集），返回下一行号 */
+    private int addContextRadio(JPanel card, int row, ButtonGroup group, String label,
+                                String handlerName, String tooltip, boolean selected) {
+        JRadioButton radio = new JRadioButton(label);
+        radio.putClientProperty("handlerName", handlerName);
+        radio.setToolTipText(tooltip);
+        Ui.styleRadioButton(radio);
+        radio.setSelected(selected);
+        group.add(radio);
+        contextHandlerRadios.add(radio);
+        return addContextRow(card, row, radio, new Insets(0, 14, 2, 14), false);
+    }
+
     /**
-     * 把"展开/收起交互"开关+交互区挂进垂直 Box 容器（上下文页用；工具页是 gridbag 走
-     * addInteractiveRows）。开关前先给插件名行（Monospaced 粗体，与工具页行首同款），
-     * 多个交互区堆叠时归属一眼可辨。
+     * 把"展开/收起交互"开关+交互区挂进单列 GridBag 卡（上下文页用；工具页是双列走
+     * addInteractiveRows）。三行：插件名行（Monospaced 粗体，多个交互区堆叠时归属一眼可辨）、
+     * 开关钮、默认隐藏的交互区（fill HORIZONTAL 占满卡宽——踩坑 #17，提示文字别受硬裁）。
      */
-    private void addBoxInteractiveRows(JPanel box, InteractiveTarget target) {
-        box.add(Box.createVerticalStrut(8));
+    private int addCardInteractiveRows(JPanel card, int row, InteractiveTarget target) {
         JLabel owner = new JLabel(target.name());
         owner.setFont(new Font("Monospaced", Font.BOLD, 13));
         owner.setForeground(Ui.TEXT);
-        owner.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
-        box.add(owner);
+        row = addContextRow(card, row, owner, new Insets(8, 14, 2, 14), false);
         // Ui.button 是自绘工厂（无 selected 视觉），展开态换文字；不用 ▸▾ 箭头——
         // 微软雅黑缺字形渲染成方框（踩坑 #5），设置面板内「展开/收起」纯文字是既有惯例
         JButton toggle = Ui.button("展开交互");
         toggle.setToolTipText("展开 " + target.name() + " 的交互区（uiTips 描述的功能，输入交给插件自行解释）");
         toggle.setPreferredSize(new Dimension(96, 24));
         toggle.setMinimumSize(toggle.getPreferredSize());
-        toggle.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
         JPanel section = buildInteractiveSection(target);
         section.setVisible(false);
         toggle.addActionListener(e -> {
@@ -805,13 +810,12 @@ public class SettingsDialog extends JDialog {
             toggle.putClientProperty("open", open);
             toggle.setText(open ? "收起交互" : "展开交互");
             section.setVisible(open);
-            box.revalidate();
-            box.repaint();
+            card.revalidate();
+            card.repaint();
         });
-        box.add(Box.createVerticalStrut(2));
-        box.add(toggle);
-        box.add(Box.createVerticalStrut(2));
-        box.add(section);
+        row = addContextRow(card, row, toggle, new Insets(0, 14, 2, 14), false);
+        row = addContextRow(card, row, section, new Insets(0, 14, 8, 14), true);
+        return row;
     }
 
     /**
