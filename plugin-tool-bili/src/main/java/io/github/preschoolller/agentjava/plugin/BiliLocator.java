@@ -83,6 +83,10 @@ final class BiliLocator {
         }
         list.add(DEFAULT_TOOLS_1);
         list.add(DEFAULT_TOOLS_2);
+        // 插件 jar 里打包的 whale 副本解压后的 tools/（whale start 过一次就存在）——
+        // 让新机器零配置可用：bili/bili_write 工具与 whale 宿主共用这一份自包含副本
+        list.add(io.github.preschoolller.agentjava.backend.constant.Constants.APP_USER_DIR
+                .resolve("whale").resolve("tools").toString());
         return list;
     }
 

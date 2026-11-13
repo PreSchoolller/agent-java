@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -25,12 +26,14 @@ import java.util.concurrent.TimeUnit;
 /**
  * dsh-shim 进程的生命周期管理（whale 工具的执行体）。
  *
- * start 做四件事，顺序有讲究：
- *   1. 定位 dsh-bili-whale 根目录（bili 工具链 tools/ 的上一级，共用一份定位配置）
- *   2. 拉起回环 API（AgentApiServer，Main.apiInject 承接注入）——shim 起来第一件事
+ * start 做五件事，顺序有讲究：
+ *   1. 把插件资源里打包的 dsh-bili-whale 源码（resources/whale/，含 lib/tools/node_modules）
+ *      解压到 ~/.agentjava/whale/（版本一致则跳过）——jar 自包含，新机器零外部依赖（除 node）
+ *   2. 定位 dsh-bili-whale 根目录：优先解压目录，env BILI_WHALE_DIR 显式覆盖，外部目录兜底
+ *   3. 拉起回环 API（AgentApiServer，Main.apiInject 承接注入）——shim 起来第一件事
  *      就是读 token 发请求，server 必须先在
- *   3. 把插件资源里的 dsh-shim.mjs 解压到 ~/.agentjava/shim/（每次覆盖：插件升级跟随）
- *   4. 起子进程 node shim，stdout/stderr 全量落 ~/.agentjava/logs/whale-shim.log
+ *   4. 把插件资源里的 dsh-shim.mjs 解压到 ~/.agentjava/shim/（每次覆盖：插件升级跟随）
+ *   5. 起子进程 node shim，stdout/stderr 全量落 ~/.agentjava/logs/whale-shim.log
  *
  * 存活判定（实战教训，勿回退）：**不信内存里的 Process 对象**——Windows 下实测
  * isAlive() 会假阴性（进程活着却报死），且应用重启后内存全空而 shim 作为独立进程
@@ -50,6 +53,8 @@ final class WhaleHost {
             .connectTimeout(Duration.ofSeconds(2)).build();
     private static final Path PID_FILE = Constants.APP_USER_DIR.resolve("shim").resolve("shim.pid");
     private static final Path LOG_FILE = Constants.APP_USER_DIR.resolve("logs").resolve("whale-shim.log");
+    /** 打包在插件资源里的 whale 解压落点（也是 bili/bili_write 工具链的兜底位置） */
+    static final Path BUNDLED_WHALE_DIR = Constants.APP_USER_DIR.resolve("whale");
 
     private WhaleHost() {
     }
@@ -73,15 +78,13 @@ final class WhaleHost {
                         + "  · 日志：" + LOG_FILE + "（whale log 查看）\n"
                         + "生物钟/监听随该进程继续生效；保持应用开着（托盘常驻）即可。";
             }
-            // 1. 定位 dsh-bili-whale 根目录：bili.mjs 的上一级是 tools/，再上一级是插件根
-            BiliLocator.Entry entry = BiliLocator.resolveEntry();
-            if (!entry.ok()) {
-                return entry.error();
-            }
-            Path whaleDir = entry.biliMjs().getParent().getParent();
-            if (!Files.isRegularFile(whaleDir.resolve("lib").resolve("index.js"))) {
-                return "工具链定位成功（" + entry.biliMjs() + "），但其上级目录不是完整的 dsh-bili-whale"
-                        + "（缺 lib/index.js，宿主侧跑不起来）";
+            // 1. 解压插件里打包的 whale 源码（版本一致则跳过），再按优先级定位根目录：
+            //    env BILI_WHALE_DIR 显式覆盖 → 解压目录（jar 自包含的主路径）→ 外部目录兜底
+            Path whaleDir = resolveWhaleDir();
+            if (whaleDir == null) {
+                BiliLocator.Entry entry = BiliLocator.resolveEntry();
+                return "打包的 whale 源码解压失败，且外部目录也没找到（"
+                        + (entry.ok() ? entry.biliMjs() + " 的上级缺 lib/index.js" : entry.error()) + "）";
             }
             // 2. 回环 API（token 也在这一步懒生成，shim 启动时读的就是它）
             String apiMsg = ensureApi();
@@ -96,7 +99,7 @@ final class WhaleHost {
                 AgentApiServer.stop();
                 return "shim 脚本解压失败：" + e.getMessage();
             }
-            // 4. 起子进程（不经 shell，参数直传；输出全量进日志文件）
+            // 5. 起子进程（不经 shell，参数直传；输出全量进日志文件）
             String node = BiliLocator.resolveNode();
             if (node == null) {
                 AgentApiServer.stop();
@@ -163,6 +166,138 @@ final class WhaleHost {
             Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
         }
         return target;
+    }
+
+    // ---------------------------------------------------------------- 打包的 whale
+
+    /**
+     * 定位 dsh-bili-whale 根目录。优先级：
+     *   1. 环境变量 BILI_WHALE_DIR（显式覆盖，调试/换源用；目录须含 lib/index.js）
+     *   2. 解压后的打包副本 ~/.agentjava/whale（jar 自包含主路径）
+     *   3. 外部目录兜底：bili 工具链 tools/ 的上一级（老用户配置过的位置）
+     * 找不到返回 null。
+     */
+    static Path resolveWhaleDir() {
+        String env = System.getenv("BILI_WHALE_DIR");
+        if (env != null && !env.isBlank()) {
+            Path p = Path.of(env.trim().replaceAll("^\"|\"$", ""));
+            if (Files.isRegularFile(p.resolve("lib").resolve("index.js"))) {
+                return p.toAbsolutePath().normalize();
+            }
+            LOG.warn("BILI_WHALE_DIR={} 不是完整的 whale（缺 lib/index.js），忽略", env);
+        }
+        try {
+            extractBundledWhale(BUNDLED_WHALE_DIR);
+        } catch (IOException e) {
+            LOG.error("打包的 whale 源码解压失败", e);
+            return externalWhaleDir();
+        }
+        if (Files.isRegularFile(BUNDLED_WHALE_DIR.resolve("lib").resolve("index.js"))) {
+            return BUNDLED_WHALE_DIR;
+        }
+        return externalWhaleDir();
+    }
+
+    /** 外部兜底：bili 工具链 tools/ 的上一级是插件根（与旧版行为一致） */
+    private static Path externalWhaleDir() {
+        BiliLocator.Entry entry = BiliLocator.resolveEntry();
+        if (!entry.ok()) {
+            return null;
+        }
+        Path dir = entry.biliMjs().getParent().getParent();
+        return Files.isRegularFile(dir.resolve("lib").resolve("index.js")) ? dir : null;
+    }
+
+    /**
+     * 把插件资源 whale/ 下打包的 dsh-bili-whale 源码解压到 target（188 个文件约 2.2M，
+     * 源码 + 3 个纯 JS npm 依赖：qrcode/dijkstrajs/pngjs）。
+     * 版本比对跳过：已解压目录的 package.json 版本与资源一致且 lib/index.js 在，就不重写——
+     * start 可能被反复调，全量覆盖没必要；插件升级（版本变化）会自动触发重新解压。
+     * 资源枚举两条路：类在 jar 里 → 遍历 JarFile 条目；开发期 classes 目录 → Files.walk。
+     */
+    static void extractBundledWhale(Path target) throws IOException {
+        String bundledVersion = readResourceVersion();
+        Path marker = target.resolve("package.json");
+        if (bundledVersion != null && Files.isRegularFile(marker)
+                && Files.isRegularFile(target.resolve("lib").resolve("index.js"))
+                && bundledVersion.equals(readLocalVersion(marker))) {
+            return; // 版本一致，跳过
+        }
+        LOG.info("解压打包的 whale 源码到 {}（版本 {}）", target, bundledVersion);
+        int count = 0;
+        for (String rel : listBundledResources()) {
+            Path out = target.resolve(rel).normalize();
+            if (!out.startsWith(target)) { // 防路径穿越（资源名来自自己的 jar，双保险）
+                continue;
+            }
+            Files.createDirectories(out.getParent());
+            try (InputStream in = WhaleHost.class.getResourceAsStream("/whale/" + rel)) {
+                if (in == null) {
+                    continue;
+                }
+                Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
+                count++;
+            }
+        }
+        LOG.info("whale 源码解压完成：{} 个文件 → {}", count, target);
+    }
+
+    /** 枚举资源根 whale/ 下的相对路径（jar 与 classes 目录两种形态） */
+    private static List<String> listBundledResources() throws IOException {
+        List<String> names = new ArrayList<>();
+        URI location;
+        try {
+            location = WhaleHost.class.getProtectionDomain().getCodeSource().getLocation().toURI();
+        } catch (java.net.URISyntaxException e) {
+            throw new IOException("插件代码位置解析失败", e);
+        }
+        if ("jar".equals(location.getScheme())) {
+            try (java.util.jar.JarFile jar = new java.util.jar.JarFile(
+                    java.nio.file.Paths.get(location.getSchemeSpecificPart()).toFile())) {
+                java.util.Enumeration<java.util.jar.JarEntry> entries = jar.entries();
+                while (entries.hasMoreElements()) {
+                    String name = entries.nextElement().getName();
+                    if (name.startsWith("whale/") && !name.equals("whale/")
+                            && !"whale/".equals(name) && !name.endsWith("/")) {
+                        names.add(name.substring("whale/".length()));
+                    }
+                }
+            } catch (IOException e) {
+                throw new IOException("插件 jar 读取失败", e);
+            }
+        } else {
+            Path root = Path.of(location).resolve("whale");
+            if (!Files.isDirectory(root)) {
+                throw new IOException("资源目录 whale/ 不存在（打包异常？）：" + root);
+            }
+            try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
+                walk.filter(Files::isRegularFile).forEach(p ->
+                        names.add(root.relativize(p).toString().replace('\\', '/')));
+            }
+        }
+        return names;
+    }
+
+    private static String readResourceVersion() {
+        try (InputStream in = WhaleHost.class.getResourceAsStream("/whale/package.json")) {
+            if (in == null) {
+                return null;
+            }
+            return extractVersion(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static String readLocalVersion(Path packageJson) throws IOException {
+        return extractVersion(Files.readString(packageJson, StandardCharsets.UTF_8));
+    }
+
+    /** package.json 里的 "version": "x.y.z"，宽松匹配 */
+    private static String extractVersion(String json) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"version\"\\s*:\\s*\"([^\"]+)\"").matcher(json);
+        return m.find() ? m.group(1) : null;
     }
 
     // ---------------------------------------------------------------- pid
