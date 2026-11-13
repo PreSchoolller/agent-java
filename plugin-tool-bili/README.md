@@ -68,12 +68,72 @@ DSH runtime node（两层任一可用即可）。
 - 「她怎么样了」→ `whale status`（注意：回环 API ✓ 只代表宿主在听，不代表 shim 活着）
 - 「停掉她」→ `whale stop`；排障 → `whale log`
 
-前提：**agent-java 托盘常驻在跑**（进程死了注入链路就没了）。shim 是独立进程，应用重启
-杀不死它——重启后不用重新 start，下次 start/status 会自动接管（pid 落
-`~/.agentjava/shim/shim.pid` 作为跨重启事实源，存活用 ProcessHandle 直查 OS）。
+前提：**agent-java 托盘常驻在跑**（进程死了注入链路就没了）。正常退出（托盘退出/窗口
+关闭）会经应用的 ShutDownJob 退出链**自动停掉她**（按 pid 杀，含子进程树，并清 pid 文件）；
+只有强杀 JVM（taskkill /F）会留下孤儿进程——那种场景下次 start/status 会自动接管
+（pid 落 `~/.agentjava/shim/shim.pid` 作为跨重启事实源，存活判定校验 command 含 node
+且参数含 dsh-shim.mjs，防 pid 复用误判误杀）。
 
 注入回合的权限模式取 `bili-whale` 会话的记忆，没盖过戳就回落输入区全局当前值——想让她
 夜里自由干活就在那个会话切 FULL_ACCESS 盖戳；保守就留 EDIT（写操作卡待确认）。
+
+## 配置文件（没有 UI，全靠手改）
+
+**主配置 `~/.dsh/bili-whale.config.json`**（JSON，改完 ≤60 秒热生效——监听器每个
+tick 重读该文件，不用重启 shim）。当前实际在用的完整样例：
+
+```json
+{
+  "persona": { "name": "本小姐", "ownerTitle": "master", "selfClaim": "肥鱼", "diaryTitle": "今日摘要" },
+  "preferences": {
+    "like": ["AI 工具与插件", "鬼畜与怀旧向剪辑", "猫咪", "Live2D/模型"],
+    "dislike": ["带货", "擦边", "标题党", "纯搬运"]
+  },
+  "owner": { "mid": "", "name": "" },
+  "self": { "mid": "", "name": "" },
+  "quota": { "shareDaily": 3 },
+  "share": { "aiCommentGuard": false, "aiThreshold": 30, "enabled": true, "via": "comment", "minScore": 13, "silentAfterDays": 3 },
+  "listen": { "comment": true, "commentIntervalSec": 60, "scope": "both", "oncePerPerson": true, "allDay": false, "dm": true, "dmIntervalSec": 60, "live": false, "liveRoom": "", "liveScope": "owner" },
+  "night": { "windows": [{ "start": "20:00", "end": "24:00", "wakes": 1 }], "skipChance": 0.3, "minGapMin": 10, "maxVideos": 5 },
+  "notify": { "type": "none", "url": "", "template": "text", "cmd": "" }
+}
+```
+
+逐块说明：
+
+| 块 | 字段 | 含义 |
+|---|---|---|
+| `persona` | `name` / `ownerTitle` / `selfClaim` / `diaryTitle` | 她的角色名、对你的称呼、自称、日记标题——影响所有注入 prompt 的口吻和日记署名 |
+| `preferences` | `like[]` / `dislike[]` | 内容偏好，feed 选题和分享打分的参考系 |
+| `owner` | `mid` / `name` | **主人**（你自己）的 B 站号——@ 分享的对象、私信白名单的锚点 |
+| `self` | `mid` / `name` | **她自己的**号，必须与 credentials.json 是同一个号（selftest 会核对） |
+| `quota` | `shareDaily` | 每日分享上限 |
+| `share` | `enabled` / `via` / `minScore` / `aiThreshold` / `aiCommentGuard` / `silentAfterDays` | 分享开关、方式（comment=评论区 @）、打分门槛、AI 味保护、沉默期 |
+| `listen` | `comment` / `commentIntervalSec` / `scope` / `oncePerPerson` / `allDay` | 评论监听：轮询「回复我的 + @我的」（60s 是硬下限）、`scope=both/reply`、`allDay=false` 时**只在夜窗内监听** |
+| | `dm` / `dmIntervalSec` | 私信监听（**不受夜窗限制**，全天轮询） |
+| | `live` / `liveRoom` / `liveScope` / `mentionSummary` | 直播间监看（`liveScope=owner/mention`）、主人 @ 请求总结开关 |
+| `night` | `windows[]` / `skipChance` / `minGapMin` / `maxVideos` | 作息窗口（到点**随机**醒来）、今晚装死的概率、唤醒间隔下限、单次最多看几个视频 |
+| `notify` | `type` / `url` / `template` / `cmd` | 投递/日记的外部推送通道（none=不发） |
+
+注意事项：
+
+- **第一次开启监听只把"现在"记为基线**，不倒历史——只有之后的回复/@ 才会触发注入
+- 风控红线：`commentIntervalSec` 低于 60 会被源码强制拉回；`listen.allDay=true` 会全天
+  每分钟锤 B 站接口，新号慎开
+- 新号 / 老号与 `share` 的关系：保守默认是 `silentAfterDays=3` + `minScore=13`
+
+**凭据 `~/.bili-ai/credentials.json`**（本插件不读不写，由工具链自管）：
+
+```json
+{ "sessdata": "SESSDATA的值", "bili_jct": "bili_jct的值", "buvid3": "buvid3的值" }
+```
+
+三个值从浏览器 F12 → Application → Cookies → https://www.bilibili.com 手动复制
+（`document.cookie` 读不到，必须从面板复制）。
+
+**运行状态文件**（都在 `~/.dsh/`，程序自管，一般不用动）：`whale-session.json`（会话
+启动与投递状态）、`whale-night.json`（今晚的生物钟计划）、`whale-diary.md` /
+`whale-diary-private.md`（两本日记，她会自己恢复记忆）。
 
 ## 与 dsh-bili-whale 原版的关系
 

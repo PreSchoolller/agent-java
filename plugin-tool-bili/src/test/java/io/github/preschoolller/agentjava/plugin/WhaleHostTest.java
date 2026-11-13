@@ -16,10 +16,12 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class WhaleHostTest {
 
     @Test
-    void aliveSemantics() {
-        assertFalse(WhaleHost.alive(0), "pid<=0 一律不活");
-        assertFalse(WhaleHost.alive(-1), "pid<=0 一律不活");
-        assertTrue(WhaleHost.alive(ProcessHandle.current().pid()), "当前 JVM 自己必然活着");
+    void isShimSemantics() {
+        assertFalse(WhaleHost.isShim(0), "pid<=0 一律不活");
+        assertFalse(WhaleHost.isShim(-1), "pid<=0 一律不活");
+        // 当前 JVM 自己活着但不是 node 跑 shim——args 校验应拒绝（防 pid 复用误判的核心）
+        assertFalse(WhaleHost.isShim(ProcessHandle.current().pid()),
+                "非 node/shim 进程不能通过校验");
     }
 
     @Test

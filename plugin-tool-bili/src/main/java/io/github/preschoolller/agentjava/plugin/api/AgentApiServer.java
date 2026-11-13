@@ -29,7 +29,6 @@ import java.util.concurrent.atomic.AtomicReference;
  * 这里的 HTTP 调用，Java 侧走与用户输入完全相同的链路（落库→建卡→agent loop，
  * 由 Main.apiEnsureSession / Main.apiInject 承接）。
  *
- * 本类从宿主 backend/api 搬进插件（plugin-tool-bili）：宿主不再常驻监听，
  * 由 WhaleHost 在 whale 工具 start 时拉起，stop 时收掉——生命周期跟着"她"走。
  *
  * 安全模型（个人桌面应用，够用就好）：
