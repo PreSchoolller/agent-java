@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.github.preschoolller</groupId>
+    <artifactId>agent-java-plugin-tool-bili</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    <description>agent app plugin in Java: wrap dsh-bili-whale tools (bili.mjs) as Tool SPI</description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- whale 源码位置（构建期打包进 jar，不进 git 仓库）：默认 agent-java 的同级目录（模块目录上两级），可用 -Dbili.whale.src=路径 覆盖 -->
+        <bili.whale.src>${project.basedir}/../../dsh-bili-whale</bili.whale.src>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.github.preschoolller</groupId>
+            <artifactId>agent-java</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>17</source>
+                    <target>17</target>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
+            <!-- 构建期把 dsh-bili-whale 源码打进 jar（不进 git 仓库！源码在 target/ 现拷现用）。
+                 缺源码时构建照常通过，运行时由 WhaleHost 走外部目录兜底 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>bundle-whale</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <!-- 源码缺失时 fileset 零匹配、copy 空跑，构建照常通过。
+                                     注意：必须单 fileset + include 保目录结构（多个 fileset
+                                     合并到同一 todir 会把各自相对路径拍平到根） -->
+                                <copy todir="${project.build.outputDirectory}/whale"
+                                      failonerror="false">
+                                    <fileset dir="${bili.whale.src}" errorOnMissingDir="false">
+                                        <include name="lib/**"/>
+                                        <include name="tools/**"/>
+                                        <include name="package.json"/>
+                                    </fileset>
+                                </copy>
+                                <!-- lib/index.js 顶层 import auth.js → qrcode，缺了模块加载即崩；
+                                     yargs 只是 qrcode 的 CLI bin 依赖不用带；pngjs 的 coverage 产物剔除 -->
+                                <copy todir="${project.build.outputDirectory}/whale/node_modules/qrcode"
+                                      failonerror="false">
+                                    <fileset dir="${bili.whale.src}/node_modules/qrcode" errorOnMissingDir="false"/>
+                                </copy>
+                                <copy todir="${project.build.outputDirectory}/whale/node_modules/dijkstrajs"
+                                      failonerror="false">
+                                    <fileset dir="${bili.whale.src}/node_modules/dijkstrajs" errorOnMissingDir="false"/>
+                                </copy>
+                                <copy todir="${project.build.outputDirectory}/whale/node_modules/pngjs"
+                                      failonerror="false">
+                                    <fileset dir="${bili.whale.src}/node_modules/pngjs" errorOnMissingDir="false">
+                                        <exclude name="coverage/**"/>
+                                    </fileset>
+                                </copy>
+                                <condition property="whale.src.present">
+                                    <available file="${project.build.outputDirectory}/whale/lib/index.js"/>
+                                </condition>
+                                <condition property="whale.bundle.msg"
+                                           value="whale 已打包进 jar（源：${bili.whale.src}）">
+                                    <isset property="whale.src.present"/>
+                                </condition>
+                                <condition property="whale.bundle.msg"
+                                           value="未找到 whale 源码（${bili.whale.src}），本次构建不打包 whale——运行时走外部目录兜底。可用 -Dbili.whale.src=路径 覆盖">
+                                    <not>
+                                        <isset property="whale.src.present"/>
+                                    </not>
+                                </condition>
+                                <condition property="whale.bundle.level" value="info">
+                                    <isset property="whale.src.present"/>
+                                </condition>
+                                <condition property="whale.bundle.level" value="warning">
+                                    <not>
+                                        <isset property="whale.src.present"/>
+                                    </not>
+                                </condition>
+                                <echo message="${whale.bundle.msg}" level="${whale.bundle.level}"/>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+
+    </build>
+
+</project>

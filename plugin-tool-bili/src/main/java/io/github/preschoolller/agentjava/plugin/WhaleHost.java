@@ -1,0 +1,520 @@
+package io.github.preschoolller.agentjava.plugin;
+
+import io.github.preschoolller.agentjava.Main;
+import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
+import io.github.preschoolller.agentjava.plugin.api.AgentApiServer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * dsh-shim 进程的生命周期管理（whale 工具的执行体）。
+ *
+ * start 做五件事，顺序有讲究：
+ *   1. 把插件资源里打包的 dsh-bili-whale 源码（resources/whale/，含 lib/tools/node_modules）
+ *      解压到 ~/.agentjava/whale/（版本一致则跳过）——jar 自包含，新机器零外部依赖（除 node）
+ *   2. 定位 dsh-bili-whale 根目录：优先解压目录，env BILI_WHALE_DIR 显式覆盖，外部目录兜底
+ *   3. 拉起回环 API（AgentApiServer，Main.apiInject 承接注入）——shim 起来第一件事
+ *      就是读 token 发请求，server 必须先在
+ *   4. 把插件资源里的 dsh-shim.mjs 解压到 ~/.agentjava/shim/（每次覆盖：插件升级跟随）
+ *   5. 起子进程 node shim，stdout/stderr 全量落 ~/.agentjava/logs/whale-shim.log
+ *
+ * 存活判定（实战教训，勿回退）：**不信内存里的 Process 对象**——Windows 下实测
+ * isAlive() 会假阴性（进程活着却报死），且应用重启后内存全空而 shim 作为独立进程
+ * 活得很好，只看内存会叠着拉起多个实例（曾一晚叠出 3 个 shim，三份轮询三份生物钟）。
+ * 所以 pid 落 ~/.agentjava/shim/shim.pid 作为跨重启的单一事实源，存活用
+ * ProcessHandle.of(pid) 直查 OS。start 时发现 pid 文件里的进程还活着就接管不重拉。
+ *
+ * stop：按 pid 杀 shim（ProcessHandle.destroy，宽限 5s 后强杀）→ 收回环 API。
+ * Windows 下 destroy 不走 node 的 SIGTERM 清理链，未完成的投递由原版
+ * pendingRequest 落盘重试兜底，不会丢消息。
+ */
+final class WhaleHost {
+
+    private static final Logger LOG = LoggerFactory.getLogger(WhaleHost.class);
+    private static final Object LOCK = new Object();
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(2)).build();
+    private static final Path PID_FILE = Constants.APP_USER_DIR.resolve("shim").resolve("shim.pid");
+    private static final Path LOG_FILE = Constants.APP_USER_DIR.resolve("logs").resolve("whale-shim.log");
+    /** 打包在插件资源里的 whale 解压落点（也是 bili/bili_write 工具链的兜底位置） */
+    static final Path BUNDLED_WHALE_DIR = Constants.APP_USER_DIR.resolve("whale");
+
+    /** 应用退出链路上的杀 shim 动作（走 ShutDownJob 自己的 hook 体系，Main 把 clean 挂在 JVM hook 上） */
+    private static final java.util.function.Consumer<Void> EXIT_KILL = v -> WhaleHost.killOnExit();
+
+    private WhaleHost() {
+    }
+
+    // ---------------------------------------------------------------- start
+
+    static String start() {
+        synchronized (LOCK) {
+            // 0. 孤儿接管：pid 文件里的 shim 还活着（多半是上次应用重启留下的）就不重拉，
+            //    只把回环 API 拉起来——旧 shim 的投递重试会自动落到新 server 上。
+            //    正常退出已被 EXIT_KILL 停掉；这里主要兜强杀 JVM（shutdown hook 不执行）的场景
+            long existing = readPidFile();
+            if (isShim(existing)) {
+                ensureExitHook(); // 接管的孤儿也要挂进退出链
+                String apiMsg = ensureApi();
+                if (!AgentApiServer.running()) {
+                    return "shim 在跑（pid " + existing + "），但回环 API 启动失败：" + apiMsg
+                            + "；旧 shim 的投递暂时无处可去，会按 pendingRequest 重试";
+                }
+                LOG.info("dsh-shim orphan adopted: pid={}", existing);
+                return "✓ 已接管（pid " + existing + "，上次应用重启前拉起的实例，未重复拉起）\n"
+                        + "  · 回环 API：" + pingLine() + "\n"
+                        + "  · 日志：" + LOG_FILE + "（whale log 查看）\n"
+                        + "生物钟/监听随该进程继续生效；保持应用开着（托盘常驻）即可。";
+            }
+            // 1. 解压插件里打包的 whale 源码（版本一致则跳过），再按优先级定位根目录：
+            //    env BILI_WHALE_DIR 显式覆盖 → 解压目录（jar 自包含的主路径）→ 外部目录兜底
+            Path whaleDir = resolveWhaleDir();
+            if (whaleDir == null) {
+                BiliLocator.Entry entry = BiliLocator.resolveEntry();
+                return "打包的 whale 源码解压失败，且外部目录也没找到（"
+                        + (entry.ok() ? entry.biliMjs() + " 的上级缺 lib/index.js" : entry.error()) + "）";
+            }
+            // 2. 回环 API（token 也在这一步懒生成，shim 启动时读的就是它）
+            String apiMsg = ensureApi();
+            if (!AgentApiServer.running()) {
+                return "回环 API 启动失败：" + apiMsg;
+            }
+            // 3. shim 解压
+            Path shimPath;
+            try {
+                shimPath = extractShim();
+            } catch (IOException e) {
+                AgentApiServer.stop();
+                return "shim 脚本解压失败：" + e.getMessage();
+            }
+            // 5. 起子进程（不经 shell，参数直传；输出全量进日志文件）
+            String node = BiliLocator.resolveNode();
+            if (node == null) {
+                AgentApiServer.stop();
+                return "未找到可用的 node 运行时（BILI_NODE 环境变量，或安装 Node 18+）";
+            }
+            try {
+                Files.createDirectories(LOG_FILE.getParent());
+                ProcessBuilder pb = new ProcessBuilder(List.of(node, shimPath.toString()))
+                        .redirectErrorStream(true)
+                        .redirectOutput(ProcessBuilder.Redirect.to(LOG_FILE.toFile()));
+                pb.environment().put("AGENT_JAVA_API", "http://127.0.0.1:" + AgentApiServer.port());
+                pb.environment().put("BILI_WHALE_DIR", whaleDir.toString());
+                Process spawned = pb.start();
+                long newPid = spawned.pid();
+                LOG.info("dsh-shim started: pid={} whaleDir={} api={}", newPid, whaleDir,
+                        pb.environment().get("AGENT_JAVA_API"));
+                spawned.waitFor(1500, TimeUnit.MILLISECONDS); // 观察 1.5s：秒挂说明环境有问题，把日志尾部带回来
+                if (!spawned.isAlive()) {
+                    AgentApiServer.stop();
+                    return "shim 启动即退出（exit=" + spawned.exitValue() + "），日志尾部：\n" + tailOf(LOG_FILE, 20);
+                }
+                writePidFile(newPid); // 起稳了才记账：pid 文件是跨重启的存活事实源
+                ensureExitHook();     // 应用退出时随 ShutDownJob.clean 停掉她
+                return "✓ 已启动（pid " + newPid + "）\n"
+                        + "  · whale 目录：" + whaleDir + "\n"
+                        + "  · 回环 API：" + pingLine() + "\n"
+                        + "  · 日志：" + LOG_FILE + "（whale log 查看）\n"
+                        + "生物钟/监听已按 ~/.dsh/bili-whale.config.json 生效：到点她会往会话 bili-whale 注入回合，"
+                        + "走正常 agent 链路与权限门。shim 是独立进程，应用重启也杀不死它——重启后不用重新 start，"
+                        + "下次 start/status 会自动接管；想彻底停用才需要 stop（保持应用开着即可）。";
+            } catch (IOException e) {
+                AgentApiServer.stop();
+                return "shim 进程启动失败：" + e.getMessage();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                AgentApiServer.stop();
+                return "启动等待被中断";
+            }
+        }
+    }
+
+    /** 拉起回环 API（幂等），注入 Delegate 与用户输入同链路 */
+    private static String ensureApi() {
+        return AgentApiServer.start(new AgentApiServer.Delegate() {
+            @Override
+            public String ensureSession(String sessionId, String workspace) throws Exception {
+                return Main.apiEnsureSession(sessionId, workspace);
+            }
+
+            @Override
+            public String inject(String sessionId, String text) throws Exception {
+                return Main.apiInject(sessionId, text);
+            }
+        });
+    }
+
+    /** 插件资源里的 shim 解压到 ~/.agentjava/shim/（每次覆盖，升级跟随） */
+    private static Path extractShim() throws IOException {
+        Path target = Constants.APP_USER_DIR.resolve("shim").resolve("dsh-shim.mjs");
+        Files.createDirectories(target.getParent());
+        try (InputStream in = WhaleHost.class.getResourceAsStream("/dsh-shim.mjs")) {
+            if (in == null) {
+                throw new IOException("插件 jar 里没有 dsh-shim.mjs 资源（打包异常？）");
+            }
+            Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+        return target;
+    }
+
+    // ---------------------------------------------------------------- 打包的 whale
+
+    /**
+     * 定位 dsh-bili-whale 根目录。优先级：
+     *   1. 环境变量 BILI_WHALE_DIR（显式覆盖，调试/换源用；目录须含 lib/index.js）
+     *   2. 解压后的打包副本 ~/.agentjava/whale（jar 自包含主路径）
+     *   3. 外部目录兜底：bili 工具链 tools/ 的上一级（老用户配置过的位置）
+     * 找不到返回 null。
+     */
+    static Path resolveWhaleDir() {
+        String env = System.getenv("BILI_WHALE_DIR");
+        if (env != null && !env.isBlank()) {
+            Path p = Path.of(env.trim().replaceAll("^\"|\"$", ""));
+            if (Files.isRegularFile(p.resolve("lib").resolve("index.js"))) {
+                return p.toAbsolutePath().normalize();
+            }
+            LOG.warn("BILI_WHALE_DIR={} 不是完整的 whale（缺 lib/index.js），忽略", env);
+        }
+        try {
+            extractBundledWhale(BUNDLED_WHALE_DIR);
+        } catch (IOException e) {
+            LOG.error("打包的 whale 源码解压失败", e);
+            return externalWhaleDir();
+        }
+        if (Files.isRegularFile(BUNDLED_WHALE_DIR.resolve("lib").resolve("index.js"))) {
+            return BUNDLED_WHALE_DIR;
+        }
+        return externalWhaleDir();
+    }
+
+    /** 外部兜底：bili 工具链 tools/ 的上一级是插件根（与旧版行为一致） */
+    private static Path externalWhaleDir() {
+        BiliLocator.Entry entry = BiliLocator.resolveEntry();
+        if (!entry.ok()) {
+            return null;
+        }
+        Path dir = entry.biliMjs().getParent().getParent();
+        return Files.isRegularFile(dir.resolve("lib").resolve("index.js")) ? dir : null;
+    }
+
+    /**
+     * 把插件资源 whale/ 下打包的 dsh-bili-whale 源码解压到 target（188 个文件约 2.2M，
+     * 源码 + 3 个纯 JS npm 依赖：qrcode/dijkstrajs/pngjs）。
+     * 版本比对跳过：已解压目录的 package.json 版本与资源一致且 lib/index.js 在，就不重写——
+     * start 可能被反复调，全量覆盖没必要；插件升级（版本变化）会自动触发重新解压。
+     * 资源枚举两条路：类在 jar 里 → 遍历 JarFile 条目；开发期 classes 目录 → Files.walk。
+     */
+    static void extractBundledWhale(Path target) throws IOException {
+        String bundledVersion = readResourceVersion();
+        Path marker = target.resolve("package.json");
+        if (bundledVersion != null && Files.isRegularFile(marker)
+                && Files.isRegularFile(target.resolve("lib").resolve("index.js"))
+                && bundledVersion.equals(readLocalVersion(marker))) {
+            return; // 版本一致，跳过
+        }
+        LOG.info("解压打包的 whale 源码到 {}（版本 {}）", target, bundledVersion);
+        int count = 0;
+        for (String rel : listBundledResources()) {
+            Path out = target.resolve(rel).normalize();
+            if (!out.startsWith(target)) { // 防路径穿越（资源名来自自己的 jar，双保险）
+                continue;
+            }
+            Files.createDirectories(out.getParent());
+            try (InputStream in = WhaleHost.class.getResourceAsStream("/whale/" + rel)) {
+                if (in == null) {
+                    continue;
+                }
+                Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
+                count++;
+            }
+        }
+        LOG.info("whale 源码解压完成：{} 个文件 → {}", count, target);
+    }
+
+    /** 枚举资源根 whale/ 下的相对路径（jar 与 classes 目录两种形态） */
+    private static List<String> listBundledResources() throws IOException {
+        List<String> names = new ArrayList<>();
+        URI location;
+        try {
+            location = WhaleHost.class.getProtectionDomain().getCodeSource().getLocation().toURI();
+        } catch (java.net.URISyntaxException e) {
+            throw new IOException("插件代码位置解析失败", e);
+        }
+        if ("jar".equals(location.getScheme())) {
+            try (java.util.jar.JarFile jar = new java.util.jar.JarFile(
+                    java.nio.file.Paths.get(location.getSchemeSpecificPart()).toFile())) {
+                java.util.Enumeration<java.util.jar.JarEntry> entries = jar.entries();
+                while (entries.hasMoreElements()) {
+                    String name = entries.nextElement().getName();
+                    if (name.startsWith("whale/") && !name.equals("whale/")
+                            && !"whale/".equals(name) && !name.endsWith("/")) {
+                        names.add(name.substring("whale/".length()));
+                    }
+                }
+            } catch (IOException e) {
+                throw new IOException("插件 jar 读取失败", e);
+            }
+        } else {
+            Path root = Path.of(location).resolve("whale");
+            if (!Files.isDirectory(root)) {
+                throw new IOException("资源目录 whale/ 不存在（打包异常？）：" + root);
+            }
+            try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
+                walk.filter(Files::isRegularFile).forEach(p ->
+                        names.add(root.relativize(p).toString().replace('\\', '/')));
+            }
+        }
+        return names;
+    }
+
+    private static String readResourceVersion() {
+        try (InputStream in = WhaleHost.class.getResourceAsStream("/whale/package.json")) {
+            if (in == null) {
+                return null;
+            }
+            return extractVersion(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static String readLocalVersion(Path packageJson) throws IOException {
+        return extractVersion(Files.readString(packageJson, StandardCharsets.UTF_8));
+    }
+
+    /** package.json 里的 "version": "x.y.z"，宽松匹配 */
+    private static String extractVersion(String json) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"version\"\\s*:\\s*\"([^\"]+)\"").matcher(json);
+        return m.find() ? m.group(1) : null;
+    }
+
+    // ---------------------------------------------------------------- pid
+
+    /** pid 文件读数（跨重启的单一事实源）：缺失/损坏/非数字一律 0 */
+    private static long readPidFile() {
+        try {
+            if (!Files.isRegularFile(PID_FILE)) {
+                return 0;
+            }
+            return Long.parseLong(Files.readString(PID_FILE, StandardCharsets.UTF_8).trim());
+        } catch (IOException | UncheckedIOException | NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static void writePidFile(long pid) {
+        try {
+            Files.createDirectories(PID_FILE.getParent());
+            Files.writeString(PID_FILE, Long.toString(pid), StandardCharsets.UTF_8);
+        } catch (IOException | UncheckedIOException e) {
+            LOG.warn("pid 文件写入失败（孤儿接管将失效）", e);
+        }
+    }
+
+    private static void deletePidFile() {
+        try {
+            Files.deleteIfExists(PID_FILE);
+        } catch (IOException | UncheckedIOException e) {
+            LOG.warn("pid 文件删除失败", e);
+        }
+    }
+
+    /**
+     * 存活判定 = pid 活着 **且** 长得像我们的 shim（防 pid 复用误判误杀，思路照 HoldWsl
+     * 的 argsMatch）：command 含 node 且参数含 dsh-shim.mjs。参数优先走
+     * ProcessHandle.info().arguments()（快）；平台读不到时退 HoldWsl 同款的
+     * PowerShell Get-CimInstance 查完整命令行。pid<=0 一律不活。
+     */
+    static boolean isShim(long pid) {
+        if (pid <= 0) {
+            return false;
+        }
+        Optional<ProcessHandle> handle = ProcessHandle.of(pid);
+        if (handle.isEmpty() || !handle.get().isAlive()) {
+            return false;
+        }
+        ProcessHandle.Info info = handle.get().info();
+        String command = info.command().orElse("").toLowerCase();
+        String[] args = info.arguments().orElse(null);
+        if (args != null && args.length > 0) {
+            return command.contains("node") && containsShimArg(args);
+        }
+        return command.contains("node") && matchesViaCommandLine(pid);
+    }
+
+    private static boolean containsShimArg(String[] args) {
+        for (String arg : args) {
+            if (arg != null && arg.contains("dsh-shim.mjs")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** HoldWsl 同款兜底：PowerShell 查完整命令行再比对（info().arguments() 读不到的平台） */
+    private static boolean matchesViaCommandLine(long pid) {
+        try {
+            Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                    "(Get-CimInstance Win32_Process -Filter ProcessId=" + pid + ").CommandLine")
+                    .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+            if (!p.waitFor(10, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return false;
+            }
+            String line = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
+                    .toLowerCase();
+            return line.contains("node") && line.contains("dsh-shim.mjs");
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return false;
+        }
+    }
+
+    private static void killTree(ProcessHandle handle) {
+        handle.descendants().forEach(ProcessHandle::destroyForcibly);
+        handle.destroyForcibly();
+    }
+
+    // ---------------------------------------------------------------- 应用退出
+
+    /**
+     * 注册到 ShutDownJob 的退出动作（Main 把 ShutDownJob::clean 挂在 JVM hook 上，
+     * 托盘退出/窗口关闭都会走到）：按 pid 杀 shim（含子进程树）+ 清 pid 文件。
+     * 强杀 JVM（taskkill /F）不触发 hook——那种场景靠下次 start 的孤儿接管兜底。
+     */
+    private static void killOnExit() {
+        long pid = readPidFile();
+        if (!isShim(pid)) {
+            return;
+        }
+        ProcessHandle.of(pid).ifPresent(WhaleHost::killTree);
+        deletePidFile();
+        LOG.info("应用退出：已停止 dsh-shim（pid {}）", pid);
+    }
+
+    /** 幂等注册退出杀 shim（模式照 HoldWsl：先 remove 再 add，重复 start 不叠加） */
+    private static void ensureExitHook() {
+        ShutDownJob.removeShutDownHook(EXIT_KILL);
+        ShutDownJob.addShutDownHook(EXIT_KILL);
+    }
+
+    private static void removeExitHook() {
+        ShutDownJob.removeShutDownHook(EXIT_KILL);
+    }
+
+    // ---------------------------------------------------------------- stop
+
+    static String stop() {
+        synchronized (LOCK) {
+            long p = readPidFile();
+            String shimResult;
+            if (!isShim(p)) {
+                // pid 没活或被无关进程复用：绝不 destroy（防误杀），清账即可
+                shimResult = "shim 本来就没在运行"
+                        + (p > 0 ? "（pid " + p + " 已退出或被其他进程复用，跳过终止）" : "");
+            } else {
+                Optional<ProcessHandle> handle = ProcessHandle.of(p);
+                killTree(handle.get());
+                try {
+                    for (int i = 0; i < 10 && isShim(p); i++) {
+                        TimeUnit.MILLISECONDS.sleep(500);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                shimResult = "shim 已停止（pid " + p + "）";
+            }
+            deletePidFile();
+            removeExitHook(); // 不在跑了就不该在退出链上留着
+            AgentApiServer.stop();
+            return shimResult + "；回环 API 已收。注：Windows 下不走 node 清理链，"
+                    + "未完成投递由原版 pendingRequest 落盘重试兜底";
+        }
+    }
+
+    // ---------------------------------------------------------------- status
+
+    static String status() {
+        long p = readPidFile();
+        String shimState = isShim(p)
+                ? "shim：运行中（pid " + p + "）"
+                : "shim：未运行" + (p > 0 ? "（pid " + p + " 已退出或被其他进程复用，重新 start 即可）" : "");
+        return shimState + "\n" + pingLine() + "\n"
+                + "（回环 API 由 agent-java 自己提供，✓ 只代表宿主在听，不代表 shim 活着）";
+    }
+
+    // ---------------------------------------------------------------- log
+
+    static String log() {
+        if (!Files.isRegularFile(LOG_FILE)) {
+            return "还没有日志文件（" + LOG_FILE + "）——先 start 一次";
+        }
+        return tailOf(LOG_FILE, 60);
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    /** 回环 API 探活（带 token），一行可读结果 */
+    private static String pingLine() {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("http://127.0.0.1:" + AgentApiServer.port() + "/agent/api/ping"))
+                    .timeout(Duration.ofSeconds(2))
+                    .header("X-Agent-Token", AgentApiServer.token())
+                    .GET().build();
+            HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+            return "回环 API：" + (response.statusCode() == 200 ? "✓ 正常" : "HTTP " + response.statusCode());
+        } catch (IOException e) {
+            return "回环 API：不可达（" + e.getMessage() + "）";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "回环 API：探测被中断";
+        }
+    }
+
+    /** 日志尾部：最多读末尾 64KB 再取 N 行，防长跑日志膨胀拖垮工具输出 */
+    private static String tailOf(Path log, int lines) {
+        try {
+            byte[] bytes = Files.readAllBytes(log);
+            if (bytes.length > 64 * 1024) {
+                byte[] cut = new byte[64 * 1024];
+                System.arraycopy(bytes, bytes.length - cut.length, cut, 0, cut.length);
+                bytes = cut;
+            }
+            String content = new String(bytes, StandardCharsets.UTF_8);
+            String[] all = content.split("\r?\n");
+            int from = Math.max(0, all.length - lines);
+            StringBuilder sb = new StringBuilder();
+            for (int i = from; i < all.length; i++) {
+                if (!sb.isEmpty()) {
+                    sb.append('\n');
+                }
+                sb.append(all[i]);
+            }
+            return sb.isEmpty() ? "（日志为空）" : sb.toString();
+        } catch (IOException | UncheckedIOException e) {
+            return "日志读取失败：" + e.getMessage();
+        }
+    }
+}

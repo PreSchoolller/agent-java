@@ -136,6 +136,50 @@ public class Main {
         return RUNNING.putIfAbsent(conversationId, token) == null ? token : null;
     }
 
+    /**
+     * 外部会话定位（dsh-shim 的 create 落点）：按 id 查找，不存在按该 id 新建；workspace 只在新建时生效。
+     * public 是给 plugin-tool-bili 的 WhaleHost 经 AgentApiServer.Delegate 回调的（插件在宿主
+     * 同 JVM 里，父委派类加载可直接引用 Main）；应用自身不走这两个口子。
+     */
+    public static String apiEnsureSession(String sessionId, String workspace)
+            throws InterruptedException, InvocationTargetException {
+        Window w = window;
+        if (w == null) {
+            throw new IllegalStateException("应用窗口尚未初始化完成");
+        }
+        String[] holder = new String[1];
+        SwingUtilities.invokeAndWait(() -> {
+            Conversation conversation = w.getStore().getConversation(sessionId);
+            if (conversation == null) {
+                conversation = w.getStore().getOrCreate(sessionId, workspace);
+            }
+            holder[0] = conversation.getId();
+        });
+        return holder[0];
+    }
+
+    /**
+     * 外部注入（dsh-shim 的 prompt 落点，public 给插件 WhaleHost 回调）：与用户输入同链路——
+     * EDT 上落库出卡、记补偿标记、启动 agent 链。会话正忙时消息已进历史：在跑的链下一轮快照
+     * 消化，或链尾按 PENDING_BG_DELIVERY 补偿标记补一轮（机制见 whenBackgroundTaskDone /
+     * loop 尾部，先记再抢的顺序保证不漏消化）。调用方不在 EDT（HTTP 处理线程），invokeAndWait 安全。
+     */
+    public static String apiInject(String sessionId, String text)
+            throws InterruptedException, InvocationTargetException {
+        Window w = window;
+        if (w == null) {
+            throw new IllegalStateException("应用窗口尚未初始化完成");
+        }
+        String[] holder = new String[1];
+        SwingUtilities.invokeAndWait(() -> {
+            Conversation conversation = w.injectUserMessage(sessionId, text);
+            holder[0] = conversation.getId();
+            PENDING_BG_DELIVERY.add(conversation.getId()); // 先记再抢：抢到锁的链首快照清除并消化
+            startAgentLoop(conversation, false);
+        });
+        return holder[0];
+    }
+
     private static void startAgentLoop(Conversation conversation, boolean regenerate) {
         AtomicBoolean token = tryAcquire(conversation.getId());
         if (token == null) {
@@ -293,6 +337,15 @@ public class Main {
         if (profile == null) {
             // 模型不属于任何方案（理论不可达）的最后兜底：第一个方案（load 保证至少一个）
             profile = appSettings.getProfile(appSettings.getProfileNames().get(0));
+        }
+        if (model == null || model.isBlank()) {
+            // 外部注入（dsh-shim）新建的会话没有模型戳：回落方案默认模型。
+            // 不兜底 provider 会拿到 null model 直接炸（OpenAI SDK 非 null 校验），她的首轮即崩
+            model = profile.getModel();
+            if (model == null || model.isBlank()) {
+                List<String> models = profile.getModels();
+                model = (models == null || models.isEmpty()) ? "default" : models.get(0);
+            }
         }
         Provider provider = ProviderFactory.createProvider(profile.getApiType());
         // 思考强度/权限模式读会话记忆；旧会话没盖过戳（字段 null）回落输入区当前值
