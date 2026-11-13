@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava.plugin;
 
 import io.github.preschoolller.agentjava.Main;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.plugin.api.AgentApiServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +57,9 @@ final class WhaleHost {
     /** 打包在插件资源里的 whale 解压落点（也是 bili/bili_write 工具链的兜底位置） */
     static final Path BUNDLED_WHALE_DIR = Constants.APP_USER_DIR.resolve("whale");
 
+    /** 应用退出链路上的杀 shim 动作（走 ShutDownJob 自己的 hook 体系，Main 把 clean 挂在 JVM hook 上） */
+    private static final java.util.function.Consumer<Void> EXIT_KILL = v -> WhaleHost.killOnExit();
+
     private WhaleHost() {
     }
 
@@ -64,9 +68,11 @@ final class WhaleHost {
     static String start() {
         synchronized (LOCK) {
             // 0. 孤儿接管：pid 文件里的 shim 还活着（多半是上次应用重启留下的）就不重拉，
-            //    只把回环 API 拉起来——旧 shim 的投递重试会自动落到新 server 上
+            //    只把回环 API 拉起来——旧 shim 的投递重试会自动落到新 server 上。
+            //    正常退出已被 EXIT_KILL 停掉；这里主要兜强杀 JVM（shutdown hook 不执行）的场景
             long existing = readPidFile();
-            if (alive(existing)) {
+            if (isShim(existing)) {
+                ensureExitHook(); // 接管的孤儿也要挂进退出链
                 String apiMsg = ensureApi();
                 if (!AgentApiServer.running()) {
                     return "shim 在跑（pid " + existing + "），但回环 API 启动失败：" + apiMsg
@@ -122,6 +128,7 @@ final class WhaleHost {
                     return "shim 启动即退出（exit=" + spawned.exitValue() + "），日志尾部：\n" + tailOf(LOG_FILE, 20);
                 }
                 writePidFile(newPid); // 起稳了才记账：pid 文件是跨重启的存活事实源
+                ensureExitHook();     // 应用退出时随 ShutDownJob.clean 停掉她
                 return "✓ 已启动（pid " + newPid + "）\n"
                         + "  · whale 目录：" + whaleDir + "\n"
                         + "  · 回环 API：" + pingLine() + "\n"
@@ -332,17 +339,88 @@ final class WhaleHost {
     }
 
     /**
-     * 存活判定直查 OS（ProcessHandle.of → isAlive），不依赖任何内存 Process 对象——
-     * Windows 下实测后者会假阴性。pid<=0 一律不活。info().command() 双重确认：
-     * 防的是 pid 被别的进程复用后误判活着。
+     * 存活判定 = pid 活着 **且** 长得像我们的 shim（防 pid 复用误判误杀，思路照 HoldWsl
+     * 的 argsMatch）：command 含 node 且参数含 dsh-shim.mjs。参数优先走
+     * ProcessHandle.info().arguments()（快）；平台读不到时退 HoldWsl 同款的
+     * PowerShell Get-CimInstance 查完整命令行。pid<=0 一律不活。
      */
-    static boolean alive(long pid) {
+    static boolean isShim(long pid) {
         if (pid <= 0) {
             return false;
         }
         Optional<ProcessHandle> handle = ProcessHandle.of(pid);
-        return handle.isPresent() && handle.get().isAlive()
-                && handle.get().info().command().isPresent();
+        if (handle.isEmpty() || !handle.get().isAlive()) {
+            return false;
+        }
+        ProcessHandle.Info info = handle.get().info();
+        String command = info.command().orElse("").toLowerCase();
+        String[] args = info.arguments().orElse(null);
+        if (args != null && args.length > 0) {
+            return command.contains("node") && containsShimArg(args);
+        }
+        return command.contains("node") && matchesViaCommandLine(pid);
+    }
+
+    private static boolean containsShimArg(String[] args) {
+        for (String arg : args) {
+            if (arg != null && arg.contains("dsh-shim.mjs")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** HoldWsl 同款兜底：PowerShell 查完整命令行再比对（info().arguments() 读不到的平台） */
+    private static boolean matchesViaCommandLine(long pid) {
+        try {
+            Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                    "(Get-CimInstance Win32_Process -Filter ProcessId=" + pid + ").CommandLine")
+                    .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+            if (!p.waitFor(10, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return false;
+            }
+            String line = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
+                    .toLowerCase();
+            return line.contains("node") && line.contains("dsh-shim.mjs");
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return false;
+        }
+    }
+
+    private static void killTree(ProcessHandle handle) {
+        handle.descendants().forEach(ProcessHandle::destroyForcibly);
+        handle.destroyForcibly();
+    }
+
+    // ---------------------------------------------------------------- 应用退出
+
+    /**
+     * 注册到 ShutDownJob 的退出动作（Main 把 ShutDownJob::clean 挂在 JVM hook 上，
+     * 托盘退出/窗口关闭都会走到）：按 pid 杀 shim（含子进程树）+ 清 pid 文件。
+     * 强杀 JVM（taskkill /F）不触发 hook——那种场景靠下次 start 的孤儿接管兜底。
+     */
+    private static void killOnExit() {
+        long pid = readPidFile();
+        if (!isShim(pid)) {
+            return;
+        }
+        ProcessHandle.of(pid).ifPresent(WhaleHost::killTree);
+        deletePidFile();
+        LOG.info("应用退出：已停止 dsh-shim（pid {}）", pid);
+    }
+
+    /** 幂等注册退出杀 shim（模式照 HoldWsl：先 remove 再 add，重复 start 不叠加） */
+    private static void ensureExitHook() {
+        ShutDownJob.removeShutDownHook(EXIT_KILL);
+        ShutDownJob.addShutDownHook(EXIT_KILL);
+    }
+
+    private static void removeExitHook() {
+        ShutDownJob.removeShutDownHook(EXIT_KILL);
     }
 
     // ---------------------------------------------------------------- stop
@@ -351,24 +429,24 @@ final class WhaleHost {
         synchronized (LOCK) {
             long p = readPidFile();
             String shimResult;
-            if (!alive(p)) {
-                shimResult = "shim 本来就没在运行";
+            if (!isShim(p)) {
+                // pid 没活或被无关进程复用：绝不 destroy（防误杀），清账即可
+                shimResult = "shim 本来就没在运行"
+                        + (p > 0 ? "（pid " + p + " 已退出或被其他进程复用，跳过终止）" : "");
             } else {
                 Optional<ProcessHandle> handle = ProcessHandle.of(p);
-                handle.ifPresent(ProcessHandle::destroy);
+                killTree(handle.get());
                 try {
-                    for (int i = 0; i < 10 && alive(p); i++) {
+                    for (int i = 0; i < 10 && isShim(p); i++) {
                         TimeUnit.MILLISECONDS.sleep(500);
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
-                if (alive(p)) {
-                    handle.ifPresent(ProcessHandle::destroyForcibly);
-                }
                 shimResult = "shim 已停止（pid " + p + "）";
             }
             deletePidFile();
+            removeExitHook(); // 不在跑了就不该在退出链上留着
             AgentApiServer.stop();
             return shimResult + "；回环 API 已收。注：Windows 下不走 node 清理链，"
                     + "未完成投递由原版 pendingRequest 落盘重试兜底";
@@ -379,9 +457,9 @@ final class WhaleHost {
 
     static String status() {
         long p = readPidFile();
-        String shimState = alive(p)
+        String shimState = isShim(p)
                 ? "shim：运行中（pid " + p + "）"
-                : "shim：未运行" + (p > 0 ? "（pid " + p + " 已退出，重新 start 即可）" : "");
+                : "shim：未运行" + (p > 0 ? "（pid " + p + " 已退出或被其他进程复用，重新 start 即可）" : "");
         return shimState + "\n" + pingLine() + "\n"
                 + "（回环 API 由 agent-java 自己提供，✓ 只代表宿主在听，不代表 shim 活着）";
     }
