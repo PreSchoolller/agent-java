@@ -71,6 +71,11 @@ public class Main {
     /** 工具执行阶段的等待上限：审批等待不计入（那个靠用户点击/停止结束），只防工具 I/O 卡死拖住整轮 */
     private static final long TOOL_EXECUTE_TIMEOUT_SECONDS = 60;
 
+    /** 压缩轮后的续轮指令：压缩轮的响应是摘要而非对用户问题的回答，且水位线裁剪后请求里
+     *  已没有 user 轮（[摘要]是纯 assistant 历史——Anthropic 直接 400，OpenAI 没有指令可
+     *  执行）。合成这条 user 消息驱动续轮，正常落库（UI 可见、历史良构） */
+    private static final String CONTEXT_CONTINUE_PROMPT = "上下文已完成压缩，请基于以上摘要继续之前的任务。";
+
     private static final AppSettings appSettings = AppSettings.get();
 
     private static final org.slf4j.Logger LOG = LoggerFactory.getLogger(Main.class);
@@ -157,6 +162,7 @@ public class Main {
      * 整条 agent 链（后台线程跑）：配置在 startAgentLoop 冻结为 LoopConfig，每轮经
      * snapshotMessagesOnEdt 重取历史+建卡后 doStream；
      * 工具结果到齐由 doStream requestContinue 续轮（同一个取消令牌、同一把会话锁，生成态保持到整条链结束），
+     * 压缩轮后由 requestContinue 强制补一轮续轮（合成 user 消息驱动，见 CONTEXT_CONTINUE_PROMPT）；
      * 无续轮诉求时链收束：清生成态、放会话锁，再查后台结果补偿标记决定是否补一轮。
      * 生成的会话不必在前台：卡片经会话 id 定向落库，用户切走再切回由 Window 的 rebind 重新上屏。
      */
@@ -165,14 +171,29 @@ public class Main {
             PrepareParams prepareParams;
             LoopControl loopControl = new LoopControl();
             boolean justCompressed = false;
-            // 这里是唯一调用 doStream 的地方
-            while (loopControl.hasMoreRounds() || justCompressed) {
+            // 这里是唯一调用 doStream 的地方。停止后整条链不再发任何新请求：
+            // 普通续轮由 doStream requestContinue 驱动（停止后不会 requestContinue），
+            // 压缩轮的强制续轮在轮末 requestContinue，下一轮判 cancelled 拦住
+            while (loopControl.hasMoreRounds() && !cancelled.get()) {
                 int round = loopControl.nextRound();
                 try {
                     SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), true));
+                    if (justCompressed) {
+                        // 续轮补 user 轮：水位线裁剪后本轮请求是纯 assistant 历史（[摘要]），
+                        // 合成一条 user 消息驱动续轮。invokeLater 先于本轮 snapshot 的
+                        // invokeAndWait 入队，EDT FIFO 保证快照看得见
+                        SwingUtilities.invokeLater(() -> window.getStore().appendMessage(conversation.getId(),
+                                Conversation.ROLE_USER, CONTEXT_CONTINUE_PROMPT));
+                    }
                     prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 每轮快照：只重取历史+建卡，配置不动
                     boolean needCompress = doContextManage(conversation, prepareParams, loopConfig, justCompressed);
                     doStream(window, conversation, cancelled, prepareParams, loopControl);
+                    if (needCompress) {
+                        // 压缩轮后强制补一轮续轮：走 requestContinue 正常计数，不能靠 while 条件
+                        // 旁路进门——续轮 executed 会反超 requested，续轮里的工具调用再
+                        // requestContinue 只是把缺口补平，hasMoreRounds 仍为 false，链提前收束
+                        loopControl.requestContinue();
+                    }
                     justCompressed = needCompress;
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -204,12 +225,14 @@ public class Main {
      * 收尾，压缩范围就此圈定（上个标记+1 → 本标记）。handle 的返回值整体替换本轮发出的
      * 消息列表；标记必须在 handle 正常返回后才落库：插件抛异常时水位线不推进，下一轮仍是
      * 全窗口可重试压缩，避免"标记已落但压缩结果未生成"把没压过的内容裁掉。
+     * justCompressed=true（上轮刚压缩的续轮）：跳过压缩决策（usage 还是压缩轮响应的，
+     * 不归零会立刻再次触发），handle 照常跑（只读记录不缺轮），但返回值不替换本轮消息。
      */
     private static boolean doContextManage(Conversation conversation, PrepareParams prepareParams, LoopConfig loopConfig, boolean justCompressed) {
         ArrayList<PromptParams.RoleMessage> roleMessages = new ArrayList<>(prepareParams.paramsBuilder.build().getRoleMessages());
         Conversation.Usage usage = conversation.getUsage();
-        long inputTokens = usage == null ? 0 : usage.inputTokens();
-        long outputTokens = usage == null ? 0 : usage.outputTokens();
+        long inputTokens = (usage == null || justCompressed) ? 0 : usage.inputTokens();
+        long outputTokens = (usage == null || justCompressed) ? 0 : usage.outputTokens();
         ContextHandler.ContextDetail contextDetail = new ContextHandler.ContextDetail(roleMessages, inputTokens, outputTokens,
                 loopConfig.modelCtxWindow, loopConfig.mHandlerName);
         boolean needCompress = !justCompressed && ContextHandlerManager.needCompress(contextDetail);
