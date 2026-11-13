@@ -160,7 +160,8 @@ public class Main {
 
     /**
      * 整条 agent 链（后台线程跑）：配置在 startAgentLoop 冻结为 LoopConfig，每轮经
-     * snapshotMessagesOnEdt 重取历史+建卡后 doStream；
+     * snapshotMessagesOnEdt 重取历史，doContextManage 压缩决策后 appendUiMessages 统一落
+     * UI 消息（标记+续轮 user+AI 占位卡一个 invokeAndWait 内完成）再 doStream；
      * 工具结果到齐由 doStream requestContinue 续轮（同一个取消令牌、同一把会话锁，生成态保持到整条链结束），
      * 压缩轮后由 requestContinue 强制补一轮续轮（合成 user 消息驱动，见 CONTEXT_CONTINUE_PROMPT）；
      * 无续轮诉求时链收束：清生成态、放会话锁，再查后台结果补偿标记决定是否补一轮。
@@ -178,7 +179,7 @@ public class Main {
                 int round = loopControl.nextRound();
                 try {
                     SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), true));
-                    prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 每轮快照：只重取历史+建卡，配置不动
+                    prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 每轮快照：只重取历史，配置不动（建卡统一在 appendUiMessages）
                     boolean needCompress = doContextManage(conversation, prepareParams, loopConfig, justCompressed);
                     Window.AiStream aiStream = appendUiMessages(conversation, needCompress);
                     prepareParams = new PrepareParams(prepareParams.provider, aiStream, prepareParams.paramsBuilder);
@@ -228,12 +229,13 @@ public class Main {
     }
 
     /**
-     * 上下文管理：needCompress 命中（由选中的可修改处理器决策）时，把压缩水位线标记插进
-     * 会话（本轮 AI 占位卡之前——占位卡在快照期已落库，摘要稍后填进它；标记排它后面摘要
-     * 就落在标记前，下轮裁剪把摘要裁掉），并把标记补记进本轮窗口——插件收到的快照以标记
-     * 收尾，压缩范围就此圈定（上个标记+1 → 本标记）。handle 的返回值整体替换本轮发出的
-     * 消息列表；标记必须在 handle 正常返回后才落库：插件抛异常时水位线不推进，下一轮仍是
-     * 全窗口可重试压缩，避免"标记已落但压缩结果未生成"把没压过的内容裁掉。
+     * 上下文管理：needCompress 命中（由选中的可修改处理器决策）时返回 true，落库交给调用方
+     * appendUiMessages（invokeAndWait 内依次追加 标记→续轮 user 消息→AI 占位卡，标记天然排在
+     * 占位卡前，摘要填进占位卡后就落在标记后，下轮裁剪保留摘要）。并把标记补记进本轮窗口——
+     * 插件收到的快照以标记收尾，压缩范围就此圈定（上个标记+1 → 本标记）。handle 的返回值整体
+     * 替换本轮发出的消息列表；标记在 handle 正常返回后才落库：插件抛异常时本方法直接上抛、
+     * appendUiMessages 不执行，水位线不推进，下一轮仍是全窗口可重试压缩，避免"标记已落但
+     * 压缩结果未生成"把没压过的内容裁掉。
      * justCompressed=true（上轮刚压缩的续轮）：跳过压缩决策（usage 还是压缩轮响应的，
      * 不归零会立刻再次触发），handle 照常跑（只读记录不缺轮），但返回值不替换本轮消息。
      */
