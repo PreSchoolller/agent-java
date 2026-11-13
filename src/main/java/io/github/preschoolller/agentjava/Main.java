@@ -74,7 +74,7 @@ public class Main {
     /** 压缩轮后的续轮指令：压缩轮的响应是摘要而非对用户问题的回答，且水位线裁剪后请求里
      *  已没有 user 轮（[摘要]是纯 assistant 历史——Anthropic 直接 400，OpenAI 没有指令可
      *  执行）。合成这条 user 消息驱动续轮，正常落库（UI 可见、历史良构） */
-    private static final String CONTEXT_CONTINUE_PROMPT = "上下文已完成压缩，请基于以上摘要继续之前的任务。";
+    private static final String CONTEXT_CONTINUE_PROMPT = "上下文已完成压缩，请基于摘要继续之前的任务。";
 
     private static final AppSettings appSettings = AppSettings.get();
 
@@ -178,17 +178,12 @@ public class Main {
                 int round = loopControl.nextRound();
                 try {
                     SwingUtilities.invokeLater(() -> window.setConversationGenerating(conversation.getId(), true));
-                    if (justCompressed) {
-                        // 续轮补 user 轮：水位线裁剪后本轮请求是纯 assistant 历史（[摘要]），
-                        // 合成一条 user 消息驱动续轮。invokeLater 先于本轮 snapshot 的
-                        // invokeAndWait 入队，EDT FIFO 保证快照看得见
-                        SwingUtilities.invokeLater(() -> window.getStore().appendMessage(conversation.getId(),
-                                Conversation.ROLE_USER, CONTEXT_CONTINUE_PROMPT));
-                    }
                     prepareParams = snapshotMessagesOnEdt(conversation, loopConfig); // 每轮快照：只重取历史+建卡，配置不动
                     boolean needCompress = doContextManage(conversation, prepareParams, loopConfig, justCompressed);
+                    Window.AiStream aiStream = appendUiMessages(conversation, needCompress);
+                    prepareParams = new PrepareParams(prepareParams.provider, aiStream, prepareParams.paramsBuilder);
                     doStream(window, conversation, cancelled, prepareParams, loopControl);
-                    if (needCompress) {
+                    if (needCompress && !loopControl.hasMoreRounds()) {
                         // 压缩轮后强制补一轮续轮：走 requestContinue 正常计数，不能靠 while 条件
                         // 旁路进门——续轮 executed 会反超 requested，续轮里的工具调用再
                         // requestContinue 只是把缺口补平，hasMoreRounds 仍为 false，链提前收束
@@ -218,6 +213,20 @@ public class Main {
         });
     }
 
+    private static Window.AiStream appendUiMessages(Conversation conversation, boolean needCompress)
+            throws InterruptedException, InvocationTargetException {
+        Window.AiStream[] aiStream = new Window.AiStream[1];
+        SwingUtilities.invokeAndWait(() -> {
+            if (needCompress) {
+                window.getStore().appendContextMarker(conversation.getId());
+                window.getStore().appendMessage(conversation.getId(),
+                        Conversation.ROLE_USER, CONTEXT_CONTINUE_PROMPT);
+            }
+            aiStream[0] = window.addAiMessage(conversation.getId(), "");
+        });
+        return aiStream[0];
+    }
+
     /**
      * 上下文管理：needCompress 命中（由选中的可修改处理器决策）时，把压缩水位线标记插进
      * 会话（本轮 AI 占位卡之前——占位卡在快照期已落库，摘要稍后填进它；标记排它后面摘要
@@ -244,13 +253,6 @@ public class Main {
             LOG.info("need context compress--------++++++++++----------+++++++++------------++++++++++--------++++++++----------");
         }
         ContextHandler.ContextManaged contextManaged = ContextHandlerManager.handle(contextDetail);
-        if (needCompress) {
-            // 标记落库（EDT）：必须插在本轮 AI 占位卡之前——占位卡在本轮快照期（appendMessages）
-            // 就已落库，早于这里排队的 EDT 任务，尾部追加会排到占位卡后面；压缩摘要作为本轮
-            // 响应填进占位卡后，摘要就落在标记前，下轮水位线裁剪会把摘要裁掉（压缩白做）。
-            // 入队早于 doStream 的任何 EDT 任务，FIFO 保证占位卡此刻必是最后一条消息
-            SwingUtilities.invokeLater(() -> window.getStore().insertContextMarkerBeforeLastAi(conversation.getId()));
-        }
         if (justCompressed) {
             return false;
         }
@@ -325,8 +327,7 @@ public class Main {
         for (PromptParams.RoleMessage roleMessage : history) {
             builder.roleMessages(roleMessage);
         }
-        Window.AiStream stream = window.addAiMessage(conversation.getId(), "");
-        return new PrepareParams(loopConfig.provider, stream, builder);
+        return new PrepareParams(loopConfig.provider, null, builder);
     }
 
     /** 链级冻结配置：provider 实例 + 不含消息的请求模板（PromptParams.Builder(PromptParams) 拷贝列表，

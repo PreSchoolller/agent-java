@@ -179,7 +179,7 @@ class PersistenceTest {
         String markerId = markerStore.newConversation().getId();
         markerStore.appendMessage(markerId, Conversation.ROLE_USER, "被压缩的旧历史");
         markerStore.appendMessage(markerId, Conversation.ROLE_AI, "压缩摘要（本轮回复占位卡）");
-        markerStore.insertContextMarkerBeforeLastAi(markerId);
+        markerStore.appendContextMarker(markerId);
         markerStore.appendMessage(markerId, Conversation.ROLE_USER, "标记后的新问题");
         Conversation reloaded = byId(new ConversationStore(historyFile()), markerId);
         List<Message> messages = reloaded.getMessages();
