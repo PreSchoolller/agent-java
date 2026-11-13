@@ -338,6 +338,15 @@ public class Main {
             // 模型不属于任何方案（理论不可达）的最后兜底：第一个方案（load 保证至少一个）
             profile = appSettings.getProfile(appSettings.getProfileNames().get(0));
         }
+        if (model == null || model.isBlank()) {
+            // 外部注入（dsh-shim）新建的会话没有模型戳：回落方案默认模型。
+            // 不兜底 provider 会拿到 null model 直接炸（OpenAI SDK 非 null 校验），她的首轮即崩
+            model = profile.getModel();
+            if (model == null || model.isBlank()) {
+                List<String> models = profile.getModels();
+                model = (models == null || models.isEmpty()) ? "default" : models.get(0);
+            }
+        }
         Provider provider = ProviderFactory.createProvider(profile.getApiType());
         // 思考强度/权限模式读会话记忆；旧会话没盖过戳（字段 null）回落输入区当前值
         ReasoningEffortEnum re = conversation.getReasoningEffort() != null
