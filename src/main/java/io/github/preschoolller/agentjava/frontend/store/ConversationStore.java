@@ -165,26 +165,18 @@ public class ConversationStore {
     }
 
     /**
-     * 插入上下文压缩水位线标记（Main 的压缩轮在 handle 成功后于 EDT 调用）：插到**最后一条
-     * AI 消息之前**——最后一条是本轮快照期刚建的 AI 占位卡，压缩摘要稍后会填进它；标记排
-     * 在占位卡后面的话，摘要就落在标记前，下轮水位线裁剪会把摘要裁掉（压缩白做）。
-     * 最后一条不是 AI 消息（异常时序）退化为尾部追加，不改落盘语义。
+     * 追加上下文压缩水位线标记（Main 的压缩轮在 handle 成功后于 EDT 调用）：
      * 落盘走 saveAndSyncSession 与消息同机制（后台会话的标记也落自己的库），
      * 不挪"最近使用"位、fireChanged 对显示中的会话是无操作（onStoreChanged 只在
      * 活动会话变化时重建瀑布流），所以标记不会出卡——它本来就不渲染。
      * 返回标记消息记录；会话不存在返回 null。
      */
-    public Message insertContextMarkerBeforeLastAi(String id) {
+    public Message appendContextMarker(String id) {
         Conversation conversation = findById(id);
         if (conversation == null) {
             return null;
         }
-        List<Message> messages = conversation.getMessages();
-        int index = messages.size();
-        if (!messages.isEmpty() && Conversation.ROLE_AI.equals(messages.get(messages.size() - 1).role())) {
-            index = messages.size() - 1;
-        }
-        Message message = conversation.insertContextMarker(index);
+        Message message = conversation.addContextMarker();
         saveAndSyncSession(conversation);
         fireChanged();
         return message;
