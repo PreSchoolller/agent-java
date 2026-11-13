@@ -925,6 +925,23 @@ public class Window extends JFrame {
     }
 
     /**
+     * 外部注入一条用户消息到指定会话（dsh-shim 经 AgentApiServer 调，须在 EDT 上）：
+     * 显示中的会话照常出卡滚底；后台会话只落库不出卡（与 onBackGroundTaskDone 同一模式），
+     * 切回时随瀑布流上屏。会话不存在则按该 id 新建（外部 id 稳定映射，如 "bili-whale"）。
+     * 返回落库的会话。
+     */
+    public Conversation injectUserMessage(String conversationId, String text) {
+        Conversation conversation = store.getOrCreate(conversationId, null);
+        Message message = store.appendMessage(conversationId, Conversation.ROLE_USER, text);
+        if (conversationId.equals(displayedConvId)) {
+            insertMessageCard(message);
+            updateMaterialization(); // 新卡片在末尾，窗口化时补物化
+            scrollToBottom();
+        }
+        return conversation;
+    }
+
+    /**
      * 往指定会话追加 AI 输出卡片（并行生成时目标会话可能不在前台）：非显示中的会话只落库不出卡，
      * 流式增量攒在句柄里，切回该会话时经 rebind 一次性补画。须在 EDT 上调用。
      */

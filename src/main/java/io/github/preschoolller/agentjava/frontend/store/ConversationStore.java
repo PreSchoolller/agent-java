@@ -105,6 +105,25 @@ public class ConversationStore {
         return newConversation(null);
     }
 
+    /**
+     * 按 id 查找会话；不存在就用该 id 新建（外部注入用：外部会话 id 必须稳定映射到同一会话，
+     * 如 dsh-shim 的 "bili-whale"）。与 newConversation 不同：不抢占 activeId、不复用现有空会话。
+     * 须在 EDT 上调用（save/fireChanged 与既有落库路径同约束）。
+     */
+    public synchronized Conversation getOrCreate(String id, String workspace) {
+        Conversation existing = findById(id);
+        if (existing != null) {
+            return existing;
+        }
+        Conversation created = new Conversation(id, "", System.currentTimeMillis(), System.currentTimeMillis());
+        created.attachSaver(() -> saveAndSyncSession(created));
+        created.setWorkspace(workspace);
+        conversations.add(0, created);
+        save();
+        fireChanged();
+        return created;
+    }
+
     public void switchTo(String id) {
         if (id.equals(activeId) || findById(id) == null) {
             return;
