@@ -6,7 +6,9 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
@@ -355,5 +357,71 @@ class AppSettingsTest {
         reloaded.save();
         assertEquals("CUSTOM:/usr/bin/bash", reloaded.getPersistentPluginInput("bash"), "另一工具的键不受影响");
         assertEquals("UTF-8", reloaded.getPersistentPluginInput("read"), "第二个工具写入独立");
+    }
+
+    @Test
+    void t13_mcpServersRoundTrip() {
+        Path settingsFile = file("settings.properties");
+        AppSettings testSettings = AppSettings.at(settingsFile);
+        // MCP 服务器名单（MCP 页编辑，mcpServers 键整块 JSON 落盘，后端 getMcpServers 建连）：
+        // 默认空名单；http/stdio 两种传输的整块落盘往返；null=清空是合法状态
+        assertTrue(testSettings.getMcpServers().isEmpty(), "首启无 MCP 服务器");
+        McpServer http = new McpServer();
+        http.setName("idea");
+        http.setTransport(McpServer.TRANSPORT_HTTP);
+        http.setUrl("  http://127.0.0.1:64342/stream  ");
+        http.setHeaders(new LinkedHashMap<>(Map.of("IJ_MCP_SERVER_PROJECT_PATH", "D:/CodingSpace/IdeaProjects/agent-java")));
+        McpServer stdio = new McpServer();
+        stdio.setName("fs");
+        stdio.setTransport(McpServer.TRANSPORT_STDIO);
+        stdio.setEnabled(false);
+        stdio.setCommand("npx");
+        stdio.setArgs(List.of("-y", "@modelcontextprotocol/server-filesystem", "D:/data", "  "));
+        stdio.setEnv(new LinkedHashMap<>(Map.of("A", "1")));
+        testSettings.setMcpServers(List.of(http, stdio));
+        testSettings.save();
+        AppSettings reread = AppSettings.at(settingsFile);
+        assertEquals(2, reread.getMcpServers().size(), "两条名单落盘往返");
+        McpServer h = reread.getMcpServers().get(0);
+        assertEquals("idea", h.getName());
+        assertEquals(McpServer.TRANSPORT_HTTP, h.getTransport());
+        assertTrue(h.isEnabled(), "默认启用");
+        assertEquals("http://127.0.0.1:64342/stream", h.getUrl(), "url strip 落值");
+        assertEquals("D:/CodingSpace/IdeaProjects/agent-java",
+                h.getHeaders().get("IJ_MCP_SERVER_PROJECT_PATH"), "请求头往返");
+        assertEquals(McpServer.PROTOCOL_AUTO, h.getProtocol(), "协议代默认 auto");
+        McpServer f = reread.getMcpServers().get(1);
+        f.setProtocol(McpServer.PROTOCOL_LEGACY);
+        f.setProtocol("bogus-protocol");
+        assertEquals(McpServer.PROTOCOL_AUTO, f.getProtocol(), "非法协议代落默认 auto");
+        assertEquals(McpServer.TRANSPORT_STDIO, f.getTransport());
+        assertFalse(f.isEnabled(), "停用态保留");
+        assertEquals("npx", f.getCommand());
+        assertEquals(List.of("-y", "@modelcontextprotocol/server-filesystem", "D:/data"),
+                f.getArgs(), "空白参数项过滤");
+        assertEquals("1", f.getEnv().get("A"), "环境变量往返");
+        // 非法传输方式落 http（setter 兜底，坏值不该让整条配置失效）
+        f.setTransport("bogus");
+        assertEquals(McpServer.TRANSPORT_HTTP, f.getTransport(), "非法传输方式落默认 http");
+        // 清空：null=清空，落盘后重读无名单（没有服务器是合法状态）
+        reread.setMcpServers(null);
+        reread.save();
+        assertTrue(AppSettings.at(settingsFile).getMcpServers().isEmpty(), "null=清空且落盘");
+    }
+
+    @Test
+    void t14_mcpServersBadJsonTolerated() throws Exception {
+        // 手工改坏 mcpServers（不是合法 JSON 数组）：加载不炸，名单退空（其余设置不受牵连）
+        Path settingsFile = file("settings.properties");
+        store(properties("mcpServers", "{not-json", "uiTheme", "dark"), settingsFile);
+        AppSettings tolerable = AppSettings.at(settingsFile);
+        assertTrue(tolerable.getMcpServers().isEmpty(), "坏 JSON 整块丢弃");
+        assertEquals("dark", tolerable.getUiTheme(), "其余设置不受牵连");
+        // JSON 是数组但条目名字空白：单条丢弃，不炸整块（save 是从模型重建整份文件，垃圾不落盘）
+        store(properties("mcpServers", "[{\"name\":\"  \"},{\"name\":\"ok\",\"transport\":\"http\",\"url\":\"http://x\"}]"),
+                settingsFile);
+        AppSettings filtered = AppSettings.at(settingsFile);
+        assertEquals(1, filtered.getMcpServers().size(), "空白名字条目丢弃");
+        assertEquals("ok", filtered.getMcpServers().get(0).getName(), "合法条目保留");
     }
 }

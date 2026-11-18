@@ -90,6 +90,11 @@ public final class AppSettings {
      *  消息原样发出。名字是否在注册表里由后端消费时兜底 */
     private String activeContextHandler;
 
+    /** MCP 服务器名单（设置面板「MCP」页编辑，mcpServers 键整块 JSON 落盘）。
+     *  后端经 getMcpServers() 读名单建连，发现的工具以 mcp__<服务名>__<工具名> 注册进
+     *  ToolManager；连接状态经 McpCatalog 写桥回显。空名单=没有 MCP 服务器（合法状态） */
+    private List<McpServer> mcpServers = new ArrayList<>();
+
     /** 原始键值快照：load() 填充、save() 末尾整体替换（引用原子读，读侧无锁安全）；
      *  默认空表兜全新安装首次读（load 的早退分支不碰它，getPersistentPluginInput 不 NPE） */
     private Properties properties = new Properties();
@@ -475,6 +480,19 @@ public final class AppSettings {
         enabledTools = names == null ? null : List.copyOf(names);
     }
 
+    /**
+     * MCP 服务器名单（MCP 页的落盘配置）：后端建连消费；列表防御性拷贝，
+     * 条目对象与 profiles 的 Profile 同约定（调用方不就地改，改走 setter 整体提交）
+     */
+    public List<McpServer> getMcpServers() {
+        return List.copyOf(mcpServers);
+    }
+
+    /** 写 MCP 服务器名单（设置面板保存时整体提交）；null=清空（没有服务器是合法状态） */
+    public void setMcpServers(List<McpServer> servers) {
+        mcpServers = servers == null ? new ArrayList<>() : new ArrayList<>(servers);
+    }
+
     public int getWindowWidth() {
         return windowWidth;
     }
@@ -596,6 +614,18 @@ public final class AppSettings {
         if (activeContextHandler != null) {
             properties.setProperty("activeContextHandler", activeContextHandler);
         }
+        // MCP 服务器名单（MCP 页编辑）：空名单不落键（缺键=没有服务器）
+        if (!mcpServers.isEmpty()) {
+            StringBuilder mcpJson = new StringBuilder("[");
+            for (int i = 0; i < mcpServers.size(); i++) {
+                if (i > 0) {
+                    mcpJson.append(',');
+                }
+                mcpJson.append(JsonKit.write(mcpServers.get(i).toJson()));
+            }
+            mcpJson.append(']');
+            properties.setProperty("mcpServers", mcpJson.toString());
+        }
 
         properties.setProperty("windowWidth", String.valueOf(windowWidth));
         properties.setProperty("windowHeight", String.valueOf(windowHeight));
@@ -680,6 +710,24 @@ public final class AppSettings {
         // 上下文管理处理器选择（全局，不随方案）：缺键/空白=不启用
         String contextHandler = properties.getProperty("activeContextHandler");
         activeContextHandler = contextHandler == null || contextHandler.isBlank() ? null : contextHandler.strip();
+        // MCP 服务器名单：缺键=没有；坏 JSON/坏条目宽容处理——坏 JSON 整块丢，名字空白的条目丢弃
+        mcpServers = new ArrayList<>();
+        String mcpRaw = properties.getProperty("mcpServers");
+        if (mcpRaw != null && !mcpRaw.isBlank()) {
+            try {
+                for (Object item : (List<?>) JsonKit.parse(mcpRaw)) {
+                    if (item instanceof Map<?, ?> map) {
+                        McpServer server = McpServer.fromJson((Map<String, Object>) map);
+                        if (!server.getName().isBlank()) {
+                            mcpServers.add(server);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("mcpServers 解析失败（忽略已存名单）: " + e.getMessage());
+                mcpServers = new ArrayList<>();
+            }
+        }
         // 日志设置：等级非法值落默认；旧版全局 logLevel 键迁移成控制台等级（新键缺位时才用）
         logConsoleEnabled = Boolean.parseBoolean(properties.getProperty("log.console.enabled", "true"));
         String consoleLevel = properties.getProperty("log.console.level");
