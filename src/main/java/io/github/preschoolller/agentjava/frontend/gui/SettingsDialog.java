@@ -3,6 +3,8 @@ package io.github.preschoolller.agentjava.frontend.gui;
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.ContextCatalog;
+import io.github.preschoolller.agentjava.frontend.store.McpCatalog;
+import io.github.preschoolller.agentjava.frontend.store.McpServer;
 import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
 import io.github.preschoolller.agentjava.frontend.store.ProviderCatalog;
@@ -48,13 +50,16 @@ import java.awt.RenderingHints;
 import java.awt.Toolkit;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
+import java.awt.event.ItemEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.concurrent.CompletableFuture;
@@ -78,7 +83,11 @@ import java.util.concurrent.CompletableFuture;
  *   k=v 格式如 "bash=WSL;regex=(here-?doc|<<)"，键缺省=不动，键在值空=清除），工具处理后由前端立即
  *   setPersistentPluginInput + save 落盘——持久化是前端输入之后的事，后端只读消费）；
  * 「日志」= 控制台/文件两块输出参数（log.* 自定义键落盘，TinyLogConfigurationLoader 启动时
- * 映射成日志后端属性——换后端只改映射；改后重启生效）。
+ * 映射成日志后端属性——换后端只改映射；改后重启生效）；
+ * 「MCP」= MCP 服务器名单（每 server 一张可展开卡：名称/启用/传输方式 stdio|http + 按方式切换的
+ * 命令/参数/环境变量或地址/请求头；卡头显示运行态，经 McpCatalog 读桥取——后端 MCP Client
+ * 注册 StatusSource 后回报，未接入显示"未运行"兜底；落 AppSettings.mcpServers，后端经
+ * getMcpServers 建连，发现的工具以 mcp__<服务名>__<工具名> 进工具页勾选名单）。
  * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
  * 随方案在模型服务页编辑。
  * 面板里的一切改动（含方案增删改名）都落在深拷贝的工作副本上：展开切换先 flush 表单值，
@@ -142,6 +151,14 @@ public class SettingsDialog extends JDialog {
     private JPanel providerListPanel;
     /** 上下文页的单选钮（首枚固定"不启用"，其余按注册表；保存时按 clientProperty 里的处理器名收集） */
     private final List<JRadioButton> contextHandlerRadios = new ArrayList<>();
+    /** MCP 页的工作副本：面板里的增删改都改它，保存才整体提交（方案页同一约定，取消即丢弃） */
+    private final List<McpServer> mcpWorking = new ArrayList<>();
+    /** 每张 MCP 卡的展开态与表单控件（按条目对象跟踪；增删/换传输方式后整体重建） */
+    private final Set<McpServer> mcpExpanded = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Map<McpServer, McpForm> mcpForms = new IdentityHashMap<>();
+    /** MCP 页的页容器（卡片列表；增删/展开切换/换传输方式后整体重建） */
+    private JPanel mcpPagePanel;
+    private final JButton mcpAddButton = Ui.button("添加服务");
     /** 当前行删除按钮（随目录重建刷新；Shot 断言初始可用态用） */
     private final List<JButton> rowDeleteButtons = new ArrayList<>();
     private final JSpinner temperatureSpinner;
@@ -150,12 +167,13 @@ public class SettingsDialog extends JDialog {
     private final JTextArea systemPromptArea = new JTextArea(6, 24);
     private boolean saved;
 
-    /** 标签页 id：通用（全局对话体验）/ 模型服务（配置方案参数）/ Provider（单选实现）/ 上下文（处理器单选）/ 工具（注册表勾选名单）；默认页=模型服务 */
+    /** 标签页 id：通用（全局对话体验）/ 模型服务（配置方案参数）/ Provider（单选实现）/ 上下文（处理器单选）/ 工具（注册表勾选名单）/ MCP（服务器名单）/ 日志；默认页=模型服务 */
     private static final String TAB_GENERAL = "general";
     private static final String TAB_PROFILE = "profile";
     private static final String TAB_PROVIDERS = "providers";
     private static final String TAB_CONTEXT = "context";
     private static final String TAB_TOOLS = "tools";
+    private static final String TAB_MCP = "mcp";
     private static final String TAB_LOGGING = "logging";
     private String currentTab = TAB_PROFILE;
     private JPanel tabsPanel;
@@ -171,6 +189,12 @@ public class SettingsDialog extends JDialog {
 
         working = settings.copyProfiles();
         selectedName = null; // 打开面板全部收起，点开哪张卡再编辑哪个
+
+        // MCP 页工作副本：深拷贝一份，取消不脏真配置（方案页同一约定）
+        for (McpServer server : settings.getMcpServers()) {
+            mcpWorking.add(server.copy());
+        }
+        mcpAddButton.setPreferredSize(new Dimension(76, 26));
 
         temperatureSpinner = new JSpinner(new SpinnerNumberModel(0.0, 0.0, 2.0, 0.1));
         maxTokensSpinner = new JSpinner(new SpinnerNumberModel(64, 64, 1048576, 64));
@@ -260,6 +284,7 @@ public class SettingsDialog extends JDialog {
         tabsPanel.add(new TabButton("Provider", TAB_PROVIDERS));
         tabsPanel.add(new TabButton("上下文", TAB_CONTEXT));
         tabsPanel.add(new TabButton("工具", TAB_TOOLS));
+        tabsPanel.add(new TabButton("MCP", TAB_MCP));
         tabsPanel.add(new TabButton("日志", TAB_LOGGING));
 
         // 两页内容（CardLayout 切换）：每页各自套滚动容器，短页不继承长页的滚动空间。
@@ -272,6 +297,7 @@ public class SettingsDialog extends JDialog {
         pagesPanel.add(wrapPage(buildProvidersPage()), TAB_PROVIDERS);
         pagesPanel.add(wrapPage(buildContextPage()), TAB_CONTEXT);
         pagesPanel.add(wrapPage(buildToolsPage()), TAB_TOOLS);
+        pagesPanel.add(wrapPage(buildMcpPage()), TAB_MCP);
         pagesPanel.add(wrapPage(buildLoggingPage()), TAB_LOGGING);
         pageLayout.show(pagesPanel, currentTab);
 
@@ -887,6 +913,357 @@ public class SettingsDialog extends JDialog {
     private static InteractiveTarget contextTarget(ContextCatalog.HandlerInfo info) {
         return new InteractiveTarget(info.name(), info.interactiveTips(),
                 ContextCatalog.persistentInput(info.name()), ContextCatalog::uiInteractive);
+    }
+
+    // —— MCP 页：服务器名单的增删改（落 AppSettings.mcpServers，后端经 getMcpServers 建连） ——
+
+    /**
+     * MCP 页：每个 server 一张可展开卡片（名称/启用/传输方式 + 按传输方式切换的字段：
+     * stdio=命令/参数/环境变量，http=地址/请求头）。工作副本编辑（mcpWorking），保存才整体提交。
+     * 卡头摘要旁显示运行状态（McpCatalog 读桥；后端未接入时显示"未运行"兜底，页面照常可编辑）。
+     * 发现的工具不在这里列——它们注册进 ToolManager 后自动出现在「工具」页勾选名单里。
+     */
+    private JPanel buildMcpPage() {
+        JPanel page = new JPanel();
+        page.setLayout(new BoxLayout(page, BoxLayout.Y_AXIS));
+        page.setBackground(Ui.BG);
+        page.setBorder(BorderFactory.createEmptyBorder(6, 18, 4, 18));
+
+        JPanel addRowPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        addRowPanel.setOpaque(false);
+        mcpAddButton.addActionListener(e -> addMcpServer());
+        addRowPanel.add(mcpAddButton);
+        JLabel addHint = new JLabel("添加 MCP 服务器；保存后后端按名单建连，发现的工具以 "
+                + "mcp__<服务名>__<工具名> 进「工具」页勾选名单");
+        addHint.setFont(Ui.FONT_PLAIN);
+        addHint.setForeground(Ui.TEXT_SECONDARY);
+        addRowPanel.add(addHint);
+        page.add(addRowPanel);
+        page.add(Box.createVerticalStrut(6));
+
+        mcpPagePanel = new JPanel();
+        mcpPagePanel.setOpaque(false);
+        mcpPagePanel.setLayout(new BoxLayout(mcpPagePanel, BoxLayout.Y_AXIS));
+        page.add(mcpPagePanel);
+        page.add(Box.createVerticalGlue());
+        rebuildMcpPage();
+        return page;
+    }
+
+    /** 重建 MCP 卡片列表（增删/展开切换/换传输方式后调用；空名单给引导提示） */
+    private void rebuildMcpPage() {
+        mcpPagePanel.removeAll();
+        for (McpServer server : mcpWorking) {
+            mcpPagePanel.add(buildMcpCard(server));
+            mcpPagePanel.add(Box.createVerticalStrut(8));
+        }
+        if (mcpWorking.isEmpty()) {
+            JLabel hint = new JLabel("还没有配置 MCP 服务器——点「添加服务」开始。");
+            hint.setFont(Ui.FONT_PLAIN);
+            hint.setForeground(Ui.TEXT_SECONDARY);
+            JPanel hintCard = Ui.card(Ui.CARD_BG);
+            hintCard.setLayout(new FlowLayout(FlowLayout.LEFT, 14, 10));
+            hintCard.add(hint);
+            mcpPagePanel.add(hintCard);
+            mcpPagePanel.add(Box.createVerticalStrut(8));
+        }
+        mcpPagePanel.revalidate();
+        mcpPagePanel.repaint();
+    }
+
+    /** 一张 MCP 卡：头部行（展开/收起 + 服务名 + 摘要 + 运行状态 + 删除）；展开态下部挂编辑表单 */
+    private JPanel buildMcpCard(McpServer server) {
+        JPanel card = Ui.card(Ui.CARD_BG);
+        card.setLayout(new GridBagLayout());
+        boolean expanded = mcpExpanded.contains(server);
+
+        JButton toggle = Ui.button(expanded ? "收起" : "展开");
+        toggle.setPreferredSize(new Dimension(58, 26));
+        // 钉死最小尺寸：长命令/长 URL 的卡会触发 GridBag"整卡切最小尺寸"暗分支（踩坑 #34），
+        // 按钮被压成文本小钮；min=pref 后压缩由可折行的摘要列吸收
+        toggle.setMinimumSize(new Dimension(58, 26));
+        toggle.addActionListener(e -> {
+            if (expanded) {
+                flushMcpForm(server);
+                mcpExpanded.remove(server);
+                mcpForms.remove(server);
+            } else {
+                flushAllMcpForms();
+                mcpExpanded.add(server);
+            }
+            rebuildMcpPage();
+        });
+
+        JLabel nameLabel = new JLabel(server.getName().isBlank() ? "（未命名）" : server.getName());
+        nameLabel.setFont(new Font("微软雅黑", Font.BOLD, 13));
+        nameLabel.setForeground(Ui.TEXT);
+
+        JLabel summary = new JLabel(mcpSummary(server));
+        summary.setFont(Ui.FONT_PLAIN);
+        summary.setForeground(Ui.TEXT_SECONDARY);
+        summary.setToolTipText(mcpSummary(server));
+
+        JLabel status = mcpStatusLabel(server);
+        status.setFont(Ui.FONT_PLAIN);
+
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 14, 8, 6);
+        gbc.anchor = GridBagConstraints.WEST;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        card.add(toggle, gbc);
+        gbc.gridx = 1;
+        gbc.insets = new Insets(8, 0, 8, 6);
+        card.add(nameLabel, gbc);
+        gbc.gridx = 2;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        card.add(summary, gbc);
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.gridx = 3;
+        gbc.insets = new Insets(8, 6, 8, 6);
+        card.add(status, gbc);
+        gbc.gridx = 4;
+        gbc.insets = new Insets(8, 6, 8, 14);
+        JButton deleteButton = Ui.button("删除");
+        deleteButton.addActionListener(e -> deleteMcpServer(server));
+        card.add(deleteButton, gbc);
+
+        if (expanded) {
+            gbc.gridx = 0;
+            gbc.gridy = 1;
+            gbc.gridwidth = 5;
+            gbc.weightx = 1;
+            gbc.fill = GridBagConstraints.HORIZONTAL;
+            card.add(buildMcpForm(server), gbc);
+        }
+        return card;
+    }
+
+    /** 卡头摘要：停用标记 + 传输方式与地址/命令（长内容靠 tooltip 兜底） */
+    private String mcpSummary(McpServer server) {
+        String body = McpServer.TRANSPORT_STDIO.equals(server.getTransport())
+                ? "stdio · " + (server.getCommand().isBlank() ? "（未填命令）" : server.getCommand())
+                : "http · " + (server.getUrl().isBlank() ? "（未填地址）" : server.getUrl());
+        return (server.isEnabled() ? "" : "（停用）") + body;
+    }
+
+    /** 卡头运行状态：McpCatalog 快照按名字对上就显示（已连接·N 工具 / 错误摘要），对不上"未运行" */
+    private JLabel mcpStatusLabel(McpServer server) {
+        String text = "未运行";
+        for (McpCatalog.ServerRuntime runtime : McpCatalog.runtime()) {
+            if (runtime.name().equals(server.getName())) {
+                switch (runtime.state()) {
+                    case "connected" -> text = "已连接 · " + runtime.tools().size() + " 工具";
+                    case "connecting" -> text = "连接中…";
+                    case "error" -> text = "报错" + (runtime.detail() == null || runtime.detail().isBlank()
+                            ? "" : "：" + runtime.detail());
+                    default -> text = "已停止";
+                }
+                break;
+            }
+        }
+        JLabel label = new JLabel(text);
+        label.setForeground(Ui.TEXT_SECONDARY);
+        label.setToolTipText("运行状态由后端 MCP Client 回报；后端未接入时恒为「未运行」");
+        return label;
+    }
+
+    /** MCP 卡的表单控件集（flushMcpForm 按它回读进工作副本条目） */
+    private record McpForm(JTextField nameField, JCheckBox enabledBox, JComboBox<String> transportCombo,
+                           JComboBox<String> protocolCombo,
+                           JTextField commandField, JTextField argsField, JTextField envField,
+                           JTextField urlField, JTextField headersField) {
+    }
+
+    /**
+     * 编辑表单（每张卡各建一套，展开时挂进卡内）。首行是运行态说明（只读），随后
+     * 名称/启用/传输方式，再按传输方式挂 stdio 或 http 的字段；换传输方式即重建整页
+     * （字段集不同，重建是唯一可靠的行增删方式——GridBag 动态抽行麻烦且易踩布局暗分支）。
+     */
+    private JPanel buildMcpForm(McpServer server) {
+        JTextField nameField = new JTextField(server.getName());
+        Ui.styleInput(nameField);
+        JCheckBox enabledBox = new JCheckBox("启用（保存后后端对此 server 建连）");
+        enabledBox.setSelected(server.isEnabled());
+        Ui.styleCheckBox(enabledBox);
+        JComboBox<String> transportCombo = new JComboBox<>(McpServer.TRANSPORTS.toArray(new String[0]));
+        Ui.styleComboBox(transportCombo);
+        transportCombo.setSelectedItem(server.getTransport());
+        transportCombo.setPreferredSize(new Dimension(150, 30));
+        JComboBox<String> protocolCombo = new JComboBox<>(McpServer.PROTOCOLS.toArray(new String[0]));
+        Ui.styleComboBox(protocolCombo);
+        protocolCombo.setSelectedItem(server.getProtocol());
+        protocolCombo.setPreferredSize(new Dimension(150, 30));
+
+        JTextField commandField = new JTextField(server.getCommand());
+        Ui.styleInput(commandField);
+        JTextField argsField = new JTextField(String.join(", ", server.getArgs()));
+        Ui.styleInput(argsField);
+        JTextField envField = new JTextField(joinPairs(server.getEnv()));
+        Ui.styleInput(envField);
+        JTextField urlField = new JTextField(server.getUrl());
+        Ui.styleInput(urlField);
+        JTextField headersField = new JTextField(joinPairs(server.getHeaders()));
+        Ui.styleInput(headersField);
+
+        JPanel form = Ui.card(Ui.CARD_BG);
+        form.setLayout(new GridBagLayout());
+        int row = 0;
+        // 运行态说明：McpCatalog 快照（后端 MCP Client 注册数据源后显示"已连接·N 工具/报错"）
+        row = addHintedRow(form, row, "运行状态", mcpStatusLabel(server),
+                "后端按名单建连后回报；未接入时恒为「未运行」。工具发现后进「工具」页勾选名单，不在本页列出。");
+        row = addRow(form, row, "名称", nameField);
+        row = addRow(form, row, "启用", enabledBox);
+        row = addHintedRow(form, row, "传输方式", transportCombo,
+                "stdio=本机子进程（IDE 之外的常规 MCP server，如 npx 拉起）；"
+                        + "http=远程 Streamable HTTP 端点（IDEA 内置 server 用这个）。切换后本页字段跟着换");
+        row = addHintedRow(form, row, "协议代", protocolCombo,
+                "auto=建连时探测（先试 initialize 握手，握不动回退无握手直调），一般不用改；"
+                        + "legacy=旧协议必须握手（现主流，IDEA 内置 server 是这类）；"
+                        + "modern=2026-07-28 新协议无握手。仅探测都失败或行为怪异时手动指定");
+        if (McpServer.TRANSPORT_STDIO.equals(transportCombo.getSelectedItem())) {
+            row = addHintedRow(form, row, "命令", commandField,
+                    "可执行文件，如 npx 或 C:\\Program Files\\JetBrains\\IntelliJ IDEA\\bin\\idea64.exe");
+            row = addHintedRow(form, row, "参数", argsField,
+                    "逗号分隔，如 stdioMcpServer, -y, @modelcontextprotocol/server-filesystem");
+            row = addHintedRow(form, row, "环境变量", envField,
+                    "KEY=VALUE 逗号分隔，如 IJ_MCP_SERVER_PORT=64342, IJ_MCP_SERVER_PROJECT_PATH=D:/proj");
+        } else {
+            row = addHintedRow(form, row, "地址", urlField,
+                    "Streamable HTTP 端点，如 http://127.0.0.1:64342/stream（IDEA 设置 | 工具 | MCP Server 可复制）");
+            row = addHintedRow(form, row, "请求头", headersField,
+                    "KEY=VALUE 逗号分隔；IDEA 多项目同开时用 IJ_MCP_SERVER_PROJECT_PATH=<项目路径> 路由，单项目可省");
+        }
+
+        // 换传输方式：先把整张表单回读进条目（含新的传输方式值），再重建整页换字段集
+        transportCombo.addItemListener(e -> {
+            if (e.getStateChange() == ItemEvent.SELECTED) {
+                flushMcpForm(server);
+                rebuildMcpPage();
+            }
+        });
+
+        mcpForms.put(server, new McpForm(nameField, enabledBox, transportCombo, protocolCombo,
+                commandField, argsField, envField, urlField, headersField));
+        return form;
+    }
+
+    /** 表单回读进工作副本条目（收起/换传输/保存前调用；条目不在表单注册表=未展开，跳过） */
+    private void flushMcpForm(McpServer server) {
+        McpForm form = mcpForms.get(server);
+        if (form == null) {
+            return;
+        }
+        server.setName(form.nameField().getText());
+        server.setEnabled(form.enabledBox().isSelected());
+        Object transport = form.transportCombo().getSelectedItem();
+        if (transport instanceof String s && McpServer.TRANSPORTS.contains(s)) {
+            server.setTransport(s);
+        }
+        Object protocol = form.protocolCombo().getSelectedItem();
+        if (protocol instanceof String s && McpServer.PROTOCOLS.contains(s)) {
+            server.setProtocol(s);
+        }
+        server.setCommand(form.commandField().getText());
+        server.setArgs(splitList(form.argsField().getText()));
+        server.setEnv(splitPairs(form.envField().getText()));
+        server.setUrl(form.urlField().getText());
+        server.setHeaders(splitPairs(form.headersField().getText()));
+    }
+
+    /** 全部展开卡的表单回读（加卡/保存前调用，保证工作副本是最新的） */
+    private void flushAllMcpForms() {
+        for (McpServer server : mcpExpanded) {
+            flushMcpForm(server);
+        }
+    }
+
+    /** 新建一条 MCP 服务器（名字自动避让成唯一值），展开进入编辑 */
+    private void addMcpServer() {
+        flushAllMcpForms();
+        McpServer server = new McpServer();
+        server.setName(uniqueMcpName("新服务"));
+        mcpWorking.add(server);
+        mcpExpanded.add(server);
+        rebuildMcpPage();
+    }
+
+    /** 删除一条（工作副本层面，取消对话框即整体还原） */
+    private void deleteMcpServer(McpServer server) {
+        mcpWorking.remove(server);
+        mcpForms.remove(server);
+        mcpExpanded.remove(server);
+        rebuildMcpPage();
+    }
+
+    /** 名字避让：base 被占用就追加 -2/-3/…，保证名单内唯一 */
+    private String uniqueMcpName(String base) {
+        String candidate = base;
+        int suffix = 2;
+        boolean exists = true;
+        while (exists) {
+            exists = false;
+            for (McpServer server : mcpWorking) {
+                if (server.getName().equals(candidate)) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (exists) {
+                candidate = base + "-" + suffix++;
+            }
+        }
+        return candidate;
+    }
+
+    /** 逗号分隔文本 → 列表（去空白、丢空项；空文本=空列表） */
+    private static List<String> splitList(String raw) {
+        List<String> result = new ArrayList<>();
+        if (raw == null || raw.isBlank()) {
+            return result;
+        }
+        for (String item : raw.split(",")) {
+            if (!item.isBlank()) {
+                result.add(item.strip());
+            }
+        }
+        return result;
+    }
+
+    /** "KEY=VALUE" 逗号分隔文本 → 有序表（缺 = 的残项丢弃；键空白丢弃） */
+    private static Map<String, String> splitPairs(String raw) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (raw == null || raw.isBlank()) {
+            return result;
+        }
+        for (String item : raw.split(",")) {
+            int eq = item.indexOf('=');
+            if (eq <= 0) {
+                continue;
+            }
+            String key = item.substring(0, eq).strip();
+            String value = item.substring(eq + 1).strip();
+            if (!key.isEmpty()) {
+                result.put(key, value);
+            }
+        }
+        return result;
+    }
+
+    /** 有序表 → "KEY=VALUE" 逗号分隔文本（表单回显用） */
+    private static String joinPairs(Map<String, String> pairs) {
+        StringBuilder result = new StringBuilder();
+        for (Map.Entry<String, String> entry : pairs.entrySet()) {
+            if (result.length() > 0) {
+                result.append(", ");
+            }
+            result.append(entry.getKey()).append('=').append(entry.getValue());
+        }
+        return result.toString();
     }
 
     /**
@@ -1647,6 +2024,22 @@ public class SettingsDialog extends JDialog {
     private void save() {
         // 当前展开方案的表单值先落回工作副本（全部收起时没有表单可落，方案保持原值）
         flushFormIntoSelected();
+        // MCP 页：展开卡的表单值先落回工作副本，再校验名单（坏名单整次保存拦下，别静默洗配置）
+        flushAllMcpForms();
+        List<String> mcpNames = new ArrayList<>();
+        for (McpServer server : mcpWorking) {
+            if (server.getName().isBlank()) {
+                Ui.messageDialog(this, "保存受阻", "MCP 服务器有未命名的条目——每个服务都得有个名字"
+                        + "（工具注册前缀 mcp__<服务名>__<工具名> 会用到它）。未保存任何改动。");
+                return;
+            }
+            if (mcpNames.contains(server.getName())) {
+                Ui.messageDialog(this, "保存受阻", "MCP 服务器名字「" + server.getName()
+                        + "」重复了——名字是建连与工具注册的路由键，必须唯一。未保存任何改动。");
+                return;
+            }
+            mcpNames.add(server.getName());
+        }
         settings.setContentFontSize(((Number) fontSizeSpinner.getValue()).intValue());
         settings.setUiTheme(switch (themeCombo.getSelectedIndex()) {
             case 0 -> "system";
@@ -1713,6 +2106,10 @@ public class SettingsDialog extends JDialog {
             }
         }
         settings.applyProfiles(working); // 内部落盘 + fireChanged
+        // MCP 名单整体提交（校验已过）：后端在 AppSettings 监听里感知变化重建 MCP 连接，
+        // 新发现的工具注册进 ToolManager 后自动进「工具」页勾选名单
+        settings.setMcpServers(new ArrayList<>(mcpWorking));
+        settings.save();
         // 作废 active 缓存让下次 createProvider 重新解析（不重启即时生效；重启则从落盘值恢复）
         ProviderFactory.invalidateActiveProvider();
         saved = true;
