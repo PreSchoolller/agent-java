@@ -98,7 +98,7 @@ public class ModernMcp implements BaseMcp {
 
     private List<McpTool> fetchToolList() {
         List<McpTool> result = new ArrayList<>();
-        client.listTools().list().tools().forEach(tool -> result.add(new McpTool(config.name(), tool.name()) {
+        client.listTools().skipCache().list().tools().forEach(tool -> result.add(new McpTool(config.name(), tool.name()) {
             @Override
             public String description() {
                 return tool.description();
@@ -125,5 +125,18 @@ public class ModernMcp implements BaseMcp {
         }
         result.append(callToolResult.content());
         return result.toString();
+    }
+
+    @Override
+    public void initialize() {
+    }
+
+    @Override
+    public Object ping() {
+        return null;
+    }
+
+    @Override
+    public void closeGracefully() {
     }
 }
