@@ -1,19 +1,11 @@
 package io.github.preschoolller.agentjava.backend.tool;
 
-import com.openai.core.JsonValue;
-import com.openai.models.FunctionDefinition;
-import com.openai.models.FunctionParameters;
-import com.openai.models.chat.completions.ChatCompletionFunctionTool;
-import com.openai.models.responses.FunctionTool;
-import com.openai.models.responses.ResponseFunctionToolCall;
-import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
+import io.github.preschoolller.agentjava.backend.mcp.McpTool;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -29,8 +21,6 @@ public class ToolManager {
     ));
 
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ToolManager.class);
-
-    private static final AppSettings appSettings = AppSettings.get();
 
     private ToolManager() {
     }
@@ -56,56 +46,6 @@ public class ToolManager {
         return tools.getOrDefault(name, BAD_TOOL);
     }
 
-    /** 只接受已注册的 Tool（buildParams 遍历 tools 时用）；BAD_TOOL.schema() 是 null，别拿占位工具进来 */
-    public static FunctionTool getFunctionTool(Tool tool) {
-        HashMap<String, JsonValue> parameters = new HashMap<>();
-        if (tool.schema() != null) {
-            tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
-        }
-        parameters.put("additionalProperties", JsonValue.from(false)); // strict 模式硬性要求；required 全集暂未补（当前端点不校验），要兼容官方端点时再补
-        FunctionTool functionTool = FunctionTool
-                .builder()
-                .name(tool.name())
-                .description(tool.description())
-                .parameters(FunctionTool.Parameters.builder().additionalProperties(parameters).build())
-                .strict(true)
-                .build();
-        return functionTool;
-    }
-
-    /** 只接受已注册的 Tool（buildParams 遍历 tools 时用）；BAD_TOOL.schema() 是 null，别拿占位工具进来 */
-    public static ChatCompletionFunctionTool getChatCompletionFunctionTool(Tool tool) {
-        HashMap<String, JsonValue> parameters = new HashMap<>();
-        if (tool.schema() != null) {
-            tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
-        }
-        parameters.put("additionalProperties", JsonValue.from(false)); // 同上：strict 模式硬性要求
-        return ChatCompletionFunctionTool
-                .builder()
-                .function(FunctionDefinition.builder()
-                        .name(tool.name())
-                        .description(tool.description())
-                        .parameters(FunctionParameters.builder()
-                                .putAllAdditionalProperties(parameters)
-                                .build())
-                        .strict(true)
-                        .build())
-                .build();
-    }
-
-    /** 执行一次工具调用：workspace 是会话绑定的工作区目录，透传给工具做相对路径解析 */
-    public static String execute(ResponseFunctionToolCall functionTool, String workspace) {
-        return findByName(functionTool.name()).execute(functionTool.arguments(), workspace);
-    }
-
-    /** 执行一次工具调用：workspace 是会话绑定的工作区目录，透传给工具做相对路径解析 */
-    public static String execute(ToolCall toolCall, String workspace) {
-        if (toolCall == null || toolCall.getTool() == null || toolCall.getTool() instanceof BadTool) {
-            return BAD_TOOL.execute("", workspace);
-        }
-        return toolCall.getTool().execute(toolCall.getArguments(), workspace);
-    }
-
     /**
      * 目前规划：
      * 1. 历史中用过的工具不受前端未勾选影响
@@ -129,5 +69,9 @@ public class ToolManager {
             result.add(tool);
         }
         return Collections.unmodifiableList(result);
+    }
+
+    public static void unregister(McpTool unavailableTool) {
+        tools.remove(unavailableTool.name());
     }
 }

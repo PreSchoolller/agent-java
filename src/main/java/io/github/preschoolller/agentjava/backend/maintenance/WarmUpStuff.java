@@ -12,6 +12,6 @@ public class WarmUpStuff {
     public static void warmup() {
         PluginLoader.load();
         CompletableFuture.runAsync(ToolBash::exploreBash);
-        McpManager.loadMcpTools();
+        McpManager.loadMcpToolsAsync();
     }
 }
