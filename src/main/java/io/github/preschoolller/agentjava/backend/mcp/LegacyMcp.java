@@ -90,6 +90,11 @@ public class LegacyMcp implements BaseMcp {
     }
 
     @Override
+    public Object ping() {
+        return client.ping();
+    }
+
+    @Override
     public void closeGracefully() {
         client.closeGracefully();
     }

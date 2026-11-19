@@ -1,5 +1,6 @@
 package io.github.preschoolller.agentjava.backend.maintenance;
 
+import io.github.preschoolller.agentjava.backend.mcp.McpManager;
 import io.github.preschoolller.agentjava.backend.tool.ToolBash;
 
 import java.util.concurrent.CompletableFuture;
@@ -11,5 +12,6 @@ public class WarmUpStuff {
     public static void warmup() {
         PluginLoader.load();
         CompletableFuture.runAsync(ToolBash::exploreBash);
+        McpManager.loadMcpTools();
     }
 }
