@@ -21,7 +21,15 @@ public abstract class McpTool implements Tool {
 
     @Override
     public final String name() {
-        return "mcp__" + serverName.toLowerCase() + "__" + originalName;
+        return "mcp__" + sanitize(serverName) + "__" + sanitize(originalName);
+    }
+
+    /** 注册名落到 provider 的函数命名契约（字母/数字/下划线/连字符）：怪字符换下划线，超长截断；
+     *  纯函数保证同一输入映射稳定，unregister 按 name() 摘除时与注册名恒一致 */
+    private static String sanitize(String raw) {
+        String cleaned = (raw == null ? "" : raw.strip()).toLowerCase();
+        cleaned = cleaned.replaceAll("[^a-z0-9_-]", "_");
+        return cleaned.length() > 64 ? cleaned.substring(0, 64) : cleaned;
     }
 
     @Override

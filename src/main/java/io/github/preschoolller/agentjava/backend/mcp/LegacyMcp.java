@@ -33,7 +33,9 @@ public class LegacyMcp implements BaseMcp {
                 if (parsed == null) {
                     throw new IllegalArgumentException("failed to parse url: " + url);
                 }
-                String baseUri = parsed.scheme() + "://" + parsed.host() + ":" + parsed.port();
+                // URL 无显式端口时 port() 返回 -1，不能拼进 baseUri（默认端口由 scheme 决定）
+                int port = parsed.port();
+                String baseUri = parsed.scheme() + "://" + parsed.host() + (port != -1 ? ":" + port : "");
                 String endpoint = parsed.encodedPath();
                 if (endpoint.equals("/") || endpoint.isBlank()) {
                     endpoint = "/mcp";
@@ -145,11 +147,21 @@ public class LegacyMcp implements BaseMcp {
         McpSchema.CallToolRequest.Builder builder = McpSchema.CallToolRequest.builder(name);
         builder.arguments(arguments);
         McpSchema.CallToolResult callToolResult = client.callTool(builder.build());
-        StringBuilder result = new StringBuilder();
-        if (callToolResult.isError()) {
-            result.append("mcp tool call returned error: ");
+        String body = contentToText(callToolResult.content());
+        return callToolResult.isError() ? "mcp tool call returned error: " + body : body;
+    }
+
+    /** 把 MCP 返回的 content 块拼成模型可读文本：TextContent 取 text，其余块（image/resource）留类型占位 */
+    private static String contentToText(List<McpSchema.Content> contents) {
+        StringBuilder text = new StringBuilder();
+        for (McpSchema.Content content : contents) {
+            if (content instanceof McpSchema.TextContent textContent) {
+                text.append(textContent.text());
+            } else {
+                text.append('[').append(content.type()).append(']');
+            }
+            text.append('\n');
         }
-        result.append(callToolResult.content());
-        return result.toString();
+        return text.toString().strip();
     }
 }

@@ -44,11 +44,18 @@ public class McpManager {
         CompletableFuture.runAsync(McpManager::loadMcpTools);
     }
 
-    public static void loadMcpTools() {
+    /** synchronized：变更监听与 warmup 都会异步触发，串行化防止两次 diff 交错（复用/摘除判断基于同一份 pool 快照） */
+    public static synchronized void loadMcpTools() {
         List<McpServer> mcpServers = appSettings.getMcpServers();
         Set<McpConfig> tmpNew = new HashSet<>(mcpServers.size());
         for (McpServer mcpServer : mcpServers) {
             McpConfig mcpConfig = convertMcpServerToMcpConfig(mcpServer);
+            BaseMcp existing = mcpPools.get(mcpServer.getName());
+            if (existing != null && existing.getConfig().equals(mcpConfig)) {
+                // 配置未变：复用现有实例（不重建连接，避免旧客户端泄漏），状态沿用上次回显
+                tmpNew.add(mcpConfig);
+                continue;
+            }
             BaseMcp baseMcp = null;
             try {
                 baseMcp = BaseMcp.of(mcpConfig);
@@ -56,9 +63,19 @@ public class McpManager {
                 LOG.warn("failed to load MCP config", e);
             }
             if (baseMcp != null) {
+                if (existing != null) {
+                    // 同名但配置变了：先摘旧实例的工具并关闭旧连接，再换新
+                    unregisterAndClose(existing);
+                }
                 mcpPools.put(mcpServer.getName(), baseMcp);
                 tmpNew.add(mcpConfig);
                 currentState.put(mcpServer.getName(), new McpCatalog.ServerRuntime(mcpServer.getName(), "connecting", "", List.of()));
+            } else if (existing != null) {
+                // 新配置非法但旧的还挂着：旧配置已不被认可，照常摘除（占住名额防被 diff 误判）
+                unregisterAndClose(existing);
+                mcpPools.remove(mcpServer.getName());
+                currentState.remove(mcpServer.getName());
+                tmpNew.add(mcpConfig);
             }
         }
         Set<McpConfig> tmpCurrent = mcpPools.values().stream().collect(HashSet::new, (set, mcp) -> set.add(mcp.getConfig()), Set::addAll);
@@ -72,12 +89,25 @@ public class McpManager {
         for (String unavailableName : unavailableServers) {
             BaseMcp removed = mcpPools.remove(unavailableName);
             if (removed != null) {
-                for (McpTool unavailableTool : removed.listTools(false)) {
-                    ToolManager.unregister(unavailableTool);
-                }
-                removed.closeGracefully();
+                unregisterAndClose(removed);
             }
             currentState.remove(unavailableName);
+        }
+    }
+
+    /** 摘除一个 server 实例的全部工具并关闭底层连接；每步独立吞错，清理链不因单步失败中断（漏一个比断整个清理好） */
+    private static void unregisterAndClose(BaseMcp mcp) {
+        try {
+            for (McpTool unavailableTool : mcp.listTools(false)) {
+                ToolManager.unregister(unavailableTool);
+            }
+        } catch (Throwable e) {
+            LOG.warn("failed to unregister tools of mcp server {}", mcp.getConfig().name(), e);
+        }
+        try {
+            mcp.closeGracefully();
+        } catch (Throwable e) {
+            LOG.warn("failed to close mcp server {}", mcp.getConfig().name(), e);
         }
     }
 
