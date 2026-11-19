@@ -4,11 +4,14 @@ import com.openai.core.JsonValue;
 import com.openai.core.http.StreamResponse;
 import com.openai.errors.OpenAIIoException;
 import com.openai.errors.OpenAIServiceException;
+import com.openai.models.FunctionDefinition;
+import com.openai.models.FunctionParameters;
 import com.openai.models.ReasoningEffort;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam;
 import com.openai.models.chat.completions.ChatCompletionChunk;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
+import com.openai.models.chat.completions.ChatCompletionFunctionTool;
 import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
 import com.openai.models.chat.completions.ChatCompletionMessageParam;
 import com.openai.models.chat.completions.ChatCompletionStreamOptions;
@@ -150,9 +153,30 @@ public class OpenAiChatCompletionProvider implements Provider {
             return builder.build(); // 纯聊天：不声明任何工具，模型调不了东西，审批/执行链路整个不参与
         }
         for (Tool tool : ToolManager.shouldRevealTools(historyTools, promptParams.getEnabledTools())) {
-            builder.addTool(ToolManager.getChatCompletionFunctionTool(tool));
+            builder.addTool(getChatCompletionFunctionTool(tool));
         }
         return builder.build();
+    }
+
+    private static ChatCompletionFunctionTool getChatCompletionFunctionTool(Tool tool) {
+        HashMap<String, JsonValue> parameters = new HashMap<>();
+        if (tool.schema() != null) {
+            tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
+        }
+        if (tool.strictMode() && !parameters.containsKey("additionalProperties")) {
+            parameters.put("additionalProperties", JsonValue.from(false));
+        }
+        return ChatCompletionFunctionTool
+                .builder()
+                .function(FunctionDefinition.builder()
+                        .name(tool.name())
+                        .description(tool.description())
+                        .parameters(FunctionParameters.builder()
+                                .putAllAdditionalProperties(parameters)
+                                .build())
+                        .strict(tool.strictMode())
+                        .build())
+                .build();
     }
 
     private static ChatCompletionMessageParam systemMessage(PromptParams promptParams) {

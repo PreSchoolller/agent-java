@@ -2,12 +2,14 @@ package io.github.preschoolller.agentjava.backend.provider;
 
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
+import com.openai.core.JsonValue;
 import com.openai.core.http.StreamResponse;
 import com.openai.errors.OpenAIIoException;
 import com.openai.errors.OpenAIServiceException;
 import com.openai.models.Reasoning;
 import com.openai.models.ReasoningEffort;
 import com.openai.models.responses.EasyInputMessage;
+import com.openai.models.responses.FunctionTool;
 import com.openai.models.responses.Response;
 import com.openai.models.responses.ResponseCompletedEvent;
 import com.openai.models.responses.ResponseContentPartAddedEvent;
@@ -55,6 +57,7 @@ import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -180,9 +183,26 @@ public class OpenAiResponseProvider implements Provider {
             return builder.build(); // 纯聊天：不声明任何工具，模型调不了东西，审批/执行链路整个不参与
         }
         for (Tool tool : ToolManager.shouldRevealTools(historyTools, promptParams.getEnabledTools())) {
-            builder.addTool(ToolManager.getFunctionTool(tool));
+            builder.addTool(getFunctionTool(tool));
         }
         return builder.build();
+    }
+
+    private static FunctionTool getFunctionTool(Tool tool) {
+        HashMap<String, JsonValue> parameters = new HashMap<>();
+        if (tool.schema() != null) {
+            tool.schema().forEach((k,v) -> parameters.put(k, JsonValue.from(v)));
+        }
+        if (tool.strictMode() && !parameters.containsKey("additionalProperties")) {
+            parameters.put("additionalProperties", JsonValue.from(false));
+        }
+        return FunctionTool
+                .builder()
+                .name(tool.name())
+                .description(tool.description())
+                .parameters(FunctionTool.Parameters.builder().additionalProperties(parameters).build())
+                .strict(tool.strictMode())
+                .build();
     }
 
     /**

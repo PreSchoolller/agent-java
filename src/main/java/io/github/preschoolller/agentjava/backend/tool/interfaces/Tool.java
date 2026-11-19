@@ -83,4 +83,5 @@ public interface Tool extends PluginBase {
         return false;
     }
 
+    default boolean strictMode() { return true; }
 }

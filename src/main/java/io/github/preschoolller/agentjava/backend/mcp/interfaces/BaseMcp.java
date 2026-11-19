@@ -31,4 +31,6 @@ public interface BaseMcp {
     default void closeGracefully() {}
 
     List<McpTool> listTools(boolean reFetch);
+
+    McpConfig getConfig();
 }

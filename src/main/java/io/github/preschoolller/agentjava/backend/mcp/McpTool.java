@@ -36,4 +36,9 @@ public abstract class McpTool implements Tool {
         }
         return result;
     }
+
+    @Override
+    public final boolean strictMode() {
+        return false;
+    }
 }

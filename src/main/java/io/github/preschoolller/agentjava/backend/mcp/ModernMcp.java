@@ -96,6 +96,11 @@ public class ModernMcp implements BaseMcp {
         return Collections.unmodifiableList(toolList);
     }
 
+    @Override
+    public McpConfig getConfig() {
+        return config;
+    }
+
     private List<McpTool> fetchToolList() {
         List<McpTool> result = new ArrayList<>();
         client.listTools().skipCache().list().tools().forEach(tool -> result.add(new McpTool(config.name(), tool.name()) {
