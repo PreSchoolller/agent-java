@@ -27,17 +27,15 @@ public final class McpServer {
     public static final String PROTOCOL_LEGACY = "legacy";
     /** 协议代=modern：无握手，直接业务请求（2026-07-28 新协议，官方 SDK modern 包实现） */
     public static final String PROTOCOL_MODERN = "modern";
-    /** 协议代=auto：建连时探测——先试 initialize 握手，握不动回退无握手直调（默认值） */
-    public static final String PROTOCOL_AUTO = "auto";
-    /** 协议代取值（设置页下拉与落盘值一一对应；缺键=auto，老配置天然兼容） */
-    public static final List<String> PROTOCOLS = List.of(PROTOCOL_AUTO, PROTOCOL_LEGACY, PROTOCOL_MODERN);
+    /** 协议代取值（设置页下拉与落盘值一一对应；缺键=legacy，老配置里的 auto 键值非法、落 legacy） */
+    public static final List<String> PROTOCOLS = List.of(PROTOCOL_LEGACY, PROTOCOL_MODERN);
 
     /** 服务名：用户起、唯一（保存时前端校验）；工具注册前缀与状态路由都用它 */
     private String name = "";
     /** 传输方式：stdio / http */
     private String transport = TRANSPORT_HTTP;
-    /** 协议代：auto（探测）/ legacy（握手）/ modern（无握手）；auto 下探测失败的用户逃生口是显式指定 */
-    private String protocol = PROTOCOL_AUTO;
+    /** 协议代：legacy（握手，现主流）/ modern（无握手）；建连失败时显式换一档是用户的排查口 */
+    private String protocol = PROTOCOL_LEGACY;
     /** 启用开关：关闭=后端不建连（配置保留） */
     private boolean enabled = true;
     /** stdio：可执行文件（命令本身） */
@@ -73,7 +71,7 @@ public final class McpServer {
     }
 
     public void setProtocol(String protocol) {
-        this.protocol = PROTOCOLS.contains(protocol) ? protocol : PROTOCOL_AUTO;
+        this.protocol = PROTOCOLS.contains(protocol) ? protocol : PROTOCOL_LEGACY;
     }
 
     public boolean isEnabled() {
@@ -191,7 +189,7 @@ public final class McpServer {
         }
         Object protocol = json.get("protocol");
         if (protocol instanceof String s) {
-            server.setProtocol(s); // 缺键保持 auto（老配置天然兼容），非法值落 auto
+            server.setProtocol(s); // 缺键保持 legacy（现主流），非法值（含老配置的 auto）落 legacy
         }
         Object enabled = json.get("enabled");
         if (enabled instanceof Boolean b) {

@@ -1122,9 +1122,8 @@ public class SettingsDialog extends JDialog {
                 "stdio=本机子进程（IDE 之外的常规 MCP server，如 npx 拉起）；"
                         + "http=远程 Streamable HTTP 端点（IDEA 内置 server 用这个）。切换后本页字段跟着换");
         row = addHintedRow(form, row, "协议代", protocolCombo,
-                "auto=建连时探测（先试 initialize 握手，握不动回退无握手直调），一般不用改；"
-                        + "legacy=旧协议必须握手（现主流，IDEA 内置 server 是这类）；"
-                        + "modern=2026-07-28 新协议无握手。仅探测都失败或行为怪异时手动指定");
+                "legacy=旧协议必须 initialize 握手（现主流，IDEA 内置 server 是这类），默认不用改；"
+                        + "modern=2026-07-28 新协议无握手。连不上且报「Server not initialized」类错误时换一档排查");
         if (McpServer.TRANSPORT_STDIO.equals(transportCombo.getSelectedItem())) {
             row = addHintedRow(form, row, "命令", commandField,
                     "可执行文件，如 npx 或 C:\\Program Files\\JetBrains\\IntelliJ IDEA\\bin\\idea64.exe");
