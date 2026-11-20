@@ -151,7 +151,6 @@ public class McpManager {
         }
         McpConfig.Protocol protocol = null;
         switch (mcpServer.getProtocol()) {
-            case "auto" ->  protocol = McpConfig.Protocol.AUTO;
             case "legacy" ->  protocol = McpConfig.Protocol.LEGACY;
             case "modern" ->  protocol = McpConfig.Protocol.MODERN;
         }

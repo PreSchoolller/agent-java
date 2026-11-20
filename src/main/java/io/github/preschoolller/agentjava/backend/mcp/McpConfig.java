@@ -12,7 +12,6 @@ public record McpConfig(String name, Transport transport, Protocol protocol,
     }
 
     public enum Protocol {
-        AUTO,
         LEGACY,
         MODERN
     }

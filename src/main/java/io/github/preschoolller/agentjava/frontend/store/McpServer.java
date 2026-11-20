@@ -27,7 +27,7 @@ public final class McpServer {
     public static final String PROTOCOL_LEGACY = "legacy";
     /** 协议代=modern：无握手，直接业务请求（2026-07-28 新协议，官方 SDK modern 包实现） */
     public static final String PROTOCOL_MODERN = "modern";
-    /** 协议代取值（设置页下拉与落盘值一一对应；缺键=legacy，老配置里的 auto 键值非法、落 legacy） */
+    /** 协议代取值（设置页下拉与落盘值一一对应；缺键=legacy，非法落 legacy） */
     public static final List<String> PROTOCOLS = List.of(PROTOCOL_LEGACY, PROTOCOL_MODERN);
 
     /** 服务名：用户起、唯一（保存时前端校验）；工具注册前缀与状态路由都用它 */
@@ -189,7 +189,7 @@ public final class McpServer {
         }
         Object protocol = json.get("protocol");
         if (protocol instanceof String s) {
-            server.setProtocol(s); // 缺键保持 legacy（现主流），非法值（含老配置的 auto）落 legacy
+            server.setProtocol(s); // 缺键保持 legacy（现主流），非法值落 legacy
         }
         Object enabled = json.get("enabled");
         if (enabled instanceof Boolean b) {
