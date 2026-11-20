@@ -39,6 +39,7 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Frame;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
@@ -876,14 +877,35 @@ public class SettingsDialog extends JDialog {
         return groups;
     }
 
+    /** 工具页名称列的固定宽度（px）：Monospaced 13 下约 29 字符，常见 mcp__ 服务长名截断进 tooltip */
+    private static final int TOOL_NAME_COLUMN_WIDTH = 240;
+
+    /** 超出 maxWidth 时截断并补省略号（按字体实测宽度逐字收缩，避免把多字节字符截一半） */
+    private static String ellipsize(FontMetrics metrics, String text, int maxWidth) {
+        if (text == null || metrics.stringWidth(text) <= maxWidth) {
+            return text;
+        }
+        String s = text;
+        while (s.length() > 1 && metrics.stringWidth(s + "…") > maxWidth) {
+            s = s.substring(0, s.length() - 1);
+        }
+        return s.stripTrailing() + "…";
+    }
+
     /** 工具一行：等宽工具名 + 勾选框（勾选框文字=说明文字）。长说明按固定 330px 宽的 HTML 分段
      *  折行（踩坑 #17 的 Swing HTML；span 颜色现场读 Ui 镜像，随主题重建生效），不进自动宽排量
      *  防布局正反馈（踩坑 #3：JLabel 首选宽=单行全文宽，会把整页撑爆/裁边）。
      *  支持 ui 交互的工具（ToolCatalog 给了 interactiveTips）在下方再挂可展开交互区 */
     private int addToolRow(JPanel card, int row, ToolCatalog.ToolInfo info) {
-        JLabel name = new JLabel(info.name());
+        JLabel name = new JLabel();
         name.setFont(new Font("Monospaced", Font.BOLD, 13));
         name.setForeground(Ui.TEXT);
+        // 名称列定宽：列宽不再被最长工具名撑开；超长截断加省略号，悬停 tooltip 显示完整名
+        FontMetrics metrics = name.getFontMetrics(name.getFont());
+        String display = ellipsize(metrics, info.name(), TOOL_NAME_COLUMN_WIDTH);
+        name.setText(display);
+        name.setToolTipText(display.equals(info.name()) ? null : info.name());
+        name.setPreferredSize(new Dimension(TOOL_NAME_COLUMN_WIDTH, name.getPreferredSize().height));
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(6, 14, 6, 14);
         gbc.anchor = GridBagConstraints.NORTHWEST;
