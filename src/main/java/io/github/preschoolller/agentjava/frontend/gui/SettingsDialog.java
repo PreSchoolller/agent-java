@@ -28,6 +28,7 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.Scrollable;
 import javax.swing.SpinnerNumberModel;
+import javax.swing.Timer;
 import javax.swing.text.AbstractDocument;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
@@ -52,6 +53,8 @@ import java.awt.RenderingHints;
 import java.awt.Toolkit;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.ItemEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -193,12 +196,16 @@ public class SettingsDialog extends JDialog {
     public SettingsDialog(Frame owner, boolean modal) {
         super(owner, "设置", modal);
 
-        // 初始宽度：可用屏宽的 3/8（1920 屏→720、2560 屏→960），下限 720 保说明列不挤、
-        // 上限 960 免得卡片被拉得过宽；高度仍按内容算（pack 后见构造尾部）
+        // 初始尺寸：优先还原上次记录（夹回屏内），没记录过按可用屏宽 3/8（1920 屏→720、
+        // 2560 屏→960，下限 720 保说明列不挤、上限 960 免得卡片拉得过宽）；主窗口
+        // applyPersistedBounds 同款语义。名称列宽随本次生效宽度走三成（夹 [160, 320]），
+        // 构建时一次算定，窗口缩放不影响已渲染布局
         Rectangle usable = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
-        this.dialogWidth = Math.max(720, Math.min(usable.width * 3 / 8, 960));
-        // 工具页名称列宽随初始宽度走（三成，夹 [160, 320]）：列宽构建时一次算定，
-        // 窗口缩放不影响已渲染布局；定比例而非定像素，窄屏下说明列不至被挤没
+        int defaultWidth = Math.max(720, Math.min(usable.width * 3 / 8, 960));
+        int persistedWidth = settings.getSettingsDialogWidth();
+        this.dialogWidth = persistedWidth > 0
+                ? Math.max(640, Math.min(persistedWidth, usable.width))
+                : defaultWidth;
         this.toolNameColumnWidth = Math.max(160, Math.min(dialogWidth * 30 / 100, 320));
 
         working = settings.copyProfiles();
@@ -331,12 +338,49 @@ public class SettingsDialog extends JDialog {
         root.add(buttons, BorderLayout.SOUTH);
         setContentPane(root);
 
-        // 高度跟随内容首选：pack 拿全量（两页的较高者，保底 700 换页不跳尺寸），小屏按屏高九成
-        // 截断——超出部分由各页的滚动容器接管，行高永远按首选渲染；宽度用构造开头算好的比例宽
+        // 尺寸/位置：记录过的原样还原（高度下限 560 防历史小值，位置主体出屏则回落居中）；
+        // 没记录过高度按内容首选（保底 700 换页不跳尺寸），小屏按屏高九成截断——超出部分
+        // 由各页的滚动容器接管。宽度用上面算好的（记录过=用户习惯，没记录=屏宽比例）
         pack();
         int screenHeight = Toolkit.getDefaultToolkit().getScreenSize().height;
-        setSize(dialogWidth, Math.min(Math.max(getHeight(), 700), screenHeight * 9 / 10));
-        setLocationRelativeTo(owner);
+        int persistedHeight = settings.getSettingsDialogHeight();
+        int height = persistedHeight > 0
+                ? Math.min(Math.max(persistedHeight, 560), screenHeight * 9 / 10)
+                : Math.min(Math.max(getHeight(), 700), screenHeight * 9 / 10);
+        setSize(dialogWidth, height);
+        setMinimumSize(new Dimension(640, 560)); // 防拖到表单挤烂的最小尺寸
+        int persistedX = settings.getSettingsDialogX();
+        int persistedY = settings.getSettingsDialogY();
+        if (persistedX >= 0 && persistedY >= 0
+                && usable.contains(persistedX + getWidth() / 2, persistedY + getHeight() / 2)) {
+            setLocation(persistedX, persistedY);
+        } else {
+            setLocationRelativeTo(owner);
+        }
+        // 尺寸/位置变更记内存 + 防抖落盘（主窗口 rememberBounds 同款）
+        addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                rememberBounds();
+            }
+
+            @Override
+            public void componentMoved(ComponentEvent e) {
+                rememberBounds();
+            }
+        });
+    }
+
+    /** 防抖落盘计时器：拖动/缩放停止 1 秒后才真正 save（主窗口同款，避免拖一次写多次盘） */
+    private final Timer boundsSaveTimer = new Timer(1000, e -> AppSettings.get().save());
+
+    private void rememberBounds() {
+        AppSettings settings = AppSettings.get();
+        settings.setSettingsDialogWidth(getWidth());
+        settings.setSettingsDialogHeight(getHeight());
+        settings.setSettingsDialogX(getX());
+        settings.setSettingsDialogY(getY());
+        boundsSaveTimer.start();
     }
 
     /** 通用页：全局对话体验（主题/正文字号/关闭按钮托盘/日志等级） */

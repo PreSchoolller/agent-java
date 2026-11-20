@@ -81,6 +81,12 @@ public final class AppSettings {
     private int windowHeight = 720;
     private int windowX = -1;
     private int windowY = -1;
+    /** 设置面板上次尺寸/位置（打开时还原，主窗口同款语义）；宽高 0=没记录过（回落按屏宽比例算），
+     *  位置 -1=没记录过（回落居中） */
+    private int settingsDialogWidth = 0;
+    private int settingsDialogHeight = 0;
+    private int settingsDialogX = -1;
+    private int settingsDialogY = -1;
     private int sidebarDivider = -1;
 
     /** 各 API 类型下选用的 provider 名（Provider 页分组单选落盘，全局不随方案）；缺键=未指定，后端回落默认 */
@@ -525,6 +531,38 @@ public final class AppSettings {
         this.windowY = windowY;
     }
 
+    public int getSettingsDialogWidth() {
+        return settingsDialogWidth;
+    }
+
+    public void setSettingsDialogWidth(int settingsDialogWidth) {
+        this.settingsDialogWidth = settingsDialogWidth;
+    }
+
+    public int getSettingsDialogHeight() {
+        return settingsDialogHeight;
+    }
+
+    public void setSettingsDialogHeight(int settingsDialogHeight) {
+        this.settingsDialogHeight = settingsDialogHeight;
+    }
+
+    public int getSettingsDialogX() {
+        return settingsDialogX;
+    }
+
+    public void setSettingsDialogX(int settingsDialogX) {
+        this.settingsDialogX = settingsDialogX;
+    }
+
+    public int getSettingsDialogY() {
+        return settingsDialogY;
+    }
+
+    public void setSettingsDialogY(int settingsDialogY) {
+        this.settingsDialogY = settingsDialogY;
+    }
+
     public int getSidebarDivider() {
         return sidebarDivider;
     }
@@ -631,6 +669,10 @@ public final class AppSettings {
         properties.setProperty("windowHeight", String.valueOf(windowHeight));
         properties.setProperty("windowX", String.valueOf(windowX));
         properties.setProperty("windowY", String.valueOf(windowY));
+        properties.setProperty("settingsDialogWidth", String.valueOf(settingsDialogWidth));
+        properties.setProperty("settingsDialogHeight", String.valueOf(settingsDialogHeight));
+        properties.setProperty("settingsDialogX", String.valueOf(settingsDialogX));
+        properties.setProperty("settingsDialogY", String.valueOf(settingsDialogY));
         properties.setProperty("sidebarDivider", String.valueOf(sidebarDivider));
         properties.setProperty("log.console.enabled", String.valueOf(logConsoleEnabled));
         properties.setProperty("log.console.level", logConsoleLevel);
@@ -688,6 +730,10 @@ public final class AppSettings {
         windowHeight = parseInt(properties.getProperty("windowHeight"), windowHeight);
         windowX = parseInt(properties.getProperty("windowX"), windowX);
         windowY = parseInt(properties.getProperty("windowY"), windowY);
+        settingsDialogWidth = parseInt(properties.getProperty("settingsDialogWidth"), settingsDialogWidth);
+        settingsDialogHeight = parseInt(properties.getProperty("settingsDialogHeight"), settingsDialogHeight);
+        settingsDialogX = parseInt(properties.getProperty("settingsDialogX"), settingsDialogX);
+        settingsDialogY = parseInt(properties.getProperty("settingsDialogY"), settingsDialogY);
         sidebarDivider = parseInt(properties.getProperty("sidebarDivider"), sidebarDivider);
         setUiTheme(properties.getProperty("uiTheme"));
         minimizeToTray = Boolean.parseBoolean(properties.getProperty("minimizeToTray", "false"));

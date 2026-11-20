@@ -424,4 +424,24 @@ class AppSettingsTest {
         assertEquals(1, filtered.getMcpServers().size(), "空白名字条目丢弃");
         assertEquals("ok", filtered.getMcpServers().get(0).getName(), "合法条目保留");
     }
+
+    @Test
+    void t15_settingsDialogBoundsRoundTrip() {
+        // 设置面板尺寸/位置（打开时还原，主窗口 applyPersistedBounds 同款语义）：
+        // 默认无记录（宽高 0、位置 -1，回落按屏宽比例算/居中），记忆值整块落盘往返
+        Path settingsFile = file("settings.properties");
+        AppSettings testSettings = AppSettings.at(settingsFile);
+        assertEquals(0, testSettings.getSettingsDialogWidth(), "宽没记录过=0");
+        assertEquals(-1, testSettings.getSettingsDialogX(), "位置没记录过=-1");
+        testSettings.setSettingsDialogWidth(880);
+        testSettings.setSettingsDialogHeight(760);
+        testSettings.setSettingsDialogX(120);
+        testSettings.setSettingsDialogY(40);
+        testSettings.save();
+        AppSettings reread = AppSettings.at(settingsFile);
+        assertEquals(880, reread.getSettingsDialogWidth(), "宽度往返");
+        assertEquals(760, reread.getSettingsDialogHeight(), "高度往返");
+        assertEquals(120, reread.getSettingsDialogX(), "X 往返");
+        assertEquals(40, reread.getSettingsDialogY(), "Y 往返");
+    }
 }
