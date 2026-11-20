@@ -389,11 +389,11 @@ class AppSettingsTest {
         assertEquals("http://127.0.0.1:64342/stream", h.getUrl(), "url strip 落值");
         assertEquals("D:/CodingSpace/IdeaProjects/agent-java",
                 h.getHeaders().get("IJ_MCP_SERVER_PROJECT_PATH"), "请求头往返");
-        assertEquals(McpServer.PROTOCOL_AUTO, h.getProtocol(), "协议代默认 auto");
+        assertEquals(McpServer.PROTOCOL_LEGACY, h.getProtocol(), "协议代默认 legacy");
         McpServer f = reread.getMcpServers().get(1);
         f.setProtocol(McpServer.PROTOCOL_LEGACY);
         f.setProtocol("bogus-protocol");
-        assertEquals(McpServer.PROTOCOL_AUTO, f.getProtocol(), "非法协议代落默认 auto");
+        assertEquals(McpServer.PROTOCOL_LEGACY, f.getProtocol(), "非法协议代（含老配置 auto）落默认 legacy");
         assertEquals(McpServer.TRANSPORT_STDIO, f.getTransport());
         assertFalse(f.isEnabled(), "停用态保留");
         assertEquals("npx", f.getCommand());

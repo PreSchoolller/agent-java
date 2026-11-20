@@ -4,6 +4,7 @@ import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -44,6 +45,9 @@ public final class ToolCatalog {
             // 裸类路径回归（ToolManager.<clinit> 触发 ToolRead/ToolBash 的 NCDFE，踩坑 #26）：
             // 按"没拿到工具列表"兜底，未配置时的"全部启用"语义不受影响
         }
+        // 按名稳定排序：注册表是无序 Map，MCP 工具动态注册后顺序每次开页都在变（用户看着乱）；
+        // mcp__<服务>__<工具> 的命名让字典序天然按 server 分组，内置工具穿插其中也在固定位置
+        infos.sort(Comparator.comparing(ToolInfo::name));
         return List.copyOf(infos);
     }
 
