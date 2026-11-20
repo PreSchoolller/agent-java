@@ -393,7 +393,7 @@ class AppSettingsTest {
         McpServer f = reread.getMcpServers().get(1);
         f.setProtocol(McpServer.PROTOCOL_LEGACY);
         f.setProtocol("bogus-protocol");
-        assertEquals(McpServer.PROTOCOL_LEGACY, f.getProtocol(), "非法协议代（含老配置 auto）落默认 legacy");
+        assertEquals(McpServer.PROTOCOL_LEGACY, f.getProtocol(), "非法协议代落默认 legacy");
         assertEquals(McpServer.TRANSPORT_STDIO, f.getTransport());
         assertFalse(f.isEnabled(), "停用态保留");
         assertEquals("npx", f.getCommand());
