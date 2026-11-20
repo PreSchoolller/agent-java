@@ -41,6 +41,7 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Frame;
+import java.awt.GraphicsEnvironment;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
@@ -145,6 +146,10 @@ public class SettingsDialog extends JDialog {
     private final Map<ModelMeta, Boolean> expandedStates = new IdentityHashMap<>();
     /** 工具页的勾选框（按注册表顺序建；保存时按 clientProperty 里的工具名收集勾选结果） */
     private final List<JCheckBox> toolCheckBoxes = new ArrayList<>();
+    /** 对话框初始宽度（可用屏宽 3/8 夹 [720, 960]）；构造开头算定，setSize 与工具页列宽共用 */
+    private final int dialogWidth;
+    /** 工具页名称列宽（初始宽度的三成，夹 [160, 320]）；构建工具页前算定 */
+    private final int toolNameColumnWidth;
     /** Provider 页的单选钮（按 API 类型分组，组内互斥；保存时按 clientProperty 里的 provider 名收集） */
     private final Map<String, List<JRadioButton>> providerRadioGroups = new LinkedHashMap<>();
     private final Map<String, ButtonGroup> providerButtonGroups = new LinkedHashMap<>();
@@ -187,6 +192,14 @@ public class SettingsDialog extends JDialog {
 
     public SettingsDialog(Frame owner, boolean modal) {
         super(owner, "设置", modal);
+
+        // 初始宽度：可用屏宽的 3/8（1920 屏→720、2560 屏→960），下限 720 保说明列不挤、
+        // 上限 960 免得卡片被拉得过宽；高度仍按内容算（pack 后见构造尾部）
+        Rectangle usable = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+        this.dialogWidth = Math.max(720, Math.min(usable.width * 3 / 8, 960));
+        // 工具页名称列宽随初始宽度走（三成，夹 [160, 320]）：列宽构建时一次算定，
+        // 窗口缩放不影响已渲染布局；定比例而非定像素，窄屏下说明列不至被挤没
+        this.toolNameColumnWidth = Math.max(160, Math.min(dialogWidth * 30 / 100, 320));
 
         working = settings.copyProfiles();
         selectedName = null; // 打开面板全部收起，点开哪张卡再编辑哪个
@@ -319,10 +332,10 @@ public class SettingsDialog extends JDialog {
         setContentPane(root);
 
         // 高度跟随内容首选：pack 拿全量（两页的较高者，保底 700 换页不跳尺寸），小屏按屏高九成
-        // 截断——超出部分由各页的滚动容器接管，行高永远按首选渲染
+        // 截断——超出部分由各页的滚动容器接管，行高永远按首选渲染；宽度用构造开头算好的比例宽
         pack();
         int screenHeight = Toolkit.getDefaultToolkit().getScreenSize().height;
-        setSize(560, Math.min(Math.max(getHeight(), 700), screenHeight * 9 / 10));
+        setSize(dialogWidth, Math.min(Math.max(getHeight(), 700), screenHeight * 9 / 10));
         setLocationRelativeTo(owner);
     }
 
@@ -877,9 +890,6 @@ public class SettingsDialog extends JDialog {
         return groups;
     }
 
-    /** 工具页名称列的固定宽度（px）：Monospaced 13 下约 29 字符，常见 mcp__ 服务长名截断进 tooltip */
-    private static final int TOOL_NAME_COLUMN_WIDTH = 240;
-
     /** 超出 maxWidth 时截断并补省略号（按字体实测宽度逐字收缩，避免把多字节字符截一半） */
     private static String ellipsize(FontMetrics metrics, String text, int maxWidth) {
         if (text == null || metrics.stringWidth(text) <= maxWidth) {
@@ -900,12 +910,12 @@ public class SettingsDialog extends JDialog {
         JLabel name = new JLabel();
         name.setFont(new Font("Monospaced", Font.BOLD, 13));
         name.setForeground(Ui.TEXT);
-        // 名称列定宽：列宽不再被最长工具名撑开；超长截断加省略号，悬停 tooltip 显示完整名
+        // 名称列按初始宽度的比例宽（见构造开头的 toolNameColumnWidth）；超长截断加省略号，悬停 tooltip 显示完整名
         FontMetrics metrics = name.getFontMetrics(name.getFont());
-        String display = ellipsize(metrics, info.name(), TOOL_NAME_COLUMN_WIDTH);
+        String display = ellipsize(metrics, info.name(), toolNameColumnWidth);
         name.setText(display);
         name.setToolTipText(display.equals(info.name()) ? null : info.name());
-        name.setPreferredSize(new Dimension(TOOL_NAME_COLUMN_WIDTH, name.getPreferredSize().height));
+        name.setPreferredSize(new Dimension(toolNameColumnWidth, name.getPreferredSize().height));
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(6, 14, 6, 14);
         gbc.anchor = GridBagConstraints.NORTHWEST;
