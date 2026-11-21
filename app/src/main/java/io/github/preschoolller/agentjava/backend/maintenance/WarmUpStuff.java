@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava.backend.maintenance;
 
 import io.github.preschoolller.agentjava.backend.mcp.McpManager;
 import io.github.preschoolller.agentjava.backend.tool.ToolBash;
+import io.github.preschoolller.agentjava.spi.PluginPersistentConsumer;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -10,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
  */
 public class WarmUpStuff {
     public static void warmup() {
+        PluginPersistentConsumer.inject(PluginManager::getPersistentInput);
         PluginLoader.load();
         CompletableFuture.runAsync(ToolBash::exploreBash);
         McpManager.loadMcpToolsAsync();
