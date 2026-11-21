@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
 import io.github.preschoolller.agentjava.backend.context.ContextHandlerManager;
-import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandler;
+import io.github.preschoolller.agentjava.spi.context.ContextHandler;
 
 import java.util.ArrayList;
 import java.util.Comparator;

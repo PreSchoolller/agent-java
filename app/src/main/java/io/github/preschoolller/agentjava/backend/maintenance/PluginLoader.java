@@ -2,7 +2,7 @@ package io.github.preschoolller.agentjava.backend.maintenance;
 
 import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.context.ContextHandlerManager;
-import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandler;
+import io.github.preschoolller.agentjava.spi.context.ContextHandler;
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.spi.provider.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
