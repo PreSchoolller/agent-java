@@ -7,8 +7,8 @@ import io.github.preschoolller.agentjava.backend.maintenance.HoldWsl;
 import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.maintenance.TaskHandle;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.BackGroundTaskDone;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.BackGroundTaskDone;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

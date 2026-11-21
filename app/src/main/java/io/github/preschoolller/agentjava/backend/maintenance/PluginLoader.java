@@ -6,7 +6,7 @@ import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandl
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

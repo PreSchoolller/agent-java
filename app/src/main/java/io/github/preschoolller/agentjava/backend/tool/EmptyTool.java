@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.backend.tool;
 
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 
 import java.util.Map;
 

@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava.backend.provider.common;
 
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

@@ -2,7 +2,7 @@ package io.github.preschoolller.agentjava.plugin;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 
 import java.util.List;
 import java.util.Map;

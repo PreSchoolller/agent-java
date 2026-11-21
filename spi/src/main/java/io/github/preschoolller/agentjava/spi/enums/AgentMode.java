@@ -1,6 +1,6 @@
-package io.github.preschoolller.agentjava.backend.provider.common;
+package io.github.preschoolller.agentjava.spi.enums;
 
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 
 /**
  * 对话的权限模式（输入区左下角选择，后端执行循环按此约束行为）：

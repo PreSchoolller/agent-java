@@ -3,7 +3,7 @@ package io.github.preschoolller.agentjava.plugin;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 
 import java.util.ArrayList;
 import java.util.List;

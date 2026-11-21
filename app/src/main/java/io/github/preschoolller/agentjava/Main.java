@@ -6,7 +6,7 @@ import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.maintenance.TaskHandle;
 import io.github.preschoolller.agentjava.backend.maintenance.WarmUpStuff;
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
-import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
+import io.github.preschoolller.agentjava.spi.enums.AgentMode;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;

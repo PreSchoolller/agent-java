@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava.backend.tool;
 
 import io.github.preschoolller.agentjava.backend.mcp.McpTool;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 
 import java.util.ArrayList;
 import java.util.Collection;

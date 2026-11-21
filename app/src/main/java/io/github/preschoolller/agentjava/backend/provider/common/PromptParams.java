@@ -1,5 +1,6 @@
 package io.github.preschoolller.agentjava.backend.provider.common;
 
+import io.github.preschoolller.agentjava.spi.enums.AgentMode;
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.spi.enums.RoleEnum;
 
