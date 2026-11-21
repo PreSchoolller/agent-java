@@ -2,7 +2,7 @@ package io.github.preschoolller.agentjava.plugin;
 
 import io.github.preschoolller.agentjava.Main;
 import io.github.preschoolller.agentjava.spi.common.Constants;
-import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
+import io.github.preschoolller.agentjava.spi.PluginShutDownJobHelper;
 import io.github.preschoolller.agentjava.plugin.api.AgentApiServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,7 +57,7 @@ final class WhaleHost {
     /** 打包在插件资源里的 whale 解压落点（也是 bili/bili_write 工具链的兜底位置） */
     static final Path BUNDLED_WHALE_DIR = Constants.APP_USER_DIR.resolve("whale");
 
-    /** 应用退出链路上的杀 shim 动作（走 ShutDownJob 自己的 hook 体系，Main 把 clean 挂在 JVM hook 上） */
+    /** 应用退出链路上的杀 shim 动作（走 PluginShutDownJobHelper 自己的 hook 体系，Main 把 clean 挂在 JVM hook 上） */
     private static final java.util.function.Consumer<Void> EXIT_KILL = v -> WhaleHost.killOnExit();
 
     private WhaleHost() {
@@ -128,7 +128,7 @@ final class WhaleHost {
                     return "shim 启动即退出（exit=" + spawned.exitValue() + "），日志尾部：\n" + tailOf(LOG_FILE, 20);
                 }
                 writePidFile(newPid); // 起稳了才记账：pid 文件是跨重启的存活事实源
-                ensureExitHook();     // 应用退出时随 ShutDownJob.clean 停掉她
+                ensureExitHook();     // 应用退出时随 PluginShutDownJobHelper.clean 停掉她
                 return "✓ 已启动（pid " + newPid + "）\n"
                         + "  · whale 目录：" + whaleDir + "\n"
                         + "  · 回环 API：" + pingLine() + "\n"
@@ -399,7 +399,7 @@ final class WhaleHost {
     // ---------------------------------------------------------------- 应用退出
 
     /**
-     * 注册到 ShutDownJob 的退出动作（Main 把 ShutDownJob::clean 挂在 JVM hook 上，
+     * 注册到 PluginShutDownJobHelper 的退出动作（Main 把 PluginShutDownJobHelper::clean 挂在 JVM hook 上，
      * 托盘退出/窗口关闭都会走到）：按 pid 杀 shim（含子进程树）+ 清 pid 文件。
      * 强杀 JVM（taskkill /F）不触发 hook——那种场景靠下次 start 的孤儿接管兜底。
      */
@@ -415,12 +415,12 @@ final class WhaleHost {
 
     /** 幂等注册退出杀 shim（模式照 HoldWsl：先 remove 再 add，重复 start 不叠加） */
     private static void ensureExitHook() {
-        ShutDownJob.removeShutDownHook(EXIT_KILL);
-        ShutDownJob.addShutDownHook(EXIT_KILL);
+        PluginShutDownJobHelper.removeShutDownHook(EXIT_KILL);
+        PluginShutDownJobHelper.addShutDownHook(EXIT_KILL);
     }
 
     private static void removeExitHook() {
-        ShutDownJob.removeShutDownHook(EXIT_KILL);
+        PluginShutDownJobHelper.removeShutDownHook(EXIT_KILL);
     }
 
     // ---------------------------------------------------------------- stop

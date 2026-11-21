@@ -3,7 +3,6 @@ package io.github.preschoolller.agentjava.plugin;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.preschoolller.agentjava.spi.common.Constants;
-import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
 import io.github.preschoolller.agentjava.spi.tool.NeedAdditionalApproval;
 import io.github.preschoolller.agentjava.spi.tool.Tool;
 
@@ -84,7 +83,7 @@ public class ToolEdit implements Tool {
                 Constants.DEFAULT_WORKSPACE_DIR : Path.of(workspace).toAbsolutePath().normalize();
         Path oldFile = workDir.resolve(args.path);
         if (!oldFile.toAbsolutePath().normalize().startsWith(workDir) && !requestApproval(gate, false)) {
-            return ToolApprovalGate.DENIED_RESULT;
+            return "用户拒绝了本次工具调用，工具未执行。请不要重试同一调用，向用户说明后等待指示。";
         }
         requestApproval(gate, true);
         String tmpName = UUID.randomUUID().toString();
