@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.backend.tool;
 
-import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.spi.common.Constants;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;

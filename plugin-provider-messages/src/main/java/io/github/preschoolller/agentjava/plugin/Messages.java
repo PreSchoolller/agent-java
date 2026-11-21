@@ -27,7 +27,7 @@ import com.anthropic.models.messages.ToolUseBlock;
 import com.anthropic.models.messages.ToolUseBlockParam;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.spi.common.Constants;
 import io.github.preschoolller.agentjava.spi.enums.AgentMode;
 import io.github.preschoolller.agentjava.spi.provider.records.KeyUrl;
 import io.github.preschoolller.agentjava.spi.provider.PromptParams;

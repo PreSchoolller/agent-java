@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.backend.tinylog.configuration;
 
-import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.spi.common.Constants;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import org.tinylog.configuration.ConfigurationLoader;
 

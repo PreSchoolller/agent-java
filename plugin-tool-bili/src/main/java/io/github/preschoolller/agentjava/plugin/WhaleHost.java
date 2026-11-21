@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava.plugin;
 
 import io.github.preschoolller.agentjava.Main;
-import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.spi.common.Constants;
 import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.plugin.api.AgentApiServer;
 import org.slf4j.Logger;
