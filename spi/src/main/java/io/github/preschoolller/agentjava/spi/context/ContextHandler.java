@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.backend.context.interfaces;
+package io.github.preschoolller.agentjava.spi.context;
 
 import io.github.preschoolller.agentjava.spi.PluginBase;
 import io.github.preschoolller.agentjava.spi.provider.PromptParams;

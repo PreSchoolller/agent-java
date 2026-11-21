@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.plugin;
 
-import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandler;
+import io.github.preschoolller.agentjava.spi.context.ContextHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

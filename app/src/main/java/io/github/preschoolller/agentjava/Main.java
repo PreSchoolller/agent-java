@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava;
 
 import io.github.preschoolller.agentjava.backend.context.ContextHandlerManager;
-import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandler;
+import io.github.preschoolller.agentjava.spi.context.ContextHandler;
 import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.maintenance.TaskHandle;
 import io.github.preschoolller.agentjava.backend.maintenance.WarmUpStuff;
