@@ -4,7 +4,7 @@ import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.context.ContextHandlerManager;
 import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandler;
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
-import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
+import io.github.preschoolller.agentjava.spi.provider.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.spi.tool.Tool;
 import org.slf4j.Logger;
