@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava.backend.tool;
 
 import io.github.preschoolller.agentjava.backend.mcp.McpTool;
 import io.github.preschoolller.agentjava.spi.tool.Tool;
+import io.github.preschoolller.agentjava.spi.tool.records.ToolInfo;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -11,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 public class ToolManager {
     public static final Tool BAD_TOOL = BadTool.getInstance();
@@ -69,6 +71,12 @@ public class ToolManager {
             result.add(tool);
         }
         return Collections.unmodifiableList(result);
+    }
+
+    public static Collection<ToolInfo> shouldRevealToolInfos(Collection<String> history, Collection<String> enabled) {
+        return shouldRevealTools(history, enabled).stream()
+                .map(tool -> new ToolInfo(tool.name(), tool.description(), tool.schema(), tool.strictMode()))
+                .collect(Collectors.toCollection(ArrayList::new));
     }
 
     public static void unregister(McpTool unavailableTool) {

@@ -27,6 +27,7 @@ import com.anthropic.models.messages.ToolUseBlock;
 import com.anthropic.models.messages.ToolUseBlockParam;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import io.github.preschoolller.agentjava.spi.ToolHelper;
 import io.github.preschoolller.agentjava.spi.common.Constants;
 import io.github.preschoolller.agentjava.spi.enums.AgentMode;
 import io.github.preschoolller.agentjava.spi.provider.records.KeyUrl;
@@ -49,7 +50,7 @@ import io.github.preschoolller.agentjava.spi.provider.event.ResponseDeltaDoneEve
 import io.github.preschoolller.agentjava.spi.provider.event.ResponseDeltaEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ResponseDeltaStartEvent;
 import io.github.preschoolller.agentjava.spi.provider.Provider;
-import io.github.preschoolller.agentjava.backend.tool.ToolManager;
+import io.github.preschoolller.agentjava.spi.tool.records.ToolInfo;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -171,8 +172,7 @@ public class Messages implements Provider {
         }
 
         if (!promptParams.getAgentMode().equals(AgentMode.CHAT)) {
-            for (io.github.preschoolller.agentjava.spi.tool.Tool tool :
-                    ToolManager.shouldRevealTools(historyTools, promptParams.getEnabledTools())) {
+            for (ToolInfo tool : ToolHelper.shouldRevealTools(historyTools, promptParams.getEnabledTools())) {
 
                 Tool.Builder toolBuilder = Tool.builder();
                 toolBuilder.name(tool.name());
