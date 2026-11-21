@@ -411,7 +411,8 @@ public class Main {
         try {
             PromptParams promptParams = prepareParams.paramsBuilder.build();
             long roundStartNanos = System.nanoTime(); // 本轮耗时（含 HTTP 建流），胶囊上展示用
-            ProviderStreamingResponse providerStreamingResponse = prepareParams.provider.sendPromptStreaming(promptParams);
+            ProviderStreamingResponse providerStreamingResponse = prepareParams.provider
+                    .sendPromptStreaming(promptParams, ThreadPoolFactory.getResponseExecutor());
             events = providerStreamingResponse.blockingQueue();
             shouldStopBackend = providerStreamingResponse.shouldStop();
             BaseEvent event;

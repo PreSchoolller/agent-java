@@ -3,6 +3,8 @@ package io.github.preschoolller.agentjava.spi.provider;
 import io.github.preschoolller.agentjava.spi.provider.records.ProviderBlockingTextResponse;
 import io.github.preschoolller.agentjava.spi.provider.records.ProviderStreamingResponse;
 
+import java.util.concurrent.Executor;
+
 public interface Provider {
     enum Api {
         RESPONSES,
@@ -27,4 +29,8 @@ public interface Provider {
     ProviderBlockingTextResponse sendPrompt(PromptParams promptParams);
 
     ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams);
+
+    default ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams, Executor executor) {
+        return sendPromptStreaming(promptParams);
+    }
 }

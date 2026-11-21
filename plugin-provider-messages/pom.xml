@@ -19,7 +19,7 @@
         <!-- 宿主只在编译期提供，不打进插件 jar（运行期由宿主的 classloader 提供） -->
         <dependency>
             <groupId>io.github.preschoolller</groupId>
-            <artifactId>agent-java-app</artifactId>
+            <artifactId>agent-java-spi</artifactId>
             <scope>provided</scope>
         </dependency>
         <dependency>
