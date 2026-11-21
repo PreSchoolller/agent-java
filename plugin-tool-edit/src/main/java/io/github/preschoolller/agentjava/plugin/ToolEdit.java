@@ -83,7 +83,7 @@ public class ToolEdit implements Tool {
                 Constants.DEFAULT_WORKSPACE_DIR : Path.of(workspace).toAbsolutePath().normalize();
         Path oldFile = workDir.resolve(args.path);
         if (!oldFile.toAbsolutePath().normalize().startsWith(workDir) && !requestApproval(gate, false)) {
-            return "用户拒绝了本次工具调用，工具未执行。请不要重试同一调用，向用户说明后等待指示。";
+            return Constants.DENIED_RESULT;
         }
         requestApproval(gate, true);
         String tmpName = UUID.randomUUID().toString();

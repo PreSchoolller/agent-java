@@ -2,7 +2,7 @@ package io.github.preschoolller.agentjava.backend.maintenance;
 
 import io.github.preschoolller.agentjava.backend.mcp.McpManager;
 import io.github.preschoolller.agentjava.backend.tool.ToolBash;
-import io.github.preschoolller.agentjava.spi.PluginPersistentConsumer;
+import io.github.preschoolller.agentjava.spi.PluginPersistentHelper;
 import io.github.preschoolller.agentjava.spi.PluginShutDownJobHelper;
 
 import java.util.concurrent.CompletableFuture;
@@ -19,8 +19,7 @@ public class WarmUpStuff {
     }
 
     private static void injectToSpi() {
-        PluginPersistentConsumer.inject(PluginManager::getPersistentInput);
-        PluginShutDownJobHelper.injectAdd(ShutDownJob::addShutDownHook);
-        PluginShutDownJobHelper.injectRemove(ShutDownJob::removeShutDownHook);
+        PluginPersistentHelper.inject(PluginManager::getPersistentInput);
+        PluginShutDownJobHelper.inject(ShutDownJob::addShutDownHook, ShutDownJob::removeShutDownHook);
     }
 }

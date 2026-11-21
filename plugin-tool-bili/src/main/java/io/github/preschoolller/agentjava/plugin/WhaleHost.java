@@ -58,7 +58,7 @@ final class WhaleHost {
     static final Path BUNDLED_WHALE_DIR = Constants.APP_USER_DIR.resolve("whale");
 
     /** 应用退出链路上的杀 shim 动作（走 PluginShutDownJobHelper 自己的 hook 体系，Main 把 clean 挂在 JVM hook 上） */
-    private static final java.util.function.Consumer<Void> EXIT_KILL = v -> WhaleHost.killOnExit();
+    private static final Runnable EXIT_KILL = WhaleHost::killOnExit;
 
     private WhaleHost() {
     }
@@ -128,7 +128,7 @@ final class WhaleHost {
                     return "shim 启动即退出（exit=" + spawned.exitValue() + "），日志尾部：\n" + tailOf(LOG_FILE, 20);
                 }
                 writePidFile(newPid); // 起稳了才记账：pid 文件是跨重启的存活事实源
-                ensureExitHook();     // 应用退出时随 PluginShutDownJobHelper.clean 停掉她
+                ensureExitHook();     // 应用退出时停掉她
                 return "✓ 已启动（pid " + newPid + "）\n"
                         + "  · whale 目录：" + whaleDir + "\n"
                         + "  · 回环 API：" + pingLine() + "\n"

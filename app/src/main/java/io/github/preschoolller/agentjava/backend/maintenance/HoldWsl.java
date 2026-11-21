@@ -12,7 +12,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 
 /**
  * 按需启用，保持wsl存活，不检查wsl是否存在。
@@ -26,7 +25,7 @@ public class HoldWsl {
     private static final Path HOLDER_PID = Constants.APP_USER_DIR.resolve("wsl_holder_pid");
     private static final Logger LOG = LoggerFactory.getLogger(HoldWsl.class);
     private static volatile Thread running;
-    private static final Consumer<Void> OFF = i -> HoldWsl.interrupt();
+    private static final Runnable OFF = HoldWsl::interrupt;
 
     private HoldWsl() {
     }

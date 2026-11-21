@@ -41,6 +41,6 @@ public interface PluginBase {
      * @return uiInteractive(String input) 中持久化的 input
      */
     default String getPersistentInput() {
-        return PluginPersistentConsumer.getPersistentInput(this.name());
+        return PluginPersistentHelper.getPersistentInput(this.name());
     }
 }
