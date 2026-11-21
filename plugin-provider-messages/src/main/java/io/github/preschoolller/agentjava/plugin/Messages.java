@@ -35,7 +35,6 @@ import io.github.preschoolller.agentjava.spi.provider.PromptParams;
 import io.github.preschoolller.agentjava.spi.provider.records.ProviderBlockingTextResponse;
 import io.github.preschoolller.agentjava.spi.provider.records.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
-import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
 import io.github.preschoolller.agentjava.spi.provider.event.BaseEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ErrorMessageEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallDeltaEvent;
@@ -60,7 +59,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -210,11 +212,19 @@ public class Messages implements Provider {
 
     @Override
     public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams) {
+        return sendPromptStreaming(promptParams, null);
+    }
+
+    @Override
+    public ProviderStreamingResponse sendPromptStreaming(PromptParams promptParams, Executor executor) {
         LOG.info("/v1/messages start streaming");
         MessageCreateParams createParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         AtomicBoolean shouldStop = new AtomicBoolean();
-        ThreadPoolFactory.getResponseExecutor().execute(() -> {
+        if (executor == null) {
+            executor = CompletableFuture.delayedExecutor(0, TimeUnit.SECONDS);
+        }
+        executor.execute(() -> {
             Map<Long, String> indexCallId = new HashMap<>();
             Map<Long, Type> indexType = new HashMap<>();
             ErrorMessageEvent error = null;
