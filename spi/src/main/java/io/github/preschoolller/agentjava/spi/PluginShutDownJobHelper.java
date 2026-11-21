@@ -1,6 +1,5 @@
 package io.github.preschoolller.agentjava.spi;
 
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -8,29 +7,27 @@ import java.util.function.Function;
  */
 public class PluginShutDownJobHelper {
 
-    private static volatile Function<Consumer<Void>, Boolean> addShutDownJob = consumer -> false;
-    private static volatile Function<Consumer<Void>, Boolean> removeShutDownJob = consumer -> false;
+    private static volatile Function<Runnable, Boolean> addShutDownJob = consumer -> false;
+    private static volatile Function<Runnable, Boolean> removeShutDownJob = consumer -> false;
 
 
-    public static void injectAdd(Function<Consumer<Void>, Boolean> function) {
-        if (function == null) {
+    public static void inject(Function<Runnable, Boolean> add, Function<Runnable, Boolean> remove) {
+        if (add == null) {
             return;
         }
-        addShutDownJob = function;
-    }
+        addShutDownJob = add;
 
-    public static void injectRemove(Function<Consumer<Void>, Boolean> function) {
-        if (function == null) {
+        if (remove == null) {
             return;
         }
-        removeShutDownJob = function;
+        removeShutDownJob = remove;
     }
 
-    public static boolean addShutDownHook(Consumer<Void> hook) {
+    public static boolean addShutDownHook(Runnable hook) {
         return addShutDownJob.apply(hook);
     }
 
-    public static boolean removeShutDownHook(Consumer<Void> hook) {
+    public static boolean removeShutDownHook(Runnable hook) {
         return removeShutDownJob.apply(hook);
     }
 }

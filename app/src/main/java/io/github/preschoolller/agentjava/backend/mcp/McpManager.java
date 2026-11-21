@@ -33,7 +33,7 @@ public class McpManager {
 
     static {
         appSettings.addChangeListener(McpManager::loadMcpToolsAsync);
-        ShutDownJob.addShutDownHook(i -> cleanup());
+        ShutDownJob.addShutDownHook(McpManager::cleanup);
         setCallBack();
     }
 

@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.plugin;
 
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.spi.PluginPersistentHelper;
 import io.github.preschoolller.agentjava.spi.common.Constants;
 
 import java.io.IOException;
@@ -67,9 +67,8 @@ final class BiliLocator {
 
     private static List<String> candidates() {
         List<String> list = new ArrayList<>();
-        AppSettings settings = AppSettings.get();
         for (String key : List.of(PERSISTED_KEY_READ, PERSISTED_KEY_WRITE)) {
-            String v = settings.getPersistentPluginInput(key);
+            String v = PluginPersistentHelper.getPersistentInput(key);
             if (v != null && !v.isBlank()) {
                 list.add(v);
             }

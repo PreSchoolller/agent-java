@@ -2,7 +2,7 @@ package io.github.preschoolller.agentjava.spi;
 
 import java.util.function.Function;
 
-public class PluginPersistentConsumer {
+public class PluginPersistentHelper {
 
     private static volatile Function<String, String> persistentProvider = plugin -> null;
 

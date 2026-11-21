@@ -2,13 +2,11 @@ package io.github.preschoolller.agentjava.backend.maintenance;
 
 import org.tinylog.provider.ProviderRegistry;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Consumer;
 
 /**
  * 维护一些需要在应用关闭时做的事情：
@@ -23,7 +21,7 @@ public class ShutDownJob {
      *  removeBgProcess 时一并清除 */
     private static final Set<String> killedCallIds = new HashSet<>();
 
-    private static Set<Consumer<Void>> hooks = new HashSet<>();
+    private static Set<Runnable> hooks = new HashSet<>();
 
     private ShutDownJob() {
     }
@@ -83,14 +81,14 @@ public class ShutDownJob {
     }
 
     private static void runHooks() {
-        Collection<Consumer<Void>> tmpHooks;
+        Collection<Runnable> tmpHooks;
         synchronized (ShutDownJob.class) {
             tmpHooks = hooks;
             hooks = null;
         }
-        for (Consumer<Void> tmpHook : tmpHooks) {
+        for (Runnable tmpHook : tmpHooks) {
             try {
-                tmpHook.accept(null);
+                tmpHook.run();
             } catch (Throwable ignored){
             }
         }
@@ -114,14 +112,14 @@ public class ShutDownJob {
         }
     }
 
-    public static synchronized boolean addShutDownHook(Consumer<Void> hook) {
+    public static synchronized boolean addShutDownHook(Runnable hook) {
         if(hooks == null || hooks.contains(hook))
             return false;
 
         return hooks.add(hook);
     }
 
-    public static synchronized boolean removeShutDownHook(Consumer<Void> hook) {
+    public static synchronized boolean removeShutDownHook(Runnable hook) {
         if (hook == null || (hooks != null && !hooks.contains(hook))) {
             return true;
         }

@@ -20,4 +20,6 @@ public class Constants {
     private static class InstanceHolder {
         private static final ObjectMapper MAPPER = new ObjectMapper();
     }
+
+    public static final String DENIED_RESULT = "用户拒绝了本次工具调用，工具未执行。请不要重试同一调用，向用户说明后等待指示。";
 }
