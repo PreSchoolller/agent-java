@@ -2,7 +2,7 @@ package io.github.preschoolller.agentjava.frontend.store;
 
 import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
-import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
+import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 
 import java.io.IOException;
 import java.nio.file.Files;

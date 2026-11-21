@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
 import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
-import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
+import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
