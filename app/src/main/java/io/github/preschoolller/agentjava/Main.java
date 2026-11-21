@@ -1,6 +1,7 @@
 package io.github.preschoolller.agentjava;
 
 import io.github.preschoolller.agentjava.backend.context.ContextHandlerManager;
+import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.spi.context.ContextHandler;
 import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.maintenance.TaskHandle;
@@ -15,7 +16,7 @@ import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFacto
 import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.spi.provider.event.BaseEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallDeltaEvent;
-import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDoneEvent;
+import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallDoneEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallStartEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.PoisonEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ReasoningDeltaDoneEvent;
@@ -406,6 +407,7 @@ public class Main {
         Map<String, StringBuilder> argsByCallId = new HashMap<>();
         Set<String> doneCalls = new HashSet<>();
         Window.AiStream stream = prepareParams.stream;
+        Map<String, ToolCall> indexToolCall = new HashMap<>();
         try {
             PromptParams promptParams = prepareParams.paramsBuilder.build();
             long roundStartNanos = System.nanoTime(); // 本轮耗时（含 HTTP 建流），胶囊上展示用
@@ -430,6 +432,11 @@ public class Main {
                     addToolCall(window, conversation.getId(), e.name(), e.callId(), callIdHandleMap);
                     callIdByItemId.put(e.id(), e.callId());
                     argsByCallId.put(e.callId(), new StringBuilder());
+                    ToolCall toolCall = new ToolCall();
+                    toolCall.setTool(ToolManager.findByName(e.name()));
+                    toolCall.setArguments("");
+                    toolCall.setCallId(e.callId());
+                    indexToolCall.put(e.id(), toolCall);
                 } else if (event instanceof FunctionToolCallDeltaEvent e) {
                     // 参数增量：事件带的是条目 id，用 Start 事件建立的映射换回 callId 找卡片
                     String callId = callIdByItemId.get(e.id());
@@ -445,7 +452,12 @@ public class Main {
                     SwingUtilities.invokeLater(() -> handle.appendArgs(delta)); // 卡片 120ms 节流显示
                 } else if (event instanceof FunctionToolCallDoneEvent e) {
                     Window.ToolCallHandle toolCallHandle = callIdHandleMap.get(e.callId());
-                    ToolCall toolCall = e.toolCall();
+                    ToolCall toolCall = indexToolCall.get(e.id());
+                    if (toolCall == null) {
+                        LOG.error("应该不可能");
+                        continue;
+                    }
+                    toolCall.setArguments(argsByCallId.get(toolCall.getCallId()).toString());
                     toolCall.setApprovalGate((tc, additionalRequest) ->
                             requestToolApproval(tc, promptParams.getAgentMode(), callIdHandleMap, cancelled, additionalRequest));
                     toolCall.setWorkspace(promptParams.getWorkspace());

@@ -38,11 +38,10 @@ import io.github.preschoolller.agentjava.spi.provider.records.ProviderStreamingR
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.ResponseStreamEventVisitorAdaptor;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
-import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.spi.provider.event.BaseEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ErrorMessageEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallDeltaEvent;
-import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDoneEvent;
+import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallDoneEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallStartEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.PoisonEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ReasoningDeltaDoneEvent;
@@ -333,7 +332,7 @@ public class OpenAiResponseProvider implements Provider {
 
             @Override
             public Object visitReasoningTextDone(@NotNull ResponseReasoningTextDoneEvent responseReasoningTextDoneEvent) {
-                putIntoBQ(new ReasoningDeltaDoneEvent(responseReasoningTextDoneEvent.itemId(), responseReasoningTextDoneEvent.text()));
+                putIntoBQ(new ReasoningDeltaDoneEvent(responseReasoningTextDoneEvent.itemId()));
                 return null;
             }
 
@@ -402,11 +401,7 @@ public class OpenAiResponseProvider implements Provider {
             public Object visitOutputItemDone(@NotNull ResponseOutputItemDoneEvent responseOutputItemDoneEvent) {
                 if (responseOutputItemDoneEvent.item().isFunctionCall()) {
                     ResponseFunctionToolCall functionCall = responseOutputItemDoneEvent.item().asFunctionCall();
-                    ToolCall toolCall = new ToolCall();
-                    toolCall.setArguments(functionCall.arguments());
-                    toolCall.setTool(ToolManager.findByName(functionCall.name()));
-                    toolCall.setCallId(functionCall.callId());
-                    putIntoBQ(new FunctionToolCallDoneEvent(functionCall.callId(), toolCall));
+                    putIntoBQ(new FunctionToolCallDoneEvent(functionCall.id().orElse("wrong_id"), functionCall.callId()));
                 }
                 return null;
             }
