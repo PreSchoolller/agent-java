@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.backend.maintenance;
 
-import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.spi.common.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
-import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.spi.common.Constants;
 
 import java.io.IOException;
 import java.io.InputStream;

@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.backend.constant;
+package io.github.preschoolller.agentjava.spi.common;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 

@@ -2,7 +2,7 @@ package io.github.preschoolller.agentjava.plugin.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpServer;
-import io.github.preschoolller.agentjava.backend.constant.Constants;
+import io.github.preschoolller.agentjava.spi.common.Constants;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
