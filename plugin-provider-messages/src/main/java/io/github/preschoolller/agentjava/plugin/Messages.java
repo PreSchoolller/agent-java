@@ -35,11 +35,10 @@ import io.github.preschoolller.agentjava.spi.provider.records.ProviderBlockingTe
 import io.github.preschoolller.agentjava.spi.provider.records.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
-import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.spi.provider.event.BaseEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ErrorMessageEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallDeltaEvent;
-import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDoneEvent;
+import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallDoneEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallStartEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.PoisonEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ReasoningDeltaDoneEvent;
@@ -216,14 +215,14 @@ public class Messages implements Provider {
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
         AtomicBoolean shouldStop = new AtomicBoolean();
         ThreadPoolFactory.getResponseExecutor().execute(() -> {
-            Map<Long, ToolCall> indexToolCall = new HashMap<>();
+            Map<Long, String> indexCallId = new HashMap<>();
             Map<Long, Type> indexType = new HashMap<>();
             ErrorMessageEvent error = null;
             KeyUrl keyUrl = new KeyUrl(promptParams.getKey(), promptParams.getBackendUrl());
             try (StreamResponse<RawMessageStreamEvent> streamEvents = getClient(keyUrl).messages().createStreaming(createParams)) {
                 streamEvents.stream()
                         .takeWhile(se -> !shouldStop.get())
-                        .forEach(rawMessageStreamEvent -> visit(rawMessageStreamEvent, blockingQueue, indexType, indexToolCall));
+                        .forEach(rawMessageStreamEvent -> visit(rawMessageStreamEvent, blockingQueue, indexType, indexCallId));
             } catch (Throwable throwable) {
                 // TODO 有哪些异常还不知道，先兜一下
                 error = new ErrorMessageEvent(throwable.getMessage());
@@ -244,7 +243,7 @@ public class Messages implements Provider {
         return new ProviderStreamingResponse(blockingQueue, shouldStop);
     }
 
-    private void visit(RawMessageStreamEvent rawMessageStreamEvent, BlockingQueue<BaseEvent> blockingQueue, Map<Long, Type> indexType, Map<Long, ToolCall> indexToolCall) {
+    private void visit(RawMessageStreamEvent rawMessageStreamEvent, BlockingQueue<BaseEvent> blockingQueue, Map<Long, Type> indexType, Map<Long, String> indexCallId) {
         LOG.trace(rawMessageStreamEvent.toString());
         if (rawMessageStreamEvent.isMessageStart()) {
             handleMessageStart(rawMessageStreamEvent.asMessageStart(), blockingQueue);
@@ -253,11 +252,11 @@ public class Messages implements Provider {
         } else if (rawMessageStreamEvent.isMessageStop()) {
             handleMessageStop(rawMessageStreamEvent.asMessageStop(), blockingQueue);
         } else if (rawMessageStreamEvent.isContentBlockStart()) {
-            handleContentBlockStart(rawMessageStreamEvent.asContentBlockStart(), blockingQueue, indexType, indexToolCall);
+            handleContentBlockStart(rawMessageStreamEvent.asContentBlockStart(), blockingQueue, indexType, indexCallId);
         } else if (rawMessageStreamEvent.isContentBlockDelta()) {
-            handleContentBlockDelta(rawMessageStreamEvent.asContentBlockDelta(), blockingQueue, indexType, indexToolCall);
+            handleContentBlockDelta(rawMessageStreamEvent.asContentBlockDelta(), blockingQueue, indexType);
         } else if (rawMessageStreamEvent.isContentBlockStop()) {
-            handleContentBlockStop(rawMessageStreamEvent.asContentBlockStop(), blockingQueue, indexType, indexToolCall);
+            handleContentBlockStop(rawMessageStreamEvent.asContentBlockStop(), blockingQueue, indexType, indexCallId);
         }
     }
 
@@ -276,7 +275,7 @@ public class Messages implements Provider {
         putIntoBQ(new PoisonEvent(), blockingQueue);
     }
 
-    private void handleContentBlockStart(RawContentBlockStartEvent rawContentBlockStartEvent, BlockingQueue<BaseEvent> blockingQueue, Map<Long, Type> indexType, Map<Long, ToolCall> indexToolCall) {
+    private void handleContentBlockStart(RawContentBlockStartEvent rawContentBlockStartEvent, BlockingQueue<BaseEvent> blockingQueue, Map<Long, Type> indexType, Map<Long, String> indexCallId) {
         RawContentBlockStartEvent.ContentBlock contentBlock = rawContentBlockStartEvent.contentBlock();
         long index = rawContentBlockStartEvent.index();
         if (contentBlock.isText()) {
@@ -289,15 +288,11 @@ public class Messages implements Provider {
             indexType.put(index, Type.FUNCTION);
             ToolUseBlock toolUse = contentBlock.asToolUse();
             putIntoBQ(new FunctionToolCallStartEvent(String.valueOf(index), toolUse.id(), toolUse.name()), blockingQueue);
-            ToolCall toolCall = new ToolCall();
-            toolCall.setTool(ToolManager.findByName(toolUse.name()));
-            toolCall.setArguments("");
-            toolCall.setCallId(toolUse.id());
-            indexToolCall.put(index, toolCall);
+            indexCallId.put(index, toolUse.id());
         }
     }
 
-    private void handleContentBlockDelta(RawContentBlockDeltaEvent rawContentBlockDeltaEvent, BlockingQueue<BaseEvent> blockingQueue, Map<Long, Type> indexType, Map<Long, ToolCall> indexToolCall) {
+    private void handleContentBlockDelta(RawContentBlockDeltaEvent rawContentBlockDeltaEvent, BlockingQueue<BaseEvent> blockingQueue, Map<Long, Type> indexType) {
         RawContentBlockDelta delta = rawContentBlockDeltaEvent.delta();
         long index = rawContentBlockDeltaEvent.index();
         if (delta.isText()) {
@@ -306,36 +301,24 @@ public class Messages implements Provider {
             putIntoBQ(new ReasoningDeltaEvent(String.valueOf(index), delta.asThinking().thinking()), blockingQueue);
         } else if (delta.isInputJson()) {
             if (Type.FUNCTION.equals(indexType.get(index))) {
-                ToolCall toolCall = indexToolCall.get(index);
-                if (toolCall == null) {
-                    LOG.error("unknown tool block delta event: {}", rawContentBlockDeltaEvent);
-                    return;
-                }
                 String argusDelta = delta.asInputJson().partialJson();
-                toolCall.setArguments(toolCall.getArguments() + argusDelta);
                 putIntoBQ(new FunctionToolCallDeltaEvent(String.valueOf(index), argusDelta), blockingQueue);
             }
         }
     }
 
-    private void handleContentBlockStop(RawContentBlockStopEvent rawContentBlockStopEvent, BlockingQueue<BaseEvent> blockingQueue, Map<Long, Type> indexType, Map<Long, ToolCall> indexToolCall) {
-        // TODO: messages api 块结束不返回完整块内容，其实chat/completion也不返回，要说前端现在也没用上 ReasoningDeltaDoneEvent 的 text 字段，要不这个字段以后直接去掉得了？？？
-        // 所以这一次就不再跟 chat/completion 一样自己维护一个StringBuilder来拼接思考块成品了。
+    private void handleContentBlockStop(RawContentBlockStopEvent rawContentBlockStopEvent, BlockingQueue<BaseEvent> blockingQueue, Map<Long, Type> indexType, Map<Long, String> indexCallId) {
         long index = rawContentBlockStopEvent.index();
         Type type = indexType.get(index);
         if (type == null) {
             return;
         }
         switch (type) {
-            case REASONING -> putIntoBQ(new ReasoningDeltaDoneEvent(String.valueOf(index), ""), blockingQueue);
+            case REASONING -> putIntoBQ(new ReasoningDeltaDoneEvent(String.valueOf(index)), blockingQueue);
             case RESPONSE -> putIntoBQ(new ResponseDeltaDoneEvent(String.valueOf(index), ""), blockingQueue);
             case FUNCTION -> {
-                ToolCall toolCall = indexToolCall.get(index);
-                if (toolCall == null) {
-                    LOG.error("unknown tool block stop event, index: {}", index);
-                    return;
-                }
-                putIntoBQ(new FunctionToolCallDoneEvent(toolCall.getCallId(), toolCall), blockingQueue);
+                String callId = indexCallId.get(index);
+                putIntoBQ(new FunctionToolCallDoneEvent(String.valueOf(index), callId), blockingQueue);
             }
             default -> LOG.error("unhandled type of content block stop event, index: {}", index);
         }

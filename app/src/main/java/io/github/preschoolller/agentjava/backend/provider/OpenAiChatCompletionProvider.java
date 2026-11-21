@@ -26,16 +26,14 @@ import io.github.preschoolller.agentjava.spi.provider.records.ProviderBlockingTe
 import io.github.preschoolller.agentjava.spi.provider.records.ProviderStreamingResponse;
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.backend.provider.common.ThreadPoolFactory;
-import io.github.preschoolller.agentjava.backend.provider.common.ToolCall;
 import io.github.preschoolller.agentjava.spi.provider.event.BaseEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ErrorMessageEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallDeltaEvent;
-import io.github.preschoolller.agentjava.backend.provider.common.event.FunctionToolCallDoneEvent;
+import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallDoneEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.FunctionToolCallStartEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.PoisonEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ReasoningDeltaDoneEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ReasoningDeltaEvent;
-import io.github.preschoolller.agentjava.spi.provider.event.ReasoningDeltaStartEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ResponseCompleteEvent;
 import io.github.preschoolller.agentjava.spi.provider.event.ResponseDeltaEvent;
 import io.github.preschoolller.agentjava.spi.provider.Provider;
@@ -195,8 +193,7 @@ public class OpenAiChatCompletionProvider implements Provider {
         LOG.info("--------------streaming start--------------");
         ChatCompletionCreateParams chatCompletionCreateParams = buildParams(promptParams);
         BlockingQueue<BaseEvent> blockingQueue = new ArrayBlockingQueue<>(1024, true);
-        Map<Integer, ToolCall> indexToolCall = new HashMap<>();
-        StringBuilder sb = new StringBuilder();
+        Map<Integer, String> indexCallId = new HashMap<>();
         AtomicBoolean shouldStop = new AtomicBoolean(false);
         ThreadPoolFactory.getResponseExecutor().execute(() -> {
             List<ErrorMessageEvent> errors = new ArrayList<>();
@@ -206,7 +203,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                 response.stream()
                         .takeWhile(chatCompletionChunk -> !shouldStop.get())
                         .forEach(chatCompletionChunk ->
-                                visit(blockingQueue, chatCompletionChunk, indexToolCall, sb));
+                                visit(blockingQueue, chatCompletionChunk, indexCallId));
             } catch (OpenAIServiceException exception) {
                 String errorMessage = "Stream exception found. Code: " + exception.code().orElse("")
                         + "\nStatus code: " + exception.statusCode()
@@ -219,7 +216,7 @@ public class OpenAiChatCompletionProvider implements Provider {
                 errors.add(new ErrorMessageEvent("Unexpected stream error: " + exception.getMessage()));
             } finally {
                 LOG.info("--------------streaming end--------------");
-                putIntoBQ(new ReasoningDeltaDoneEvent("", sb.toString().trim().strip()), blockingQueue);
+                putIntoBQ(new ReasoningDeltaDoneEvent(""), blockingQueue);
                 try {
                     for (ErrorMessageEvent error : errors) {
                         blockingQueue.put(error);
@@ -246,7 +243,7 @@ public class OpenAiChatCompletionProvider implements Provider {
     }
 
     private static void visit(BlockingQueue<BaseEvent> blockingQueue, ChatCompletionChunk chatCompletionChunk,
-                              Map<Integer, ToolCall> indexToolCall, StringBuilder sb) {
+                              Map<Integer, String> indexCallId) {
         LOG.trace("{}", chatCompletionChunk);
         Stream<ChatCompletionChunk.Choice.Delta> deltaStream = chatCompletionChunk.choices().stream()
                 .map(ChatCompletionChunk.Choice::delta);
@@ -264,10 +261,6 @@ public class OpenAiChatCompletionProvider implements Provider {
                 if (reasoning != null) {
                     reasoningDelta += (String) reasoning.asString().orElse("");
                 }
-                if (sb.isEmpty() && !reasoningDelta.isEmpty()) {
-                    putIntoBQ(new ReasoningDeltaStartEvent(""), blockingQueue);
-                }
-                sb.append(reasoningDelta);
                 putIntoBQ(new ReasoningDeltaEvent(chatCompletionChunk.id(), reasoningDelta), blockingQueue);
             }
             if (delta.toolCalls().isPresent()) {
@@ -281,17 +274,6 @@ public class OpenAiChatCompletionProvider implements Provider {
                         Optional<String> arguments = function.arguments();
                         if (callId.isPresent()) {
                             putIntoBQ(new FunctionToolCallStartEvent(String.valueOf(index), callId.get(), name), blockingQueue);
-                            ToolCall toolCall = new ToolCall();
-                            toolCall.setCallId(callId.get());
-                            toolCall.setTool(ToolManager.findByName(name));
-                            toolCall.setArguments("");
-                            indexToolCall.put(index, toolCall);
-                        }
-                        ToolCall toolCall = indexToolCall.get(index);
-                        if (toolCall == null) {
-                            LOG.warn("no way to be here!");
-                        } else {
-                            toolCall.setArguments(toolCall.getArguments() + arguments.orElse(""));
                         }
                         putIntoBQ(new FunctionToolCallDeltaEvent(String.valueOf(index), arguments.orElse("")), blockingQueue);
                     }
@@ -313,9 +295,9 @@ public class OpenAiChatCompletionProvider implements Provider {
                 .findAny();
         if (finishReason.isPresent()) {
             LOG.info("流式传输终止，原因：{}", finishReason.get());
-            for (Integer index : indexToolCall.keySet()) {
-                ToolCall toolCall = indexToolCall.get(index);
-                putIntoBQ(new FunctionToolCallDoneEvent(toolCall.getCallId(), toolCall), blockingQueue);
+            for (Integer index : indexCallId.keySet()) {
+                String callId = indexCallId.get(index);
+                putIntoBQ(new FunctionToolCallDoneEvent(String.valueOf(index), callId), blockingQueue);
             }
         }
     }
