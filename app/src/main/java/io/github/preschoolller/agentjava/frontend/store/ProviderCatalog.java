@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
-import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
+import io.github.preschoolller.agentjava.spi.provider.Provider;
 
 import java.util.ArrayList;
 import java.util.List;

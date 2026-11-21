@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava.backend.context;
 
 import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandler;
-import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
+import io.github.preschoolller.agentjava.spi.provider.PromptParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

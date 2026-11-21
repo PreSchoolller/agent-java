@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.backend.provider;
 
-import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
+import io.github.preschoolller.agentjava.spi.provider.Provider;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
 

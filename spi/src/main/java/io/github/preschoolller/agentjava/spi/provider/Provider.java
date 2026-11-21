@@ -1,8 +1,7 @@
-package io.github.preschoolller.agentjava.backend.provider.interfaces;
+package io.github.preschoolller.agentjava.spi.provider;
 
-import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
-import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
-import io.github.preschoolller.agentjava.backend.provider.common.ProviderStreamingResponse;
+import io.github.preschoolller.agentjava.spi.provider.records.ProviderBlockingTextResponse;
+import io.github.preschoolller.agentjava.spi.provider.records.ProviderStreamingResponse;
 
 public interface Provider {
     enum Api {
