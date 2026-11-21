@@ -10,13 +10,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 public class McpManager {
 
@@ -49,6 +49,9 @@ public class McpManager {
         List<McpServer> mcpServers = appSettings.getMcpServers();
         Set<McpConfig> tmpNew = new HashSet<>(mcpServers.size());
         for (McpServer mcpServer : mcpServers) {
+            if (!mcpServer.isEnabled()) {
+                continue;
+            }
             McpConfig mcpConfig = convertMcpServerToMcpConfig(mcpServer);
             BaseMcp existing = mcpPools.get(mcpServer.getName());
             if (existing != null && existing.getConfig().equals(mcpConfig)) {
@@ -62,20 +65,16 @@ public class McpManager {
             } catch (IllegalArgumentException e) {
                 LOG.warn("failed to load MCP config", e);
             }
-            if (baseMcp != null) {
-                if (existing != null) {
-                    // 同名但配置变了：先摘旧实例的工具并关闭旧连接，再换新
-                    unregisterAndClose(existing);
-                }
-                mcpPools.put(mcpServer.getName(), baseMcp);
-                tmpNew.add(mcpConfig);
-                currentState.put(mcpServer.getName(), new McpCatalog.ServerRuntime(mcpServer.getName(), "connecting", "", List.of()));
-            } else if (existing != null) {
-                // 新配置非法但旧的还挂着：旧配置已不被认可，照常摘除（占住名额防被 diff 误判）
+            if (existing != null) {
+                // 配置变更或新配置非法：先摘旧实例
                 unregisterAndClose(existing);
                 mcpPools.remove(mcpServer.getName());
                 currentState.remove(mcpServer.getName());
+            }
+            if (baseMcp != null) {
+                mcpPools.put(mcpServer.getName(), baseMcp);
                 tmpNew.add(mcpConfig);
+                currentState.put(mcpServer.getName(), new McpCatalog.ServerRuntime(mcpServer.getName(), "connecting", "", List.of()));
             }
         }
         Set<McpConfig> tmpCurrent = mcpPools.values().stream().collect(HashSet::new, (set, mcp) -> set.add(mcp.getConfig()), Set::addAll);
@@ -121,19 +120,18 @@ public class McpManager {
                 for (McpTool mcpTool : mcpTools) {
                     ToolManager.register(mcpTool);
                 }
-
             } catch (Throwable e) {
                 LOG.warn("failed to register MCP tools", e);
                 state = "error";
                 detail = e.getMessage();
             }
-            Collection<? extends McpCatalog.McpToolInfo> finalMcpTools;
-            if (mcpTools != null) {
-                finalMcpTools = mcpTools.stream()
-                        .collect(ArrayList::new, (col, tool) ->
-                                col.add(new McpCatalog.McpToolInfo(tool.name(), tool.description())), ArrayList::addAll);
-            } else {
+            List<McpCatalog.McpToolInfo> finalMcpTools;
+            if (mcpTools == null) {
                 finalMcpTools = new ArrayList<>();
+            } else {
+                finalMcpTools = mcpTools.stream()
+                        .map(mcpTool -> new McpCatalog.McpToolInfo(mcpTool.name(), mcpTool.description()))
+                        .collect(Collectors.toCollection(ArrayList::new));
             }
             String finalState = state;
             String finalDetail = detail;
