@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.backend.context.interfaces;
 
-import io.github.preschoolller.agentjava.backend.maintenance.interfaces.PluginBase;
+import io.github.preschoolller.agentjava.spi.PluginBase;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 
 import java.util.List;
