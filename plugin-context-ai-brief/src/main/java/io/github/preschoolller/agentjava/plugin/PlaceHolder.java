@@ -1,13 +1,8 @@
 package io.github.preschoolller.agentjava.plugin;
 
 import io.github.preschoolller.agentjava.backend.context.interfaces.ContextHandler;
-import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
-import io.github.preschoolller.agentjava.backend.provider.common.RoleEnum;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.ArrayList;
-import java.util.List;
 
 public class PlaceHolder implements ContextHandler {
 

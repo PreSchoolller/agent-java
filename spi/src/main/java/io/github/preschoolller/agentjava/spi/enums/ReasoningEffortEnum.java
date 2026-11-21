@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.backend.provider.common;
+package io.github.preschoolller.agentjava.spi.enums;
 
 public enum ReasoningEffortEnum {
     NO,

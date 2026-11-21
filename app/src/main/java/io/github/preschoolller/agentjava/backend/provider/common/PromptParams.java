@@ -1,5 +1,8 @@
 package io.github.preschoolller.agentjava.backend.provider.common;
 
+import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
+import io.github.preschoolller.agentjava.spi.enums.RoleEnum;
+
 import java.util.ArrayList;
 import java.util.List;
 

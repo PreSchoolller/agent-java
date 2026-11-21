@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
-import io.github.preschoolller.agentjava.backend.provider.common.ReasoningEffortEnum;
+import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
