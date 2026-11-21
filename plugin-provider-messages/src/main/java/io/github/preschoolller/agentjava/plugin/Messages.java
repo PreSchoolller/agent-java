@@ -28,7 +28,7 @@ import com.anthropic.models.messages.ToolUseBlockParam;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
-import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
+import io.github.preschoolller.agentjava.spi.enums.AgentMode;
 import io.github.preschoolller.agentjava.backend.provider.common.KeyUrl;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
@@ -172,7 +172,7 @@ public class Messages implements Provider {
         }
 
         if (!promptParams.getAgentMode().equals(AgentMode.CHAT)) {
-            for (io.github.preschoolller.agentjava.backend.tool.interfaces.Tool tool :
+            for (io.github.preschoolller.agentjava.spi.tool.Tool tool :
                     ToolManager.shouldRevealTools(historyTools, promptParams.getEnabledTools())) {
 
                 Tool.Builder toolBuilder = Tool.builder();

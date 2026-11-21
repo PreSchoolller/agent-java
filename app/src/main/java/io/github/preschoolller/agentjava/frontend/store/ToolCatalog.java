@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 
 import java.util.ArrayList;
 import java.util.Comparator;

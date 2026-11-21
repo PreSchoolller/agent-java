@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.backend.tool.interfaces;
+package io.github.preschoolller.agentjava.spi.tool;
 
 import io.github.preschoolller.agentjava.spi.PluginBase;
 

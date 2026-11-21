@@ -30,7 +30,7 @@ import com.openai.models.responses.ResponseReasoningTextDeltaEvent;
 import com.openai.models.responses.ResponseReasoningTextDoneEvent;
 import com.openai.models.responses.ResponseStreamEvent;
 import com.openai.models.responses.ResponseTextDeltaEvent;
-import io.github.preschoolller.agentjava.backend.provider.common.AgentMode;
+import io.github.preschoolller.agentjava.spi.enums.AgentMode;
 import io.github.preschoolller.agentjava.backend.provider.common.KeyUrl;
 import io.github.preschoolller.agentjava.backend.provider.common.PromptParams;
 import io.github.preschoolller.agentjava.backend.provider.common.ProviderBlockingTextResponse;
@@ -53,7 +53,7 @@ import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseD
 import io.github.preschoolller.agentjava.backend.provider.common.event.ResponseDeltaStartEvent;
 import io.github.preschoolller.agentjava.backend.provider.interfaces.Provider;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;

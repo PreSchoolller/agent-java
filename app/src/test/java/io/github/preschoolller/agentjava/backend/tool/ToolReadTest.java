@@ -2,7 +2,7 @@ package io.github.preschoolller.agentjava.backend.tool;
 
 import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.NeedAdditionalApproval;
+import io.github.preschoolller.agentjava.spi.tool.NeedAdditionalApproval;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;

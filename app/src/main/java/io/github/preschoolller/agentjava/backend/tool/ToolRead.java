@@ -4,8 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.preschoolller.agentjava.backend.constant.Constants;
 import io.github.preschoolller.agentjava.backend.provider.common.ToolApprovalGate;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.NeedAdditionalApproval;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.NeedAdditionalApproval;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 
 import java.io.BufferedReader;
 import java.io.IOException;

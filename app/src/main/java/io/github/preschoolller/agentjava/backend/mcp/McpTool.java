@@ -1,7 +1,7 @@
 package io.github.preschoolller.agentjava.backend.mcp;
 
 import io.github.preschoolller.agentjava.backend.constant.Constants;
-import io.github.preschoolller.agentjava.backend.tool.interfaces.Tool;
+import io.github.preschoolller.agentjava.spi.tool.Tool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
