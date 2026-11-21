@@ -3,6 +3,7 @@ package io.github.preschoolller.agentjava.backend.maintenance;
 import io.github.preschoolller.agentjava.backend.mcp.McpManager;
 import io.github.preschoolller.agentjava.backend.tool.ToolBash;
 import io.github.preschoolller.agentjava.spi.PluginPersistentConsumer;
+import io.github.preschoolller.agentjava.spi.PluginShutDownJobHelper;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -11,9 +12,15 @@ import java.util.concurrent.CompletableFuture;
  */
 public class WarmUpStuff {
     public static void warmup() {
-        PluginPersistentConsumer.inject(PluginManager::getPersistentInput);
+        injectToSpi();
         PluginLoader.load();
         CompletableFuture.runAsync(ToolBash::exploreBash);
         McpManager.loadMcpToolsAsync();
+    }
+
+    private static void injectToSpi() {
+        PluginPersistentConsumer.inject(PluginManager::getPersistentInput);
+        PluginShutDownJobHelper.injectAdd(ShutDownJob::addShutDownHook);
+        PluginShutDownJobHelper.injectRemove(ShutDownJob::removeShutDownHook);
     }
 }
