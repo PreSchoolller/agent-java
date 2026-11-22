@@ -1,9 +1,9 @@
 package io.github.preschoolller.agentjava.plugin;
 
-import io.github.preschoolller.agentjava.Main;
-import io.github.preschoolller.agentjava.spi.common.Constants;
-import io.github.preschoolller.agentjava.spi.PluginShutDownJobHelper;
+import io.github.preschoolller.agentjava.api.AgentJavaSessions;
 import io.github.preschoolller.agentjava.plugin.api.AgentApiServer;
+import io.github.preschoolller.agentjava.spi.PluginShutDownJobHelper;
+import io.github.preschoolller.agentjava.spi.common.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  *   1. 把插件资源里打包的 dsh-bili-whale 源码（resources/whale/，含 lib/tools/node_modules）
  *      解压到 ~/.agentjava/whale/（版本一致则跳过）——jar 自包含，新机器零外部依赖（除 node）
  *   2. 定位 dsh-bili-whale 根目录：优先解压目录，env BILI_WHALE_DIR 显式覆盖，外部目录兜底
- *   3. 拉起回环 API（AgentApiServer，Main.apiInject 承接注入）——shim 起来第一件事
+ *   3. 拉起回环 API（AgentApiServer，宿主经 spi 的 AgentJavaSessionProvider 承接注入）——shim 起来第一件事
  *      就是读 token 发请求，server 必须先在
  *   4. 把插件资源里的 dsh-shim.mjs 解压到 ~/.agentjava/shim/（每次覆盖：插件升级跟随）
  *   5. 起子进程 node shim，stdout/stderr 全量落 ~/.agentjava/logs/whale-shim.log
@@ -57,7 +57,7 @@ final class WhaleHost {
     /** 打包在插件资源里的 whale 解压落点（也是 bili/bili_write 工具链的兜底位置） */
     static final Path BUNDLED_WHALE_DIR = Constants.APP_USER_DIR.resolve("whale");
 
-    /** 应用退出链路上的杀 shim 动作（走 PluginShutDownJobHelper 自己的 hook 体系，Main 把 clean 挂在 JVM hook 上） */
+    /** 应用退出链路上的杀 shim 动作（经 PluginShutDownJobHelper 注册，宿主退出时由 ShutDownJob.clean 统一执行） */
     private static final Runnable EXIT_KILL = WhaleHost::killOnExit;
 
     private WhaleHost() {
@@ -147,19 +147,9 @@ final class WhaleHost {
         }
     }
 
-    /** 拉起回环 API（幂等），注入 Delegate 与用户输入同链路 */
+    /** 拉起回环 API（幂等），接线宿主经 spi 装配进来的会话能力（与用户输入同链路） */
     private static String ensureApi() {
-        return AgentApiServer.start(new AgentApiServer.Delegate() {
-            @Override
-            public String ensureSession(String sessionId, String workspace) throws Exception {
-                return Main.apiEnsureSession(sessionId, workspace);
-            }
-
-            @Override
-            public String inject(String sessionId, String text) throws Exception {
-                return Main.apiInject(sessionId, text);
-            }
-        });
+        return AgentApiServer.start(AgentJavaSessions.provider());
     }
 
     /** 插件资源里的 shim 解压到 ~/.agentjava/shim/（每次覆盖，升级跟随） */
@@ -399,7 +389,7 @@ final class WhaleHost {
     // ---------------------------------------------------------------- 应用退出
 
     /**
-     * 注册到 PluginShutDownJobHelper 的退出动作（Main 把 PluginShutDownJobHelper::clean 挂在 JVM hook 上，
+     * 注册到 PluginShutDownJobHelper 的退出动作（宿主的 ShutDownJob.clean 挂在 JVM hook 上，退出时统一跑，
      * 托盘退出/窗口关闭都会走到）：按 pid 杀 shim（含子进程树）+ 清 pid 文件。
      * 强杀 JVM（taskkill /F）不触发 hook——那种场景靠下次 start 的孤儿接管兜底。
      */
