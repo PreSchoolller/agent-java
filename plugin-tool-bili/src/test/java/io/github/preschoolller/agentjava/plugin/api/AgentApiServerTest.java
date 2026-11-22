@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava.plugin.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpServer;
+import io.github.preschoolller.agentjava.api.AgentJavaSessionProvider;
 import io.github.preschoolller.agentjava.spi.common.Constants;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** 迁自宿主 backend/api（AgentApiServer 已搬进插件，由 WhaleHost 生命周期管理） */
 class AgentApiServerTest {
 
-    static class FakeDelegate implements AgentApiServer.Delegate {
+    static class FakeDelegate implements AgentJavaSessionProvider {
         final List<String> ensured = new ArrayList<>();
         final List<String> injected = new ArrayList<>();
 
@@ -128,7 +129,7 @@ class AgentApiServerTest {
 
     @Test
     void delegateExceptionIs500WithMessage() throws Exception {
-        HttpServer boom = AgentApiServer.startOn(0, new AgentApiServer.Delegate() {
+        HttpServer boom = AgentApiServer.startOn(0, new AgentJavaSessionProvider() {
             @Override
             public String ensureSession(String sessionId, String workspace) {
                 throw new IllegalStateException("boom 原因");

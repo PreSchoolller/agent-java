@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.github.preschoolller.agentjava.api.AgentJavaSessionProvider;
 import io.github.preschoolller.agentjava.spi.common.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * 背景见插件资源 dsh-shim.mjs：dsh-bili-whale 的宿主侧（lib/）只通过 sessionController 的
  * create/prompt 参与自治链路，webServer/connection 仅服务设置页。shim 把 prompt 转成
  * 这里的 HTTP 调用，Java 侧走与用户输入完全相同的链路（落库→建卡→agent loop，
- * 由 Main.apiEnsureSession / Main.apiInject 承接）。
+ * 由 spi 的 AgentJavaSessionProvider 承接，宿主在启动装配阶段注入实现）。
  *
  * 由 WhaleHost 在 whale 工具 start 时拉起，stop 时收掉——生命周期跟着"她"走。
  *
@@ -42,15 +43,6 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class AgentApiServer {
 
-    /** 宿主接线口：WhaleHost 实现（EDT 上 find-or-create 会话 + 走用户输入同链路） */
-    public interface Delegate {
-        /** 按 id 查找或创建会话（不注入内容），返回会话 id；workspace 可空 */
-        String ensureSession(String sessionId, String workspace) throws Exception;
-
-        /** 注入一条用户回合（落库+出卡+启动链），返回会话 id */
-        String inject(String sessionId, String text) throws Exception;
-    }
-
     private static final Logger LOG = LoggerFactory.getLogger(AgentApiServer.class);
     private static final int MAX_BODY_BYTES = 1 << 20;
     private static final AtomicReference<HttpServer> INSTANCE = new AtomicReference<>();
@@ -62,7 +54,7 @@ public final class AgentApiServer {
      * 启动（幂等）。返回人类可读结果：已在运行 / 已启动（含端口） / 失败原因。
      * WhaleHost 把失败当错误返回给模型，不静默。
      */
-    public static synchronized String start(Delegate delegate) {
+    public static synchronized String start(AgentJavaSessionProvider delegate) {
         if (INSTANCE.get() != null) {
             return "已运行（端口 " + INSTANCE.get().getAddress().getPort() + "）";
         }
@@ -88,7 +80,7 @@ public final class AgentApiServer {
     }
 
     /** 建服务器并启动（端口 0 = 系统分配，测试用）；返回的 server 由调用方负责 stop */
-    static HttpServer startOn(int port, Delegate delegate) throws IOException {
+    static HttpServer startOn(int port, AgentJavaSessionProvider delegate) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         String token = token();
         server.createContext("/agent/api", ex -> {
@@ -146,7 +138,7 @@ public final class AgentApiServer {
         return token;
     }
 
-    private static void handle(HttpExchange ex, String token, Delegate delegate) throws Exception {
+    private static void handle(HttpExchange ex, String token, AgentJavaSessionProvider delegate) throws Exception {
         if (!"127.0.0.1".equals(ex.getLocalAddress().getHostName())
                 && !"127.0.0.1".equals(ex.getLocalAddress().getAddress().getHostAddress())) {
             json(ex, 403, error("非回环访问"));
