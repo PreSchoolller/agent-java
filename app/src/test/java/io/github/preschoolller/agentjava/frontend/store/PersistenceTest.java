@@ -1,6 +1,7 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
 import io.github.preschoolller.agentjava.core.repository.Conversation;
+import io.github.preschoolller.agentjava.core.repository.JsonKit;
 import io.github.preschoolller.agentjava.core.repository.Message;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;

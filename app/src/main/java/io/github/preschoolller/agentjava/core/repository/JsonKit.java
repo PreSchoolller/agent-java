@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.frontend.store;
+package io.github.preschoolller.agentjava.core.repository;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
