@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.frontend.store;
+package io.github.preschoolller.agentjava.core.repository;
 
 /**
  * 一条消息。role 取 Conversation.ROLE_USER / ROLE_AI / ROLE_TOOL / ROLE_CONTEXT_MANAGER。

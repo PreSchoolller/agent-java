@@ -30,8 +30,8 @@ import io.github.preschoolller.agentjava.spi.provider.event.ErrorMessageEvent;
 import io.github.preschoolller.agentjava.spi.provider.Provider;
 import io.github.preschoolller.agentjava.frontend.gui.Window;
 import io.github.preschoolller.agentjava.frontend.store.AppSettings;
-import io.github.preschoolller.agentjava.frontend.store.Conversation;
-import io.github.preschoolller.agentjava.frontend.store.Message;
+import io.github.preschoolller.agentjava.core.repository.Conversation;
+import io.github.preschoolller.agentjava.core.repository.Message;
 import io.github.preschoolller.agentjava.frontend.store.Profile;
 import org.slf4j.LoggerFactory;
 

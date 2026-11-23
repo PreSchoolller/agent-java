@@ -1,5 +1,6 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
+import io.github.preschoolller.agentjava.core.repository.Conversation;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

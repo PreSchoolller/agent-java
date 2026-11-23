@@ -1,6 +1,8 @@
 package io.github.preschoolller.agentjava.frontend.store;
 
+import io.github.preschoolller.agentjava.core.repository.Conversation;
 import io.github.preschoolller.agentjava.core.repository.ConversationRepository;
+import io.github.preschoolller.agentjava.core.repository.Message;
 
 import java.nio.file.Path;
 
