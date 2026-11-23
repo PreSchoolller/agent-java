@@ -288,9 +288,7 @@ public class Conversation {
                 } else if (success && isManuallyTerminated(result)) {
                     status = STATUS_BG_KILLED;
                 }
-                Message updated = new Message(target.role(), result, target.time(),
-                        target.toolName(), arguments, status, target.callId(),
-                        target.thinking());
+                Message updated = target.withText(result).withArgs(arguments).withStatus(status);
                 messages.set(i, updated);
                 touch();
                 return updated;
@@ -350,20 +348,14 @@ public class Conversation {
             if (STATUS_BG_RUNNING.equals(target.toolStatus())) {
                 String section = "—— 后台任务完成 ——\n"
                         + (output == null || output.isBlank() ? "(无输出)" : output.strip());
-                Message updated = new Message(target.role(),
-                        target.text() + "\n" + section, target.time(),
-                        target.toolName(), target.toolArgs(), STATUS_BG_DONE, target.callId(),
-                        target.thinking());
+                Message updated = target.withText(target.text() + "\n" + section).withStatus(STATUS_BG_DONE);
                 loadedMessages.set(i, updated);
                 touch();
                 return updated;
             }
             if (STATUS_BG_KILLED.equals(target.toolStatus())) {
                 Message updated = output == null || output.isBlank() ? target
-                        : new Message(target.role(),
-                                target.text() + "\n" + output.strip(), target.time(),
-                                target.toolName(), target.toolArgs(), STATUS_BG_KILLED,
-                                target.callId(), target.thinking());
+                        : target.withText(target.text() + "\n" + output.strip()).withStatus(STATUS_BG_KILLED);
                 loadedMessages.set(i, updated);
                 touch();
                 return updated;
@@ -382,10 +374,7 @@ public class Conversation {
             Message target = loadedMessages.get(i);
             if (callId != null && callId.equals(target.callId())
                     && STATUS_BG_RUNNING.equals(target.toolStatus())) {
-                Message updated = new Message(target.role(),
-                        target.text() + "\n—— 已手动终止 ——", target.time(),
-                        target.toolName(), target.toolArgs(), STATUS_BG_KILLED, target.callId(),
-                        target.thinking());
+                Message updated = target.withText(target.text() + "\n—— 已手动终止 ——").withStatus(STATUS_BG_KILLED);
                 loadedMessages.set(i, updated);
                 touch();
                 return updated;

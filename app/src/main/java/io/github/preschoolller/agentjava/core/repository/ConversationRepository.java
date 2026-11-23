@@ -1,5 +1,6 @@
 package io.github.preschoolller.agentjava.core.repository;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.preschoolller.agentjava.spi.common.Constants;
 import io.github.preschoolller.agentjava.spi.enums.AgentMode;
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
@@ -11,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 
@@ -207,22 +209,6 @@ public class ConversationRepository {
     }
 
     /**
-     * 流式输出结束后的落库：把消息文本替换为最终内容（按消息对象同一性查找），返回替换后的新记录
-     */
-    public Message updateMessageText(String id, Message target, String text) {
-        Conversation conversation = findById(id);
-        if (conversation == null) {
-            return null;
-        }
-        Message updated = conversation.updateMessageText(target, text);
-        if (updated != null) {
-            saveAndSyncSession(conversation); // 流式 finish 可能落在已切走的会话上，副本也要刷
-            fireChanged();
-        }
-        return updated;
-    }
-
-    /**
      * 流式输出结束的落库：正文与独立思考一起写回（按消息对象同一性查找），返回替换后的新记录
      */
     public Message updateMessageContent(String id, Message target, String text, String thinking) {
@@ -406,33 +392,18 @@ public class ConversationRepository {
         return map;
     }
 
-    protected static List<Object> serializeMessages(Conversation conversation) {
-        List<Object> messages = new ArrayList<>();
-        for (Message message : conversation.getMessages()) {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("role", message.role());
-            item.put("text", message.text());
-            item.put("time", message.time());
-            if (message.isToolCall()) {
-                item.put("name", message.toolName());
-                item.put("args", message.toolArgs());
-                item.put("status", message.toolStatus());
-                item.put("callId", message.callId());
-            } else if (message.hasThinking()) {
-                item.put("thinking", message.thinking()); // 独立思考独立键落盘，没有不写键（旧格式兼容）
-            }
-            messages.add(item);
-        }
-        return messages;
+    protected static String serializeMessages(Conversation conversation) {
+        List<Object> messages = new ArrayList<>(conversation.getMessages());
+        return JsonKit.toJsonString(messages);
     }
 
-    protected void syncNewHistory(List<Object> messages, String conversationId) {
+    protected void syncNewHistory(String messages, String conversationId) {
         // 同步保存单个会话到 sessions/<会话id>，同样走临时文件 + 原子改名
         try {
             Path tempPath = sessionsDir.resolve("temp-" + conversationId);
             Path realPath = sessionsDir.resolve(conversationId);
             Files.createDirectories(sessionsDir);
-            Files.writeString(tempPath, JsonKit.write(messages));
+            Files.writeString(tempPath, messages);
             Files.move(tempPath, realPath, ATOMIC_MOVE);
         } catch (IOException e) {
             System.err.println("保存单会话历史失败: " + conversationId + " " + e.getMessage());
@@ -513,25 +484,21 @@ public class ConversationRepository {
             return messages; // 从没说过话的会话没有单文件，不是错误
         }
         try {
-            Object raw = JsonKit.parse(Files.readString(sessionFile));
-            for (Object item : (List<?>) raw) {
-                Map<?, ?> messageMap = (Map<?, ?>) item;
+            List<Message> raw = JsonKit.parse(Files.readString(sessionFile), new TypeReference<>() {});
+            for (Message item : raw) {
                 // 崩溃恢复（P0-5）：running 只该存在于活着的进程内存里，读盘遇到就是上次崩了/被杀的
                 // 残留，翻成 interrupted（前端显示"已中断"灰态）；其空结果回传时本就被
                 // buildRoleMessages 的空文本跳过，不会发给后端。
                 // bg-running 同理：后台进程已随 ShutDownJob 的退出清理被杀，回不到"后台完成"了
-                String status = str(messageMap.get("status"));
+                String status = str(item.toolStatus());
                 if ("running".equals(status) || Conversation.STATUS_BG_RUNNING.equals(status)) {
                     status = "interrupted";
                 }
-                messages.add(messageMap.containsKey("name")
-                        ? new Message(str(messageMap.get("role")), str(messageMap.get("text")),
-                        num(messageMap.get("time")), str(messageMap.get("name")),
-                        str(messageMap.get("args")), status, str(messageMap.get("callId")))
-                        : new Message(str(messageMap.get("role")), str(messageMap.get("text")),
-                        num(messageMap.get("time")), null, null, null, null,
-                        // 缺键（旧文件）= null，有键才读
-                        messageMap.containsKey("thinking") ? str(messageMap.get("thinking")) : null));
+                item = item.withStatus(item.toolName() == null ? null : status);
+                if (item.messageId() == null) {
+                    item = item.withMessageId(UUID.randomUUID().toString());
+                }
+                messages.add(item);
             }
         } catch (IOException | RuntimeException exception) {
             System.err.println("读取单会话历史出错，该会话按无消息加载: " + id + " " + exception.getMessage());

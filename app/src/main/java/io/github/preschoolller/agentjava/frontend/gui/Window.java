@@ -1062,8 +1062,7 @@ public class Window extends JFrame {
             }
             // 同步卡面消息：卡片此刻没物化也没关系，fillCard 重建头部时读的就是这份
             Message m = card.message;
-            card.message = new Message(m.role(), m.text(), m.time(), m.toolName(),
-                    args.toString(), m.toolStatus(), m.callId(), m.thinking());
+            card.message = m.withArgs(args.toString());
             if (!conversationId.equals(displayedConvId) || !card.materialized || card.toolArgsLabel == null) {
                 return;
             }

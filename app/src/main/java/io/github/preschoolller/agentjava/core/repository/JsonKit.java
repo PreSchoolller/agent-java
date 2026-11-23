@@ -1,5 +1,9 @@
 package io.github.preschoolller.agentjava.core.repository;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import io.github.preschoolller.agentjava.spi.common.Constants;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -258,6 +262,30 @@ public final class JsonKit {
                 return Long.parseLong(token);
             }
             return Double.parseDouble(token);
+        }
+    }
+
+    public static <R> R parse(String jsonStr, Class<R> rclass) {
+        try {
+            return Constants.getObjectMapper().readValue(jsonStr, rclass);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static <R> R parse(String jsonStr, TypeReference<R> typeRef) {
+        try {
+            return Constants.getObjectMapper().readValue(jsonStr, typeRef);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static String toJsonString(Object obj) {
+        try {
+            return Constants.getObjectMapper().writeValueAsString(obj);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
         }
     }
 }
