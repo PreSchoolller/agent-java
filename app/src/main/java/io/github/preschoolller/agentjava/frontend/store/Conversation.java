@@ -82,24 +82,24 @@ public class Conversation {
     }
 
     /** 注入消息回读钩子（包内：只有仓库需要）；必须在首次触达消息之前调用 */
-    void attachLoader(Supplier<List<Message>> loader) {
+    public void attachLoader(Supplier<List<Message>> loader) {
         this.loader = loader;
     }
 
     /** 注入落盘钩子（包内：只有仓库需要，仓库持有本对象时立即装上）。
      *  用量的落盘不走"随下次消息保存"搭车：链末轮的用量（ResponseCompleteEvent）到得
      *  比消息写晚，等搭车就丢了——setUsage 自己触发保存，写完即盘 */
-    void attachSaver(Runnable saver) {
+    public void attachSaver(Runnable saver) {
         this.saver = saver;
     }
 
     /** 消息当前是否已在内存（仓库落盘判断用：未加载的会话磁盘上就是对的，不必重写） */
-    boolean isLoaded() {
+    public boolean isLoaded() {
         return loaded;
     }
 
     /** 只有"确定加载过且为空"才算空；未加载的会话不触发读盘（落盘不变式：空会话从不进主文件） */
-    boolean isKnownEmpty() {
+    public boolean isKnownEmpty() {
         return loaded && messages.isEmpty();
     }
 
