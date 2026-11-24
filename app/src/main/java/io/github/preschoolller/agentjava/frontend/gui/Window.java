@@ -982,6 +982,8 @@ public class Window extends JFrame {
          * 卡片不挂终止/查看输出按钮（进程还不存在），放行/免审批后执行期才挂。须在 EDT 上调用。
          */
         void markExecuting();
+
+        String getMessageId();
     }
 
     /** 指定会话的版本（并行生成时目标会话可能不在前台）：非显示中的会话只落库，卡片等切回时重绑上屏 */
@@ -1109,6 +1111,11 @@ public class Window extends JFrame {
                     && messageCards.contains(card) && card.materialized) {
                 rebuildCard(card);
             }
+        }
+
+        @Override
+        public String getMessageId() {
+            return message.messageId();
         }
 
         @Override
