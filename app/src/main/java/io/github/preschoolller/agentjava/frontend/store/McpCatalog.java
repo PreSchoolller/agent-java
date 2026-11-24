@@ -4,7 +4,7 @@ import java.util.List;
 
 /**
  * MCP 运行态读桥（设置面板「MCP」页展示每个 server 的连接状态与已发现的工具）。
- * 配置本体在 AppSettings.getMcpServers()（前端所有、后端消费），这里只放"后端跑起来之后"
+ * 配置本体在 RuntimeConfig.mcpServers()（前端编辑、后端消费），这里只放"后端跑起来之后"
  * 的运行态。后端实现 MCP Client 后调 {@link #setStatusSource} 注册数据源；页面构建/重建时
  * 拉一次快照（不追实时推送，后端重连/发现变化后由前端下次打开面板或重建页时取到）。
  * 未注册数据源（后端未接入）或裸类路径回归时退空列表，页面显示"未运行"兜底

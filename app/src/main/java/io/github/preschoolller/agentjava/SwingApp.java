@@ -1,6 +1,8 @@
 package io.github.preschoolller.agentjava;
 
 import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
+import io.github.preschoolller.agentjava.frontend.AppPreferences;
+import io.github.preschoolller.agentjava.frontend.AppSettingsPreferences;
 import io.github.preschoolller.agentjava.frontend.SwingRenderer;
 import io.github.preschoolller.agentjava.frontend.gui.Window;
 import org.slf4j.LoggerFactory;
@@ -11,7 +13,8 @@ import java.util.UUID;
 /**
  * Swing 前端的组合根：建窗、订阅事件、把 UI 动作翻译成 {@link AgentApp} 的命令。
  *
- * <p>本类只依赖 {@code core.interfaces}：内核由外部传入，前端不提供任何实现。
+ * <p>业务状态只走 {@code core.interfaces}：内核由外部传入，前端不提供任何实现；
+ * 界面偏好走 {@link AppPreferences}，由本类注入实现。
  * {@code app == null} 表示实现尚未就绪——界面照常起来，所有命令都会提示"核心未就绪"。
  */
 public final class SwingApp {
@@ -28,7 +31,8 @@ public final class SwingApp {
      */
     public static void start(AgentApp app) {
         SwingUtilities.invokeLater(() -> {
-            Window window = new Window("Agent");
+            AppPreferences prefs = new AppSettingsPreferences();
+            Window window = new Window("Agent", app, prefs);
             SwingRenderer renderer = new SwingRenderer(window, app);
             if (app != null) {
                 try {

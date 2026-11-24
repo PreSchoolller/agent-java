@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
-import io.github.preschoolller.agentjava.core.repository.AppSettings;
+import io.github.preschoolller.agentjava.frontend.AppPreferences;
 
 import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
@@ -27,15 +27,18 @@ final class ApprovalNotifier {
      * 提示音单独放后台线程，对齐踩坑 #1：加载 wav 的 IO 不占 EDT）。
      */
     static void announce(JFrame window, String toolName, String argsSummary) {
-        AppSettings settings = AppSettings.get();
-        if (settings.isApprovalSound()) {
+        if (!(window instanceof Window appWindow)) {
+            return;
+        }
+        AppPreferences prefs = appWindow.preferences();
+        if (prefs.approvalSound()) {
             playSound();
         }
-        if (settings.isApprovalSystemNotify() && window instanceof Window appWindow) {
+        if (prefs.approvalSystemNotify()) {
             appWindow.showTrayNotification("审核请求",
                     toolName + (argsSummary.isEmpty() ? "" : "：" + argsSummary));
         }
-        if (settings.isApprovalBringToFront()) {
+        if (prefs.approvalBringToFront()) {
             bringToFront(window);
         }
     }

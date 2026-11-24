@@ -1,7 +1,11 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
-import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
-import io.github.preschoolller.agentjava.core.repository.AppSettings;
+import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
+import io.github.preschoolller.agentjava.core.records.McpServerView;
+import io.github.preschoolller.agentjava.core.records.ProfileView;
+import io.github.preschoolller.agentjava.frontend.AppPreferences;
+import io.github.preschoolller.agentjava.frontend.AppSettingsPreferences;
+import io.github.preschoolller.agentjava.frontend.ViewAdapter;
 import io.github.preschoolller.agentjava.frontend.store.ContextCatalog;
 import io.github.preschoolller.agentjava.frontend.store.McpCatalog;
 import io.github.preschoolller.agentjava.core.repository.McpServer;
@@ -70,19 +74,23 @@ import java.util.function.Function;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * 设置面板（模态对话框）：编辑 AppSettings 并持久化。
+ * 设置面板（模态对话框）：业务配置走 {@link AgentApp}，界面偏好走 {@link AppPreferences}。
+ *
+ * <p>分界线：方案 / Provider / 上下文处理器 / 工具名单 / MCP / 插件输入属于运行时配置，
+ * 换一个内核也必须能用，所以只认 {@code core.interfaces}；主题、字号、窗口位置、日志
+ * 只影响本机这个前端，走前端自己的偏好接口。面板不 import 任何配置实现类。
  * 顶部标签页分六页（胶囊切页，当前页主题色实心）：
  * 「通用」= 全局对话体验（主题/正文字号/关闭按钮/审核通知）；
  * 「模型服务」= 全部配置方案罗列成卡片、展开折叠（方案名/摘要 + 重命名/删除在卡头，新建在页顶）：
  * 展开哪张卡，共享的参数表单就移进哪张卡（后端地址/Key/API 类型/默认模型/温度/最大 Tokens/系统提示词
- * + 模型目录：每个模型一条可展开行，编辑名字/上下文窗口/最大输出/默认推理等级/输入能力，落 Profile.modelsMeta）；
- * 「Provider」= 全部注册 provider 按 API 类型分组单选（全局落 AppSettings.activeProviderNames，不随方案；
+ * + 模型目录：每个模型一条可展开行，编辑名字/上下文窗口/最大输出/默认推理等级/输入能力，随方案提交）；
+ * 「Provider」= 全部注册 provider 按 API 类型分组单选（全局按 API 类型各选一个，不随方案；
  * 请求走模型所属方案 apiType 那组的选择，后端 resolveActiveProvider 优先消费）；
- * 「上下文」= 可修改（非 readOnly）上下文处理器全局单选（落 AppSettings.activeContextHandler，不随方案；
+ * 「上下文」= 可修改（非 readOnly）上下文处理器全局单选（全局单选，不随方案；
  * 每轮请求前对历史消息做管理如截断/压缩，不启用=消息原样发出；处理器列表经 ContextCatalog 读桥取，
  * 只读处理器注册了就列在下方展示；实现了 uiTips 的处理器挂交互区——与工具页同一套 InteractiveTarget，
  * 持久化键=插件 name()，persistent 已泛化到任意插件类型）；
- * 「工具」= ToolManager 注册表的勾选名单（落 AppSettings.enabledTools，后端经 getEnabledTools 消费）
+ * 「工具」= ToolManager 注册表的勾选名单（落运行时配置，后端消费）
  * + 每个支持交互的工具一条可展开交互区（uiTips 提示 + 输入框 + 执行钮 + 结果提示：
  *   输入经 uiInteractive 交给工具自行解释应用（bash 的 bash 选择/转文件正则都走这里，
  *   k=v 格式如 "bash=WSL;regex=(here-?doc|<<)"，键缺省=不动，键在值空=清除），工具处理后由前端立即
@@ -91,24 +99,27 @@ import java.util.concurrent.CompletableFuture;
  * 映射成日志后端属性——换后端只改映射；改后重启生效）；
  * 「MCP」= MCP 服务器名单（每 server 一张可展开卡：名称/启用/传输方式 stdio|http + 按方式切换的
  * 命令/参数/环境变量或地址/请求头；卡头显示运行态，经 McpCatalog 读桥取——后端 MCP Client
- * 注册 StatusSource 后回报，未接入显示"未运行"兜底；落 AppSettings.mcpServers，后端经
+ * 注册 StatusSource 后回报，未接入显示"未运行"兜底；落运行时配置，后端经
  * getMcpServers 建连，发现的工具以 mcp__<服务名>__<工具名> 进工具页勾选名单）。
  * 白色圆角卡片承载，与主界面同一套风格；系统提示词是每套方案自己的值（落 Profile），
  * 随方案在模型服务页编辑。
  * 面板里的一切改动（含方案增删改名）都落在深拷贝的工作副本上：展开切换先 flush 表单值，
  * 点"保存"才整体提交，取消即丢弃。
- * 保存后 applyProfiles（落盘 + fireChanged），后端可以在 AppSettings 的监听里感知配置变化；
+ * 保存后整表提交方案（落盘 + 通知），后端在配置变更里感知；
  * 主窗口通过 isSaved() 判断是否需要按新设置（如正文字号）重建界面。
  */
 public class SettingsDialog extends JDialog {
 
-    private final AppSettings settings = AppSettings.get();
+    /** 运行时配置的写入口；null = 内核未就绪（只读展示） */
+    private final AgentApp app;
+    /** 宿主界面偏好：主题/字号/窗口位置/日志 */
+    private final AppPreferences prefs;
     /** 工作副本：面板里的新建/删除/改名/改参数都改它，取消直接丢弃 */
     private final LinkedHashMap<String, Profile> working;
     /** 当前展开编辑的方案名（null=全部收起；保存时表单值 flush 回这个方案） */
     private String selectedName;
 
-    /** 配色主题：索引 0 浅色 / 1 深色，保存时写回 AppSettings，由主窗口重建生效 */
+    /** 配色主题：索引 0 浅色 / 1 深色，保存时写回偏好，由主窗口重建生效 */
     private final JComboBox<String> themeCombo = new JComboBox<>(new String[]{"跟随系统", "浅色", "深色"});
     /** 关闭按钮最小化到托盘（系统不支持托盘时勾了也只会直接退出） */
     private final JCheckBox trayCheckBox = new JCheckBox("最小化到托盘");
@@ -128,7 +139,7 @@ public class SettingsDialog extends JDialog {
     private final JTextField logFileMaxSizeField = new JTextField();
     private final JSpinner logFileBackupsSpinner;
     private final JTextField logFileFormatField = new JTextField();
-    /** 日志等级选项：与 AppSettings 落盘值一一对应（不用中文别名，省映射） */
+    /** 日志等级选项：与偏好落盘值一一对应（不用中文别名，省映射） */
     private static final String[] LOG_LEVEL_OPTIONS = {"trace", "debug", "info", "warn", "error"};
     private final JButton profileAddButton = Ui.button("新建");
     /** 模型服务页的页容器（方案卡片列表；增删改名/展开切换时整体重建） */
@@ -138,7 +149,7 @@ public class SettingsDialog extends JDialog {
     private final JTextField backendUrlField = new JTextField();
     private final JTextField keyField = new JTextField();
     /** 后端 API 类型（协议分派由后端实现，当前仅 response 生效） */
-    private final JComboBox<String> apiTypeCombo = new JComboBox<>(Profile.API_TYPES.toArray(new String[0]));
+    private final JComboBox<String> apiTypeCombo = new JComboBox<>();
     /** 默认模型下拉（选中项=输入区默认模型）；选项由模型目录条目名填充 */
     private final JComboBox<String> modelCombo = new JComboBox<>();
     private final JButton modelAddButton = Ui.button("添加");
@@ -194,7 +205,22 @@ public class SettingsDialog extends JDialog {
     }
 
     public SettingsDialog(Frame owner, boolean modal) {
+        this(owner, modal, appOf(owner), prefsOf(owner));
+    }
+
+    public SettingsDialog(Frame owner, AgentApp app, AppPreferences prefs) {
+        this(owner, true, app, prefs);
+    }
+
+    public SettingsDialog(Frame owner, boolean modal, AgentApp app, AppPreferences prefs) {
         super(owner, "设置", modal);
+        this.app = app;
+        this.prefs = prefs;
+        this.boundsSaveTimer = new Timer(1000, e -> prefs.save());
+        boundsSaveTimer.setRepeats(false);
+        for (String apiType : apiTypes()) {
+            apiTypeCombo.addItem(apiType);
+        }
 
         // 初始尺寸：优先还原上次记录（夹回屏内），没记录过按可用屏宽 3/8（1920 屏→720、
         // 2560 屏→960，下限 720 保说明列不挤、上限 960 免得卡片拉得过宽）；主窗口
@@ -202,24 +228,31 @@ public class SettingsDialog extends JDialog {
         // 构建时一次算定，窗口缩放不影响已渲染布局
         Rectangle usable = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
         int defaultWidth = Math.max(720, Math.min(usable.width * 3 / 8, 960));
-        int persistedWidth = settings.getSettingsDialogWidth();
+        int persistedWidth = prefs.settingsDialogWidth();
         this.dialogWidth = persistedWidth > 0
                 ? Math.max(640, Math.min(persistedWidth, usable.width))
                 : defaultWidth;
         this.toolNameColumnWidth = Math.max(160, Math.min(dialogWidth * 30 / 100, 320));
 
-        working = settings.copyProfiles();
+        working = new LinkedHashMap<>();
+        if (app != null) {
+            for (ProfileView view : app.profiles()) {
+                working.put(view.name(), ViewAdapter.profile(view));
+            }
+        }
         selectedName = null; // 打开面板全部收起，点开哪张卡再编辑哪个
 
         // MCP 页工作副本：深拷贝一份，取消不脏真配置（方案页同一约定）
-        for (McpServer server : settings.getMcpServers()) {
-            mcpWorking.add(server.copy());
+        if (app != null) {
+            for (McpServerView view : app.mcpServers()) {
+                mcpWorking.add(ViewAdapter.mcpServer(view));
+            }
         }
         mcpAddButton.setPreferredSize(new Dimension(76, 26));
 
         temperatureSpinner = new JSpinner(new SpinnerNumberModel(0.0, 0.0, 2.0, 0.1));
         maxTokensSpinner = new JSpinner(new SpinnerNumberModel(64, 64, 1048576, 64));
-        fontSizeSpinner = new JSpinner(new SpinnerNumberModel(settings.getContentFontSize(), 12, 22, 1));
+        fontSizeSpinner = new JSpinner(new SpinnerNumberModel(prefs.contentFontSize(), 12, 22, 1));
         // token 数去掉千分位逗号：换用无分组 pattern 的 editor（直接改 format 不会刷新已渲染文本）
         maxTokensSpinner.setEditor(new JSpinner.NumberEditor(maxTokensSpinner, "#"));
 
@@ -232,18 +265,18 @@ public class SettingsDialog extends JDialog {
         systemPromptArea.setBackground(Ui.INPUT_BG);
         systemPromptArea.setForeground(Ui.TEXT);
         systemPromptArea.setCaretColor(Ui.TEXT);
-        themeCombo.setSelectedIndex(switch (settings.getUiTheme()) {
+        themeCombo.setSelectedIndex(switch (prefs.uiTheme()) {
             case "dark" -> 2;
             case "system" -> 0;
             default -> 1;
         });
-        trayCheckBox.setSelected(settings.isMinimizeToTray());
+        trayCheckBox.setSelected(prefs.minimizeToTray());
         Ui.styleCheckBox(trayCheckBox);
         trayCheckBox.setToolTipText("系统不支持托盘时，关闭按钮仍会直接退出");
-        approvalSoundCheckBox.setSelected(settings.isApprovalSound());
-        approvalSystemNotifyCheckBox.setSelected(settings.isApprovalSystemNotify());
+        approvalSoundCheckBox.setSelected(prefs.approvalSound());
+        approvalSystemNotifyCheckBox.setSelected(prefs.approvalSystemNotify());
         approvalSystemNotifyCheckBox.setToolTipText("系统不支持托盘、或从托盘注销时，这一路不生效");
-        approvalBringToFrontCheckBox.setSelected(settings.isApprovalBringToFront());
+        approvalBringToFrontCheckBox.setSelected(prefs.approvalBringToFront());
         approvalBringToFrontCheckBox.setToolTipText("窗口已有焦点时不抢；最小化/托盘隐藏的会先还原到前台");
         for (JCheckBox box : new JCheckBox[]{approvalSoundCheckBox, approvalSystemNotifyCheckBox,
                 approvalBringToFrontCheckBox}) {
@@ -251,27 +284,27 @@ public class SettingsDialog extends JDialog {
         }
         // 日志页控件（TinyLog 加载配置时读一次，改后重启生效——初值直接放等级名/原始值，
         // 与写入值一一对应省映射；格式/路径字段等宽字体，占位符和路径里的符号多）
-        logConsoleEnabledBox.setSelected(settings.isLogConsoleEnabled());
+        logConsoleEnabledBox.setSelected(prefs.logConsoleEnabled());
         Ui.styleCheckBox(logConsoleEnabledBox);
         logConsoleEnabledBox.setToolTipText("关闭后日志不进控制台；控制台与文件两路都关时应用完全静默");
         styleLogCombo(logConsoleLevelCombo);
-        logConsoleLevelCombo.setSelectedItem(settings.getLogConsoleLevel());
+        logConsoleLevelCombo.setSelectedItem(prefs.logConsoleLevel());
         styleLogFormatField(logConsoleFormatField, "控制台格式模式，tinylog 占位符如 {date} {level} {thread} {message} {class}；"
                 + "留空 = 默认格式（{date} [{thread}] {class}.{method}() 换行 {level}: {message}）");
-        logFileEnabledBox.setSelected(settings.isLogFileEnabled());
+        logFileEnabledBox.setSelected(prefs.logFileEnabled());
         Ui.styleCheckBox(logFileEnabledBox);
         logFileEnabledBox.setToolTipText("开启后日志写入文件；文件块的参数只在开启时生效");
         styleLogCombo(logFileLevelCombo);
-        logFileLevelCombo.setSelectedItem(settings.getLogFileLevel());
+        logFileLevelCombo.setSelectedItem(prefs.logFileLevel());
         styleLogFormatField(logFilePathField, "日志文件路径（绝对或相对）；留空 = ~/.agentjava/logs/agent.log");
-        logFilePathField.setText(settings.getLogFilePath() == null ? "" : settings.getLogFilePath());
-        logFileAppendBox.setSelected(settings.isLogFileAppend());
+        logFilePathField.setText(prefs.logFilePath() == null ? "" : prefs.logFilePath());
+        logFileAppendBox.setSelected(prefs.logFileAppend());
         Ui.styleCheckBox(logFileAppendBox);
         logFileAppendBox.setToolTipText("续写不覆盖（默认）；关闭则每次启动清空重写日志文件");
         styleLogFormatField(logFileMaxSizeField, "单文件大小上限，超过即滚动切新文件（rolling file writer），"
                 + "如 10mb / 512KB；留空 = 不轮转（单文件直写，文件会一直变大）");
-        logFileMaxSizeField.setText(settings.getLogFileMaxSize() == null ? "" : settings.getLogFileMaxSize());
-        logFileBackupsSpinner = new JSpinner(new SpinnerNumberModel(settings.getLogFileBackups(), 1, 999, 1));
+        logFileMaxSizeField.setText(prefs.logFileMaxSize() == null ? "" : prefs.logFileMaxSize());
+        logFileBackupsSpinner = new JSpinner(new SpinnerNumberModel(prefs.logFileBackups(), 1, 999, 1));
         // 数字去掉千分位逗号：换用无分组 pattern 的 editor（直接改 format 不会刷新已渲染文本，踩坑 #7）
         logFileBackupsSpinner.setEditor(new JSpinner.NumberEditor(logFileBackupsSpinner, "#"));
         Ui.styleSpinner(logFileBackupsSpinner);
@@ -343,14 +376,14 @@ public class SettingsDialog extends JDialog {
         // 由各页的滚动容器接管。宽度用上面算好的（记录过=用户习惯，没记录=屏宽比例）
         pack();
         int screenHeight = Toolkit.getDefaultToolkit().getScreenSize().height;
-        int persistedHeight = settings.getSettingsDialogHeight();
+        int persistedHeight = prefs.settingsDialogHeight();
         int height = persistedHeight > 0
                 ? Math.min(Math.max(persistedHeight, 560), screenHeight * 9 / 10)
                 : Math.min(Math.max(getHeight(), 700), screenHeight * 9 / 10);
         setSize(dialogWidth, height);
         setMinimumSize(new Dimension(640, 560)); // 防拖到表单挤烂的最小尺寸
-        int persistedX = settings.getSettingsDialogX();
-        int persistedY = settings.getSettingsDialogY();
+        int persistedX = prefs.settingsDialogX();
+        int persistedY = prefs.settingsDialogY();
         if (persistedX >= 0 && persistedY >= 0
                 && usable.contains(persistedX + getWidth() / 2, persistedY + getHeight() / 2)) {
             setLocation(persistedX, persistedY);
@@ -372,14 +405,13 @@ public class SettingsDialog extends JDialog {
     }
 
     /** 防抖落盘计时器：拖动/缩放停止 1 秒后才真正 save（主窗口同款，避免拖一次写多次盘） */
-    private final Timer boundsSaveTimer = new Timer(1000, e -> AppSettings.get().save());
+    private final Timer boundsSaveTimer;
 
     private void rememberBounds() {
-        AppSettings settings = AppSettings.get();
-        settings.setSettingsDialogWidth(getWidth());
-        settings.setSettingsDialogHeight(getHeight());
-        settings.setSettingsDialogX(getX());
-        settings.setSettingsDialogY(getY());
+        prefs.setSettingsDialogWidth(getWidth());
+        prefs.setSettingsDialogHeight(getHeight());
+        prefs.setSettingsDialogX(getX());
+        prefs.setSettingsDialogY(getY());
         boundsSaveTimer.start();
     }
 
@@ -415,7 +447,7 @@ public class SettingsDialog extends JDialog {
     }
 
     /**
-     * 日志页：控制台/文件两块输出参数（AppSettings 的 log.* 自定义键，TinyLogConfigurationLoader
+     * 日志页：控制台/文件两块输出参数（偏好里的 log.* 自定义键，TinyLogConfigurationLoader
      * 启动时映射成 tinylog 属性——以后换日志后端只改映射，这页与落盘格式不动）。
      * 改后需重启生效：日志后端启动时读一次配置（等级是日志管道的建型参数，运行期切换会中途
      * 改变滚动行为，调试场景也需要"整段会话同一等级"来排查），提示行钉在页顶。
@@ -651,7 +683,7 @@ public class SettingsDialog extends JDialog {
 
     /**
      * Provider 页：全部注册的 provider 按 API 类型分组罗列，组内单选，各类型的选择独立落
-     * AppSettings（全局，不随方案——请求走模型所属方案的 apiType 那组）。组内未指定时预选
+     * 运行时配置（全局，不随方案——请求走模型所属方案的 apiType 那组）。组内未指定时预选
      * 字典序第一个，与后端回落行为对齐。列表经 ProviderCatalog 读桥取（同 ToolCatalog 模式，
      * 失败退空列表给提示）。
      */
@@ -690,7 +722,7 @@ public class SettingsDialog extends JDialog {
 
     /** 建 Provider 分组单选区：每个 API 类型一组（组头=类型名，组内单选互斥），打开时建一次 */
     private void buildProviderGroups() {
-        for (String apiType : Profile.API_TYPES) {
+        for (String apiType : apiTypes()) {
             JPanel groupPanel = new JPanel(new GridBagLayout());
             groupPanel.setOpaque(false);
             JLabel head = new JLabel(apiLabel(apiType));
@@ -716,8 +748,8 @@ public class SettingsDialog extends JDialog {
                 gbc.gridy = 1;
                 groupPanel.add(empty, gbc);
             } else {
-                // 预选=该类型落盘的名字（全局存 AppSettings，不随方案）；未指定/失效回落字典序最小（与后端解析一致）
-                String stored = settings.getActiveProviderName(apiType);
+                // 预选=该类型落盘的名字（全局，不随方案）；未指定/失效回落字典序最小（与后端解析一致）
+                String stored = activeProviderName(apiType);
                 String preselect = providers.get(0).name();
                 for (ProviderCatalog.ProviderInfo info : providers) {
                     if (info.name().equals(stored)) {
@@ -749,15 +781,15 @@ public class SettingsDialog extends JDialog {
     /** API 类型常量的展示名（组头用） */
     private static String apiLabel(String apiType) {
         return switch (apiType) {
-            case Profile.API_RESPONSE -> "response · OpenAI Responses";
-            case Profile.API_CHAT_COMPLETION -> "chatcompletion · OpenAI Chat Completions";
-            case Profile.API_MESSAGES -> "messages · Anthropic Messages";
+            case "response" -> "response · OpenAI Responses";
+            case "chatcompletion" -> "chatcompletion · OpenAI Chat Completions";
+            case "messages" -> "messages · Anthropic Messages";
             default -> apiType;
         };
     }
 
     /**
-     * 上下文页：可修改（非 readOnly）上下文处理器全局单选（AppSettings.activeContextHandler，
+     * 上下文页：可修改（非 readOnly）上下文处理器全局单选（运行时配置的 activeContextHandler，
      * 不随方案）。每轮请求前由后端 ContextHandlerManager.handle 调用选中处理器对历史消息做
      * 管理（截断/压缩等）；「不启用」=消息原样发出。列表经 ContextCatalog 读桥取（同
      * ProviderCatalog 模式，失败退空列表给兜底提示）。实现了 uiTips 的处理器挂可展开交互区
@@ -795,7 +827,7 @@ public class SettingsDialog extends JDialog {
         List<ContextCatalog.HandlerInfo> handlers = ContextCatalog.modifiable();
         ButtonGroup buttonGroup = new ButtonGroup();
         int row = 1;
-        String stored = settings.getActiveContextHandler();
+        String stored = activeContextHandler();
         row = addContextRadio(card, row, buttonGroup, "不启用（消息原样发出）", "",
                 "不使用任何可修改的上下文处理器，历史消息每次全量发出",
                 stored == null || stored.isBlank());
@@ -899,7 +931,7 @@ public class SettingsDialog extends JDialog {
     }
 
     /**
-     * 工具页：ToolManager 注册表逐条勾选（前端只存名单，后端经 AppSettings.getEnabledTools
+     * 工具页：ToolManager 注册表逐条勾选（前端只存名单，后端经运行时配置
      * 消费——声明给模型哪些工具由后端接线）。注册表经 ToolCatalog 反射读取（前端 store 不
      * 直接 import backend.tool，见 ToolCatalog 类注释）；拿不到时给兜底提示。
      */
@@ -991,7 +1023,7 @@ public class SettingsDialog extends JDialog {
                 ContextCatalog.persistentInput(info.name()), ContextCatalog::uiInteractive);
     }
 
-    // —— MCP 页：服务器名单的增删改（落 AppSettings.mcpServers，后端经 getMcpServers 建连） ——
+    // —— MCP 页：服务器名单的增删改（落运行时配置，后端经 getMcpServers 建连） ——
 
     /**
      * MCP 页：每个 server 一张可展开卡片（名称/启用/传输方式 + 按传输方式切换的字段：
@@ -1343,7 +1375,7 @@ public class SettingsDialog extends JDialog {
 
     /**
      * 交互区数据源：工具页与上下文页共用（persistent 泛化——持久化与交互按插件 name() 走
-     * 同一套 AppSettings 键值，后端 PluginBase.getPersistentInput 消费，不区分插件类型）。
+     * 同一套配置键值，后端 PluginBase.getPersistentInput 消费，不区分插件类型）。
      * interactive=uiInteractive 写桥（工具走 ToolCatalog、上下文处理器走 ContextCatalog）。
      */
     private record InteractiveTarget(String name, String tips, String savedInput,
@@ -1453,8 +1485,9 @@ public class SettingsDialog extends JDialog {
             String feedback = target.interactive().apply(target.name(), input);
             boolean processed = feedback != null && !"not implemented".equals(feedback);
             if (processed) { // 没实现的输入不占配置槽；存了插件侧也会在自己的解释器里忽略，但保持干净
-                settings.setPersistentPluginInput(target.name(), input);
-                settings.save();
+                if (app != null) {
+                    app.setPluginInput(target.name(), input);
+                }
             }
             javax.swing.SwingUtilities.invokeLater(() -> {
                 execButton.setEnabled(true);
@@ -1477,12 +1510,12 @@ public class SettingsDialog extends JDialog {
         });
     }
 
-    /** 勾选框：文字是说明文字（次要色），勾选态=AppSettings.isToolEnabled（未配置=全启用） */
+    /** 勾选框：文字是说明文字（次要色），勾选态=工具名单（未配置=全启用） */
     private JCheckBox enabledToolCheckBox(ToolCatalog.ToolInfo info) {
         String description = escapeHtml(info.description().replace("\n", " "));
         JCheckBox box = new JCheckBox("<html><div style='width:330px'><span style='color:"
                 + Ui.hex(Ui.TEXT_SECONDARY) + "'>" + description + "</span></div></html>");
-        box.setSelected(settings.isToolEnabled(info.name()));
+        box.setSelected(isToolEnabled(info.name()));
         box.putClientProperty("toolName", info.name());
         box.setToolTipText(info.name() + "：声明给模型可选的工具");
         Ui.styleCheckBox(box);
@@ -1741,7 +1774,7 @@ public class SettingsDialog extends JDialog {
             JTextField ctxField = new JTextField(meta.getCtxWindow());
             Ui.styleInput(ctxField);
             ctxField.setToolTipText("上下文窗口，纯数字 token 数（如 128000）；留空=未设置。");
-            // 只放行数字：消费方 Profile.getModelCtxWindow 是 Integer.parseInt 直读
+            // 只放行数字：消费方按整数读上下文窗口
             // 键入期拦掉比失焦报错省一轮来回；粘贴整段含非数字时整体不进
             if (ctxField.getDocument() instanceof AbstractDocument doc) {
                 doc.setDocumentFilter(new DocumentFilter() {
@@ -2097,6 +2130,10 @@ public class SettingsDialog extends JDialog {
     }
 
     private void save() {
+        if (app == null) {
+            Ui.messageDialog(this, "无法保存", "核心未就绪，配置没有写入口。");
+            return;
+        }
         // 当前展开方案的表单值先落回工作副本（全部收起时没有表单可落，方案保持原值）
         flushFormIntoSelected();
         // MCP 页：展开卡的表单值先落回工作副本，再校验名单（坏名单整次保存拦下，别静默洗配置）
@@ -2115,16 +2152,16 @@ public class SettingsDialog extends JDialog {
             }
             mcpNames.add(server.getName());
         }
-        settings.setContentFontSize(((Number) fontSizeSpinner.getValue()).intValue());
-        settings.setUiTheme(switch (themeCombo.getSelectedIndex()) {
+        prefs.setContentFontSize(((Number) fontSizeSpinner.getValue()).intValue());
+        prefs.setUiTheme(switch (themeCombo.getSelectedIndex()) {
             case 0 -> "system";
             case 2 -> "dark";
             default -> "light";
         });
-        settings.setMinimizeToTray(trayCheckBox.isSelected());
-        settings.setApprovalSound(approvalSoundCheckBox.isSelected());
-        settings.setApprovalSystemNotify(approvalSystemNotifyCheckBox.isSelected());
-        settings.setApprovalBringToFront(approvalBringToFrontCheckBox.isSelected());
+        prefs.setMinimizeToTray(trayCheckBox.isSelected());
+        prefs.setApprovalSound(approvalSoundCheckBox.isSelected());
+        prefs.setApprovalSystemNotify(approvalSystemNotifyCheckBox.isSelected());
+        prefs.setApprovalBringToFront(approvalBringToFrontCheckBox.isSelected());
         // 工具勾选：全部勾选=恢复"未配置"语义（未来新注册的工具自动启用）；全部不勾=显式空名单
         // （全不启用是合法配置，别当成未配置洗掉）。注册表没拿到（反射失败）时不动这项，
         // 避免用空勾选把已有配置洗净
@@ -2135,28 +2172,28 @@ public class SettingsDialog extends JDialog {
                     checked.add((String) box.getClientProperty("toolName"));
                 }
             }
-            settings.setEnabledTools(checked.size() == toolCheckBoxes.size() ? null : checked);
+            app.setEnabledTools(checked.size() == toolCheckBoxes.size() ? null : checked);
         }
         // 日志页：先校验单文件上限（空白=不轮转；填了必须带 kb/mb/gb 单位），不过整次保存拦下
         // ——理由同文件正则：setter 里还有一道校验兜底，但那会"静默丢值关窗"，这里拦下才算把原因说清楚
         String logMaxSize = logFileMaxSizeField.getText();
-        if (logMaxSize != null && !logMaxSize.isBlank() && !AppSettings.isValidLogFileSize(logMaxSize)) {
+        if (logMaxSize != null && !logMaxSize.isBlank() && !prefs.isValidLogFileSize(logMaxSize)) {
             Ui.messageDialog(this, "保存受阻", "「单文件上限」格式不对——填数字 + 单位（kb/mb/gb，如 10mb），"
                     + "或留空表示不轮转。未保存任何改动。");
             logFileMaxSizeField.requestFocusInWindow();
             return;
         }
-        settings.setLogConsoleEnabled(logConsoleEnabledBox.isSelected());
-        settings.setLogConsoleLevel((String) logConsoleLevelCombo.getSelectedItem());
-        settings.setLogConsoleFormat(logConsoleFormatField.getText());
-        settings.setLogFileEnabled(logFileEnabledBox.isSelected());
-        settings.setLogFileLevel((String) logFileLevelCombo.getSelectedItem());
-        settings.setLogFilePath(logFilePathField.getText());
-        settings.setLogFileAppend(logFileAppendBox.isSelected());
-        settings.setLogFileMaxSize(logMaxSize);
-        settings.setLogFileBackups(((Number) logFileBackupsSpinner.getValue()).intValue());
-        settings.setLogFileFormat(logFileFormatField.getText());
-        // Provider 分组单选：每组收集选中名写回全局（AppSettings.activeProvider.<apiType>，不随方案）。
+        prefs.setLogConsoleEnabled(logConsoleEnabledBox.isSelected());
+        prefs.setLogConsoleLevel((String) logConsoleLevelCombo.getSelectedItem());
+        prefs.setLogConsoleFormat(logConsoleFormatField.getText());
+        prefs.setLogFileEnabled(logFileEnabledBox.isSelected());
+        prefs.setLogFileLevel((String) logFileLevelCombo.getSelectedItem());
+        prefs.setLogFilePath(logFilePathField.getText());
+        prefs.setLogFileAppend(logFileAppendBox.isSelected());
+        prefs.setLogFileMaxSize(logMaxSize);
+        prefs.setLogFileBackups(((Number) logFileBackupsSpinner.getValue()).intValue());
+        prefs.setLogFileFormat(logFileFormatField.getText());
+        // Provider 分组单选：每组收集选中名写回全局（按 API 类型各选一个，不随方案）。
         // 注册表没拿到的组（单选列表为空）跳过不动原值，避免把已有选择洗净
         for (Map.Entry<String, List<JRadioButton>> providerGroup : providerRadioGroups.entrySet()) {
             if (providerGroup.getValue().isEmpty()) {
@@ -2164,31 +2201,66 @@ public class SettingsDialog extends JDialog {
             }
             for (JRadioButton radio : providerGroup.getValue()) {
                 if (radio.isSelected()) {
-                    settings.setActiveProviderName(providerGroup.getKey(), (String) radio.getClientProperty("providerName"));
+                    app.setActiveProviderName(providerGroup.getKey(), (String) radio.getClientProperty("providerName"));
                     break;
                 }
             }
         }
-        // 上下文页单选：选中名写回全局（AppSettings.activeContextHandler，不随方案），
+        // 上下文页单选：选中名写回全局（运行时配置的 activeContextHandler，不随方案），
         // 「不启用」是空串（setter 清除）。列表没拿到（注册表不可用）时跳过不动原值，
         // 避免把已有选择洗净
         if (contextHandlerRadios.size() > 1) {
             for (JRadioButton radio : contextHandlerRadios) {
                 if (radio.isSelected()) {
-                    settings.setActiveContextHandler((String) radio.getClientProperty("handlerName"));
+                    app.setActiveContextHandler((String) radio.getClientProperty("handlerName"));
                     break;
                 }
             }
         }
-        settings.applyProfiles(working); // 内部落盘 + fireChanged
-        // MCP 名单整体提交（校验已过）：后端在 AppSettings 监听里感知变化重建 MCP 连接，
-        // 新发现的工具注册进 ToolManager 后自动进「工具」页勾选名单
-        settings.setMcpServers(new ArrayList<>(mcpWorking));
-        settings.save();
-        // 作废 active 缓存让下次 createProvider 重新解析（不重启即时生效；重启则从落盘值恢复）
-        ProviderFactory.invalidateActiveProvider();
+        // 方案与 MCP 名单整体提交（校验已过）：实现方落盘并通知监听者，后端据此重建连接
+        if (app != null) {
+            List<ProfileView> submitted = new ArrayList<>();
+            for (Map.Entry<String, Profile> entry : working.entrySet()) {
+                submitted.add(ViewAdapter.profileView(entry.getKey(), entry.getValue()));
+            }
+            app.applyProfiles(submitted);
+            List<McpServerView> servers = new ArrayList<>();
+            for (McpServer server : mcpWorking) {
+                servers.add(ViewAdapter.mcpServerView(server));
+            }
+            app.setMcpServers(servers);
+        }
+        prefs.save(); // 界面偏好没有监听者，这里一次性落盘
         saved = true;
         dispose();
+    }
+
+    // ---------- 运行时配置的读口：app 为 null（内核未就绪）时退化为空值 ----------
+
+    private static AgentApp appOf(Frame owner) {
+        return owner instanceof Window window ? window.app() : null;
+    }
+
+    private static AppPreferences prefsOf(Frame owner) {
+        return owner instanceof Window window ? window.preferences() : new AppSettingsPreferences();
+    }
+
+    private List<String> apiTypes() {
+        return app == null ? List.of() : app.apiTypes();
+    }
+
+    private String activeProviderName(String apiType) {
+        return app == null ? null : app.activeProviderName(apiType);
+    }
+
+    private String activeContextHandler() {
+        return app == null ? "" : app.activeContextHandler();
+    }
+
+    /** 三态：名单为 null = 从未配置（全启用），空名单 = 全不启用 */
+    private boolean isToolEnabled(String name) {
+        List<String> enabled = app == null ? null : app.enabledTools();
+        return enabled == null || enabled.contains(name);
     }
 
     private JLabel fieldLabel(String text) {

@@ -21,10 +21,13 @@ import io.github.preschoolller.agentjava.core.records.UsageView;
 import io.github.preschoolller.agentjava.core.repository.AppSettings;
 import io.github.preschoolller.agentjava.core.repository.Conversation;
 import io.github.preschoolller.agentjava.core.repository.Message;
+import io.github.preschoolller.agentjava.core.repository.McpServer;
+import io.github.preschoolller.agentjava.core.repository.Profile;
 import io.github.preschoolller.agentjava.frontend.ViewAdapter;
 import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 
 /**
@@ -185,18 +188,58 @@ public final class TestApp implements AgentApp {
 
     // ---------- RuntimeConfig ----------
 
+    /** 配置面直接代理到 AppSettings：测试用它造数据、再用投影读回，等价于一个最小内核 */
     @Override
     public List<ProfileView> profiles() {
-        return List.of();
+        List<ProfileView> views = new ArrayList<>();
+        for (String name : AppSettings.get().getProfileNames()) {
+            views.add(ViewAdapter.profileView(name, AppSettings.get().getProfile(name)));
+        }
+        return List.copyOf(views);
+    }
+
+    @Override
+    public List<String> apiTypes() {
+        return Profile.API_TYPES;
+    }
+
+    @Override
+    public void applyProfiles(List<ProfileView> profiles) {
+        LinkedHashMap<String, Profile> replacement = new LinkedHashMap<>();
+        for (ProfileView view : profiles) {
+            replacement.put(view.name(), ViewAdapter.profile(view));
+        }
+        AppSettings.get().applyProfiles(replacement);
+    }
+
+    @Override
+    public String activeProviderName(String apiType) {
+        return AppSettings.get().getActiveProviderName(apiType);
+    }
+
+    @Override
+    public void setActiveProviderName(String apiType, String name) {
+        AppSettings.get().setActiveProviderName(apiType, name);
+    }
+
+    @Override
+    public String activeContextHandler() {
+        return AppSettings.get().getActiveContextHandler();
+    }
+
+    @Override
+    public void setActiveContextHandler(String name) {
+        AppSettings.get().setActiveContextHandler(name);
     }
 
     @Override
     public List<String> enabledTools() {
-        return null;
+        return AppSettings.get().getEnabledTools();
     }
 
     @Override
     public void setEnabledTools(List<String> names) {
+        AppSettings.get().setEnabledTools(names);
     }
 
     @Override
@@ -229,7 +272,30 @@ public final class TestApp implements AgentApp {
 
     @Override
     public List<McpServerView> mcpServers() {
-        return List.of();
+        List<McpServerView> views = new ArrayList<>();
+        for (McpServer server : AppSettings.get().getMcpServers()) {
+            views.add(ViewAdapter.mcpServerView(server));
+        }
+        return List.copyOf(views);
+    }
+
+    @Override
+    public void setMcpServers(List<McpServerView> servers) {
+        List<McpServer> list = new ArrayList<>();
+        for (McpServerView view : servers) {
+            list.add(ViewAdapter.mcpServer(view));
+        }
+        AppSettings.get().setMcpServers(list);
+    }
+
+    @Override
+    public String pluginInput(String pluginName) {
+        return AppSettings.get().getPersistentPluginInput(pluginName);
+    }
+
+    @Override
+    public void setPluginInput(String pluginName, String input) {
+        AppSettings.get().setPersistentPluginInput(pluginName, input);
     }
 
     @Override
@@ -244,6 +310,11 @@ public final class TestApp implements AgentApp {
     @Override
     public String defaultWorkspace() {
         return AppSettings.defaultWorkspace().toString();
+    }
+
+    @Override
+    public String normalizeWorkspace(String raw) {
+        return AppSettings.normalizeWorkspace(raw);
     }
 
     // ---------- 投影转换 ----------

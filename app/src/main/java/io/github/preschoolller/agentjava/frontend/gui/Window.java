@@ -8,15 +8,15 @@ import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
 import io.github.preschoolller.agentjava.core.records.MessageView;
 import io.github.preschoolller.agentjava.core.records.ModelView;
 import io.github.preschoolller.agentjava.core.records.ProfileView;
+import io.github.preschoolller.agentjava.core.records.ProfileView;
 import io.github.preschoolller.agentjava.core.records.SessionSummary;
 import io.github.preschoolller.agentjava.core.records.SessionView;
 import io.github.preschoolller.agentjava.core.records.ToolView;
 import io.github.preschoolller.agentjava.core.records.UsageView;
-import io.github.preschoolller.agentjava.core.repository.AppSettings;
 import io.github.preschoolller.agentjava.core.repository.Conversation;
 import io.github.preschoolller.agentjava.core.repository.Message;
-import io.github.preschoolller.agentjava.core.repository.ModelMeta;
-import io.github.preschoolller.agentjava.core.repository.Profile;
+import io.github.preschoolller.agentjava.frontend.AppPreferences;
+import io.github.preschoolller.agentjava.frontend.AppSettingsPreferences;
 import io.github.preschoolller.agentjava.frontend.ViewAdapter;
 
 import javax.swing.BorderFactory;
@@ -162,6 +162,8 @@ public class Window extends JFrame implements Sidebar.Sessions {
 
     /** 内核接口；null = 实现尚未就绪。前端只通过它读写业务状态 */
     private AgentApp app;
+    /** 宿主界面偏好（主题/字号/窗口位置/日志）；与业务状态无关，不进 AgentApp */
+    private final AppPreferences prefs;
     /** 当前显示在瀑布流里的会话 id（由前端持有，仅用于"我正在看哪个"） */
     private String activeId;
     /** 侧栏数据：来自 AgentApp.snapshot()，由事件驱动刷新 */
@@ -223,7 +225,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
     private boolean pendingRebuild;
     /** 恢复下拉选项期间抑制"用户改动 → 写回 core"，避免把投影值原样打回去 */
     private boolean restoringOptions;
-    /** 托盘图标（系统支持即常驻注册，关闭行为实时读 AppSettings 的偏好）；null=未注册 */
+    /** 托盘图标（系统支持即常驻注册，关闭行为实时读界面偏好）；null=未注册 */
     private TrayIcon trayIcon;
     private BiConsumer<String, String> inputHandler;
     private Runnable stopHandler;
@@ -438,17 +440,24 @@ public class Window extends JFrame implements Sidebar.Sessions {
     }
 
     public Window(String title) throws HeadlessException {
-        this(title, null);
+        this(title, null, new AppSettingsPreferences());
     }
 
     public Window(String title, AgentApp app) throws HeadlessException {
+        this(title, app, new AppSettingsPreferences());
+    }
+
+    public Window(String title, AgentApp app, AppPreferences prefs) throws HeadlessException {
         super(title);
         this.app = app;
+        this.prefs = prefs;
+        this.boundsSaveTimer = new Timer(1000, e -> prefs.save());
+        boundsSaveTimer.setRepeats(false);
         // 应用图标：与托盘同一份程序化绘制，多尺寸让系统挑最合适的缩放
         setIconImages(java.util.List.of(Ui.createAppIcon(16), Ui.createAppIcon(32), Ui.createAppIcon(48)));
 
         // 先把保存的主题应用到 Ui 镜像再构建；首次构建与换主题重建走同一条 buildUi 路
-        Ui.applyTheme(AppSettings.get().resolvedUiTheme());
+        Ui.applyTheme(prefs.resolvedUiTheme());
         sidebarCallbacks = new Sidebar.Callbacks() {
             @Override
             public void onToggleCollapse() {
@@ -460,6 +469,10 @@ public class Window extends JFrame implements Sidebar.Sessions {
 
             @Override
             public void onNewConversation() {
+                if (app == null) {
+                    showNotice(null, "核心未就绪，无法新建对话。");
+                    return;
+                }
                 String chosen = askWorkspaceDialog();
                 if (chosen == null) {
                     return; // 取消：什么都不发生
@@ -496,12 +509,12 @@ public class Window extends JFrame implements Sidebar.Sessions {
     /** 新建对话落到会话上：默认工作区不落（默认位置以后可换，没绑过的会话跟着走）。
      *  顶部按钮（先弹工作区选择）与侧栏组头加号（带组工作区直达）共用这一条收口 */
     private void createInWorkspace(String workspace) {
-        boolean isDefault = workspace == null || workspace.isBlank()
-                || workspace.equals(AppSettings.defaultWorkspace().toString());
         if (app == null) {
             showNotice(null, "核心未就绪，无法新建对话。");
             return;
         }
+        boolean isDefault = workspace == null || workspace.isBlank()
+                || workspace.equals(app.defaultWorkspace());
         AgentApp.CreateSessionResult result = app.createSession(isDefault ? null : workspace, activeId);
         reloadSessions();
         loadSession(result.sessionId());
@@ -517,7 +530,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
      */
     private String askWorkspaceDialog() {
         String[] result = {null};
-        String defaultPath = AppSettings.defaultWorkspace().toString();
+        String defaultPath = app.defaultWorkspace();
 
         JLabel messageLabel = new JLabel("新建对话的工作区——工具的相对路径以此为基准");
         messageLabel.setFont(new Font("微软雅黑", Font.PLAIN, 13));
@@ -541,7 +554,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
 
         JDialog dialog = new JDialog(this, "选择工作区", Dialog.ModalityType.APPLICATION_MODAL);
         Runnable confirm = () -> {
-            String normalized = AppSettings.normalizeWorkspace(pathField.getText());
+            String normalized = app.normalizeWorkspace(pathField.getText());
             if (normalized == null) {
                 hint.setText("请输入有效的目录路径");
                 return;
@@ -572,7 +585,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
         pathField.addActionListener(e -> confirm.run()); // 路径框里回车=确定（promptDialog 同款）
         browseButton.addActionListener(e -> {
             // 起点用路径框当前值（手输了半个路径也能接着选），没填有效的就用默认
-            String current = AppSettings.normalizeWorkspace(pathField.getText());
+            String current = app.normalizeWorkspace(pathField.getText());
             final String initial = current == null ? defaultPath : current;
             browseButton.setEnabled(false);
             hint.setText("正在打开资源管理器…");
@@ -590,7 +603,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
                 SwingUtilities.invokeLater(() -> {
                     browseButton.setEnabled(true);
                     if (picked != null) {
-                        String normalized = AppSettings.normalizeWorkspace(picked);
+                        String normalized = app.normalizeWorkspace(picked);
                         pathField.setText(normalized != null ? normalized : picked);
                         hint.setText(" ");
                     } else {
@@ -693,27 +706,22 @@ public class Window extends JFrame implements Sidebar.Sessions {
     }
 
     /** 尺寸/位置/分隔条防抖落盘（1 秒无变更才写）：拖动/缩放期间只记内存，停手后落盘 */
-    private final Timer boundsSaveTimer = new Timer(1000, e -> AppSettings.get().save());
-
-    {
-        boundsSaveTimer.setRepeats(false);
-    }
+    private final Timer boundsSaveTimer;
 
     /** 应用持久化的窗口尺寸/位置与侧栏分隔条：位置不在屏内（拔了显示器等）回落居中 */
     private void applyPersistedBounds() {
-        AppSettings settings = AppSettings.get();
         Rectangle screen = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
-        int width = Math.max(720, Math.min(settings.getWindowWidth(), screen.width));
-        int height = Math.max(480, Math.min(settings.getWindowHeight(), screen.height));
+        int width = Math.max(720, Math.min(prefs.windowWidth(), screen.width));
+        int height = Math.max(480, Math.min(prefs.windowHeight(), screen.height));
         setSize(width, height);
-        if (settings.getWindowX() >= 0 && settings.getWindowY() >= 0
-                && screen.contains(settings.getWindowX() + width / 2, settings.getWindowY() + height / 2)) {
-            setLocation(settings.getWindowX(), settings.getWindowY());
+        if (prefs.windowX() >= 0 && prefs.windowY() >= 0
+                && screen.contains(prefs.windowX() + width / 2, prefs.windowY() + height / 2)) {
+            setLocation(prefs.windowX(), prefs.windowY());
         } else {
             setLocation(screen.x + (screen.width - width) / 2, screen.y + (screen.height - height) / 2);
         }
-        if (settings.getSidebarDivider() >= 0) {
-            splitPane.setDividerLocation(settings.getSidebarDivider());
+        if (prefs.sidebarDivider() >= 0) {
+            splitPane.setDividerLocation(prefs.sidebarDivider());
         }
         // 尺寸/位置/分隔条变更记内存 + 防抖落盘；最大化期间不记，还原后仍是用户习惯的窗口大小
         addComponentListener(new ComponentAdapter() {
@@ -733,11 +741,10 @@ public class Window extends JFrame implements Sidebar.Sessions {
         if ((getExtendedState() & JFrame.MAXIMIZED_BOTH) != 0) {
             return;
         }
-        AppSettings settings = AppSettings.get();
-        settings.setWindowWidth(getWidth());
-        settings.setWindowHeight(getHeight());
-        settings.setWindowX(getX());
-        settings.setWindowY(getY());
+        prefs.setWindowWidth(getWidth());
+        prefs.setWindowHeight(getHeight());
+        prefs.setWindowX(getX());
+        prefs.setWindowY(getY());
         boundsSaveTimer.start();
     }
 
@@ -750,14 +757,14 @@ public class Window extends JFrame implements Sidebar.Sessions {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                if (AppSettings.get().isMinimizeToTray() && trayIcon != null) {
+                if (prefs.minimizeToTray() && trayIcon != null) {
                     setVisible(false);
                 } else {
                     exitApp();
                 }
             }
         });
-        setMinimizeToTray(AppSettings.get().isMinimizeToTray());
+        setMinimizeToTray(prefs.minimizeToTray());
     }
 
     private void exitApp() {
@@ -889,7 +896,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
 
     /** 应用设置里的主题并原地重建界面（设置保存后调用）。显示中的会话生成中先挂起，空闲时补做 */
     public void retheme() {
-        Ui.applyTheme(AppSettings.get().resolvedUiTheme());
+        Ui.applyTheme(prefs.resolvedUiTheme());
         if (isGenerating(displayedConvId)) {
             pendingRebuild = true;
             return;
@@ -921,6 +928,16 @@ public class Window extends JFrame implements Sidebar.Sessions {
     /** 当前显示会话的 id；无会话时 null */
     public String getActiveSessionId() {
         return activeId;
+    }
+
+    /** 内核接口；null = 尚未就绪。设置面板与渲染器从窗口取同一个实例 */
+    AgentApp app() {
+        return app;
+    }
+
+    /** 宿主界面偏好，设置面板共用同一份 */
+    AppPreferences preferences() {
+        return prefs;
     }
 
     public Sidebar getSidebar() {
@@ -1584,9 +1601,9 @@ public class Window extends JFrame implements Sidebar.Sessions {
         MarkdownPane markdown = null;
         ThinkingPane thinking = null;
         if (!user && !tool) {
-            markdown = new MarkdownPane(AppSettings.get().getContentFontSize());
+            markdown = new MarkdownPane(prefs.contentFontSize());
             markdown.setContent(message.text()); // 只解析+测量，行组件等物化时才建
-            thinking = new ThinkingPane(AppSettings.get().getContentFontSize());
+            thinking = new ThinkingPane(prefs.contentFontSize());
             thinking.setContent(message.thinking()); // 独立思考独立字段；旧格式思考还嵌在正文里，这里为空
         }
 
@@ -1636,7 +1653,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
             content = buildToolContent(messageCard);
         } else if (user) {
             JTextPane textPane = Ui.displayTextPane();
-            textPane.setFont(new Font("微软雅黑", Font.PLAIN, AppSettings.get().getContentFontSize()));
+            textPane.setFont(new Font("微软雅黑", Font.PLAIN, prefs.contentFontSize()));
             // 没设过前景色的文本组件默认黑字，深色主题下必须显式给（见踩坑 #19）
             textPane.setForeground(Ui.TEXT);
             textPane.setText(message.text());
@@ -1646,7 +1663,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
             int userWidth = Math.max(USER_CARD_MIN_WIDTH, Math.min(USER_CARD_MAX_WIDTH,
                     (panelWidth > 0 ? panelWidth : 600) * 2 / 3));
             int textWidth = userWidth - CARD_SIDE_INSETS;
-            if (measureTextHeight(message.text(), AppSettings.get().getContentFontSize(), textWidth)
+            if (measureTextHeight(message.text(), prefs.contentFontSize(), textWidth)
                     > USER_TEXT_CAP && !expandedUserTexts.contains(message)) {
                 JScrollPane scroll = new JScrollPane(textPane,
                         JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
@@ -1934,7 +1951,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
                 (panelWidth > 0 ? panelWidth : 600) * 2 / 3));
         int textWidth = userWidth - CARD_SIDE_INSETS;
         int textHeight = measureTextHeight(card.message.text(),
-                AppSettings.get().getContentFontSize(), textWidth);
+                prefs.contentFontSize(), textWidth);
         if (textHeight <= USER_TEXT_CAP) {
             return null;
         }
@@ -2491,7 +2508,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
             int textHeight;
             if (messageCard.user) {
                 textHeight = measureTextHeight(messageCard.message.text(),
-                        AppSettings.get().getContentFontSize(), textWidth);
+                        prefs.contentFontSize(), textWidth);
                 if (textHeight > USER_TEXT_CAP && !expandedUserTexts.contains(messageCard.message)) {
                     textHeight = USER_TEXT_CAP; // 长内容折叠预览（"展开全文"后恢复自然高度）
                 }
@@ -2908,13 +2925,9 @@ public class Window extends JFrame implements Sidebar.Sessions {
         // 模型下拉跨方案：所有配置方案的目录模型都列出（ModelOption 带所属方案），
         // 统一显示「model（profile）」，跨方案同名模型不混淆
         modelCombo = new JComboBox<>();
-        for (String profileName : AppSettings.get().getProfileNames()) {
-            Profile profile = AppSettings.get().getProfile(profileName);
-            if (profile == null) {
-                continue;
-            }
-            for (String model : profile.getModels()) {
-                modelCombo.addItem(new ModelOption(profileName, model));
+        for (ProfileView profile : app == null ? List.<ProfileView>of() : app.profiles()) {
+            for (ModelView model : profile.models()) {
+                modelCombo.addItem(new ModelOption(profile.name(), model.name()));
             }
         }
         // 初选：第一项（没有活动方案概念，选中项本身即"本轮用哪套配置"的状态）
@@ -3069,11 +3082,17 @@ public class Window extends JFrame implements Sidebar.Sessions {
      * 初次构建也调用一次：模型下拉初选完成时监听器尚未注册（注册在 setSelectedItem 之后）。
      */
     private void syncEffortToModelDefault() {
-        ModelMeta meta = AppSettings.get().findModelMeta(getSelectedModel());
-        if (meta == null || meta.normalizedReasoning().isEmpty()) {
+        ModelView meta = ViewAdapter.findModel(app == null ? List.<ProfileView>of() : app.profiles(),
+                getSelectedModel());
+        if (meta == null || meta.reasoning() == null || meta.reasoning().isBlank()) {
             return;
         }
-        ReasoningEffortEnum effort = ReasoningEffortEnum.valueOf(meta.normalizedReasoning());
+        ReasoningEffortEnum effort;
+        try {
+            effort = ReasoningEffortEnum.valueOf(meta.reasoning());
+        } catch (IllegalArgumentException notAnEffort) {
+            return; // 配置里写了非法枚举名：维持当前选择（与"跟随对话"同一表现）
+        }
         for (int i = 0; i < EFFORT_OPTIONS.length; i++) {
             if (EFFORT_OPTIONS[i] == effort) {
                 effortCombo.setSelectedIndex(i);
@@ -3147,13 +3166,17 @@ public class Window extends JFrame implements Sidebar.Sessions {
                 sidebar.setExpanded(false);
             }
             // 分隔条位置持久化（与窗口 bounds 同一套防抖落盘）
-            AppSettings.get().setSidebarDivider(location);
+            prefs.setSidebarDivider(location);
             boundsSaveTimer.start();
         });
     }
 
     private void openSettings() {
-        SettingsDialog dialog = new SettingsDialog(this);
+        if (app == null) {
+            showNotice(null, "核心未就绪，暂不能修改设置。");
+            return;
+        }
+        SettingsDialog dialog = new SettingsDialog(this, app, prefs);
         dialog.setVisible(true);
         if (dialog.isSaved()) {
             retheme(); // 主题/字号等变化后按新设置整体重建（内部含 showConversation）

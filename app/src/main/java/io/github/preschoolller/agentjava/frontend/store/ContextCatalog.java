@@ -16,7 +16,7 @@ import java.util.List;
 public final class ContextCatalog {
 
     /**
-     * 一个处理器条目：name 是单选存取的键（AppSettings.activeContextHandler），className 给
+     * 一个处理器条目：name 是单选存取的键（RuntimeConfig.activeContextHandler），className 给
      * tooltip 排查身份，description 是插件的自我介绍；interactiveTips=uiTips 原文（非接口
      * 默认哨兵才有值，null=不支持交互，前端不渲染交互区）
      */
