@@ -19,8 +19,8 @@ import io.github.preschoolller.agentjava.core.records.UsageView;
 import io.github.preschoolller.agentjava.core.repository.AppSettings;
 import io.github.preschoolller.agentjava.core.repository.McpServer;
 import io.github.preschoolller.agentjava.core.repository.Profile;
-import io.github.preschoolller.agentjava.frontend.Message;
-import io.github.preschoolller.agentjava.frontend.ViewAdapter;
+import io.github.preschoolller.agentjava.frontend.adapter.Message;
+import io.github.preschoolller.agentjava.frontend.adapter.ViewAdapter;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

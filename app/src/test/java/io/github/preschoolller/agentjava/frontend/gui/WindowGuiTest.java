@@ -1,8 +1,8 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
 import io.github.preschoolller.agentjava.core.repository.AppSettings;
-import io.github.preschoolller.agentjava.frontend.Message;
 import io.github.preschoolller.agentjava.core.repository.ModelMeta;
+import io.github.preschoolller.agentjava.frontend.adapter.Message;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;

@@ -14,7 +14,7 @@ import java.util.List;
  * 前端也不攒批提交——面板的「取消」靠丢弃工作副本完成，与这里无关。
  *
  * <p>界面偏好（主题、字号、窗口位置、日志）不在这个面里：那是宿主自己的事，
- * 见 {@code frontend.AppPreferences}。
+ * 见 {@code frontend.prefs.AppPreferences}。
  */
 public interface RuntimeConfig {
     // —— 方案（profile）——

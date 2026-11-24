@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.frontend;
+package io.github.preschoolller.agentjava.frontend.adapter;
 
 import io.github.preschoolller.agentjava.core.records.McpServerView;
 import io.github.preschoolller.agentjava.core.records.ModelView;

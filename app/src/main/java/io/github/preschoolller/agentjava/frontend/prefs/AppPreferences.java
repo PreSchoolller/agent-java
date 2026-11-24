@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.frontend;
+package io.github.preschoolller.agentjava.frontend.prefs;
 
 /**
  * 宿主界面偏好：主题、正文字号、窗口位置、托盘、审核提醒、日志。

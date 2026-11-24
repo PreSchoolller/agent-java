@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.frontend;
+package io.github.preschoolller.agentjava.frontend.adapter;
 
 import io.github.preschoolller.agentjava.core.enums.ToolState;
 import io.github.preschoolller.agentjava.core.events.GapDetected;

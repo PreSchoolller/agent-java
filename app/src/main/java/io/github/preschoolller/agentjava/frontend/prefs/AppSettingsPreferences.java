@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.frontend;
+package io.github.preschoolller.agentjava.frontend.prefs;
 
 import io.github.preschoolller.agentjava.core.repository.AppSettings;
 

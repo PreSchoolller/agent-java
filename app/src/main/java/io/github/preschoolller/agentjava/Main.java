@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava;
 
 import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.maintenance.WarmUpStuff;
+import io.github.preschoolller.agentjava.frontend.SwingApp;
 
 import java.lang.reflect.InvocationTargetException;
 

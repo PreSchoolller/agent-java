@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.frontend;
+package io.github.preschoolller.agentjava.frontend.adapter;
 
 import java.util.UUID;
 

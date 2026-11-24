@@ -1,19 +1,18 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
-import io.github.preschoolller.agentjava.spi.enums.AgentMode;
-import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
 import io.github.preschoolller.agentjava.core.records.MessageView;
 import io.github.preschoolller.agentjava.core.records.ModelView;
 import io.github.preschoolller.agentjava.core.records.ProfileView;
-import io.github.preschoolller.agentjava.core.records.ProfileView;
 import io.github.preschoolller.agentjava.core.records.SessionSummary;
 import io.github.preschoolller.agentjava.core.records.SessionView;
 import io.github.preschoolller.agentjava.core.records.UsageView;
-import io.github.preschoolller.agentjava.frontend.Message;
-import io.github.preschoolller.agentjava.frontend.AppPreferences;
-import io.github.preschoolller.agentjava.frontend.AppSettingsPreferences;
-import io.github.preschoolller.agentjava.frontend.ViewAdapter;
+import io.github.preschoolller.agentjava.frontend.adapter.Message;
+import io.github.preschoolller.agentjava.frontend.adapter.ViewAdapter;
+import io.github.preschoolller.agentjava.frontend.prefs.AppPreferences;
+import io.github.preschoolller.agentjava.frontend.prefs.AppSettingsPreferences;
+import io.github.preschoolller.agentjava.spi.enums.AgentMode;
+import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 
 import javax.swing.BorderFactory;
 import javax.swing.AbstractAction;

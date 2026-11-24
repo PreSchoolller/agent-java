@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
-import io.github.preschoolller.agentjava.frontend.AppPreferences;
+import io.github.preschoolller.agentjava.frontend.prefs.AppPreferences;
 
 import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;

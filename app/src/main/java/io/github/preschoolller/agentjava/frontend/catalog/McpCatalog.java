@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.frontend.store;
+package io.github.preschoolller.agentjava.frontend.catalog;
 
 import java.util.List;
 

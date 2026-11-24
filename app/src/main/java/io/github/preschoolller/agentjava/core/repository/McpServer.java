@@ -14,7 +14,7 @@ import java.util.Map;
  * - 发现的工具注册进 ToolManager 时用 mcp__&lt;服务名&gt;__&lt;工具名&gt; 前缀，
  *   避免无意触发"插件覆盖同名内置工具"的语义；
  * - 连接状态与已发现工具经 McpCatalog 的 StatusSource 写桥回给前端展示。
- * 前端 store 不 import backend 类（踩坑 #26 的连带加载雷），契约只靠 AppSettings/McpCatalog 两个面。
+ * 前端 catalog 不 import backend 类（踩坑 #26 的连带加载雷），契约只靠 AppSettings/McpCatalog 两个面。
  */
 public final class McpServer {
 

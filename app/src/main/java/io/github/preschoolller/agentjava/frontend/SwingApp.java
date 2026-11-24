@@ -1,10 +1,10 @@
-package io.github.preschoolller.agentjava;
+package io.github.preschoolller.agentjava.frontend;
 
 import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
-import io.github.preschoolller.agentjava.frontend.AppPreferences;
-import io.github.preschoolller.agentjava.frontend.AppSettingsPreferences;
-import io.github.preschoolller.agentjava.frontend.SwingRenderer;
+import io.github.preschoolller.agentjava.frontend.adapter.SwingRenderer;
 import io.github.preschoolller.agentjava.frontend.gui.Window;
+import io.github.preschoolller.agentjava.frontend.prefs.AppPreferences;
+import io.github.preschoolller.agentjava.frontend.prefs.AppSettingsPreferences;
 import org.slf4j.LoggerFactory;
 
 import javax.swing.SwingUtilities;

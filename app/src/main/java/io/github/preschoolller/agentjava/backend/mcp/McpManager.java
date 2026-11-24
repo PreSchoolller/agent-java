@@ -4,7 +4,7 @@ import io.github.preschoolller.agentjava.backend.maintenance.ShutDownJob;
 import io.github.preschoolller.agentjava.backend.mcp.interfaces.BaseMcp;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.core.repository.AppSettings;
-import io.github.preschoolller.agentjava.frontend.store.McpCatalog;
+import io.github.preschoolller.agentjava.frontend.catalog.McpCatalog;
 import io.github.preschoolller.agentjava.core.repository.McpServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

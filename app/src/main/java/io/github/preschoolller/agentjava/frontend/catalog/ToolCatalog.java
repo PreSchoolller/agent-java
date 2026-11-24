@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.frontend.store;
+package io.github.preschoolller.agentjava.frontend.catalog;
 
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
 import io.github.preschoolller.agentjava.spi.tool.Tool;

@@ -3,16 +3,16 @@ package io.github.preschoolller.agentjava.frontend.gui;
 import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
 import io.github.preschoolller.agentjava.core.records.McpServerView;
 import io.github.preschoolller.agentjava.core.records.ProfileView;
-import io.github.preschoolller.agentjava.frontend.AppPreferences;
-import io.github.preschoolller.agentjava.frontend.AppSettingsPreferences;
-import io.github.preschoolller.agentjava.frontend.ViewAdapter;
-import io.github.preschoolller.agentjava.frontend.store.ContextCatalog;
-import io.github.preschoolller.agentjava.frontend.store.McpCatalog;
 import io.github.preschoolller.agentjava.core.repository.McpServer;
 import io.github.preschoolller.agentjava.core.repository.ModelMeta;
 import io.github.preschoolller.agentjava.core.repository.Profile;
-import io.github.preschoolller.agentjava.frontend.store.ProviderCatalog;
-import io.github.preschoolller.agentjava.frontend.store.ToolCatalog;
+import io.github.preschoolller.agentjava.frontend.adapter.ViewAdapter;
+import io.github.preschoolller.agentjava.frontend.catalog.ContextCatalog;
+import io.github.preschoolller.agentjava.frontend.catalog.McpCatalog;
+import io.github.preschoolller.agentjava.frontend.catalog.ProviderCatalog;
+import io.github.preschoolller.agentjava.frontend.catalog.ToolCatalog;
+import io.github.preschoolller.agentjava.frontend.prefs.AppPreferences;
+import io.github.preschoolller.agentjava.frontend.prefs.AppSettingsPreferences;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -932,7 +932,7 @@ public class SettingsDialog extends JDialog {
 
     /**
      * 工具页：ToolManager 注册表逐条勾选（前端只存名单，后端经运行时配置
-     * 消费——声明给模型哪些工具由后端接线）。注册表经 ToolCatalog 反射读取（前端 store 不
+     * 消费——声明给模型哪些工具由后端接线）。注册表经 ToolCatalog 反射读取（前端 catalog 不
      * 直接 import backend.tool，见 ToolCatalog 类注释）；拿不到时给兜底提示。
      */
     private JPanel buildToolsPage() {
