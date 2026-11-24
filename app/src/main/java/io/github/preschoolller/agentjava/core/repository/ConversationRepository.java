@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
@@ -167,15 +168,18 @@ public class ConversationRepository {
      * 从指定会话的一条 AI 回复处分叉出新会话并设为当前：分叉点之前（含这条回复）的消息
      * 原样复制进新会话，从该对话状态继续，原会话不动
      */
-    public Conversation fork(String id, Message target) {
+    public Conversation fork(String id, String targetId) {
         Conversation source = findById(id);
-        if (source == null || !Conversation.ROLE_AI.equals(target.role())) {
+        if (source == null) {
             return null;
         }
         List<Message> messages = source.getMessages();
         int cut = -1;
         for (int i = 0; i < messages.size(); i++) {
-            if (messages.get(i) == target) {
+            if (Objects.equals(messages.get(i).messageId(), targetId)) {
+                if (!Conversation.ROLE_AI.equals(messages.get(i).role())) {
+                    return null;
+                }
                 cut = i;
                 break;
             }
@@ -209,9 +213,9 @@ public class ConversationRepository {
     }
 
     /**
-     * 流式输出结束的落库：正文与独立思考一起写回（按消息对象同一性查找），返回替换后的新记录
+     * 流式输出结束的落库：正文与独立思考一起写回，返回替换后的新记录
      */
-    public Message updateMessageContent(String id, Message target, String text, String thinking) {
+    public Message updateMessageContent(String id, String target, String text, String thinking) {
         Conversation conversation = findById(id);
         if (conversation == null) {
             return null;
@@ -241,9 +245,9 @@ public class ConversationRepository {
     }
 
     /**
-     * 工具执行完成后的落库：回填结果并写终态（按消息对象同一性查找），返回替换后的新记录
+     * 工具执行完成后的落库：回填结果并写终态，返回替换后的新记录
      */
-    public Message completeToolCall(String id, Message target, String result, boolean success, String arguments) {
+    public Message completeToolCall(String id, String target, String result, boolean success, String arguments) {
         Conversation conversation = findById(id);
         if (conversation == null) {
             return null;

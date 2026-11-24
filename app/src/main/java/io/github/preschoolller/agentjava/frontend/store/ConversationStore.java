@@ -2,7 +2,6 @@ package io.github.preschoolller.agentjava.frontend.store;
 
 import io.github.preschoolller.agentjava.core.repository.Conversation;
 import io.github.preschoolller.agentjava.core.repository.ConversationRepository;
-import io.github.preschoolller.agentjava.core.repository.Message;
 
 import java.nio.file.Path;
 
@@ -84,8 +83,8 @@ public class ConversationStore extends ConversationRepository {
 
     /** 从指定会话的一条 AI 回复处分叉出新会话并设为当前：分叉点之前（含这条回复）的消息
      *  原样复制进新会话，从该对话状态继续，原会话不动 */
-    public Conversation fork(String id, Message target) {
-        Conversation forked = super.fork(id, target);
+    public Conversation fork(String id, String targetId) {
+        Conversation forked = super.fork(id, targetId);
         if (forked == null) {
             return null;
         }

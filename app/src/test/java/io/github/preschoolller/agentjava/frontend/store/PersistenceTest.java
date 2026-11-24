@@ -78,14 +78,14 @@ class PersistenceTest {
         ConversationStore second = new ConversationStore(historyFile());
         Conversation original = byId(second, assertConvId());
         Message forkPoint = original.getMessages().get(1);
-        Conversation forked = second.fork(original.getId(), forkPoint);
+        Conversation forked = second.fork(original.getId(), forkPoint.messageId());
         assertNotNull(forked, "分叉返回新会话");
         assertTrue(second.getActive().getId().equals(forked.getId()), "分叉后切到新会话");
         assertEquals(2, forked.getMessages().size(), "分叉会话消息数");
         assertEquals("带\"引号\"、\n换行、\t制表和中文✓的消息", forked.getMessages().get(0).text(), "分叉复制用户轮");
         assertEquals("回复", forked.getMessages().get(1).text(), "分叉含分叉点AI回复");
         assertEquals("往返测试标题（分叉）", forked.getTitle(), "分叉标题带来源");
-        assertTrue(second.fork(forked.getId(), forked.getMessages().get(0)) == null, "用户消息不可分叉");
+        assertTrue(second.fork(forked.getId(), forked.getMessages().get(0).messageId()) == null, "用户消息不可分叉");
         assertEquals(2, second.getConversations().get(1).getMessages().size(), "原会话不动");
         ConversationStore third = new ConversationStore(historyFile());
         assertEquals(2, third.getConversations().size(), "分叉落盘会话数");
@@ -133,7 +133,7 @@ class PersistenceTest {
         String activeId = wsStore.getActive().getId();
         wsStore.appendMessage(activeId, Conversation.ROLE_USER, "工作区测试");
         wsStore.appendMessage(activeId, Conversation.ROLE_AI, "好");
-        Conversation wsForked = wsStore.fork(activeId, wsStore.getActive().getMessages().get(1));
+        Conversation wsForked = wsStore.fork(activeId, wsStore.getActive().getMessages().get(1).messageId());
         assertTrue(wsPath.equals(wsForked.getWorkspace()), "分叉沿用工作区");
         ConversationStore wsReread = new ConversationStore(historyFile());
         assertTrue(wsReread.getConversations().stream()

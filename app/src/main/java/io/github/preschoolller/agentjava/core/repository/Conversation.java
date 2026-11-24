@@ -6,6 +6,7 @@ import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -260,26 +261,14 @@ public class Conversation {
         return forked;
     }
 
-    /** 流式输出结束后把已存在消息的文本替换为最终值（按消息对象同一性查找），返回替换后的新记录；没找到返回 null */
-    public Message updateMessageText(Message target, String text) {
-        for (int i = 0; i < messages.size(); i++) {
-            if (messages.get(i) == target) {
-                Message updated = target.withText(text);
-                messages.set(i, updated);
-                touch();
-                return updated;
-            }
-        }
-        return null;
-    }
-
-    /** 工具调用完成：回填结果文本并写终态（按消息对象同一性查找），返回替换后的新记录；没找到返回 null。
+    /** 工具调用完成：回填结果文本并写终态，返回替换后的新记录；没找到返回 null。
      *  bash 后台提交是特例：成功翻 bg-running 等后台回调写终态；池满等提交失败（协议文案
      *  "background task submitted failed" 开头，ToolCall 仍为 COMPLETE）显式翻 error；
      *  前台任务被用户终止（结果带"(已手动终止)"标记）翻 bg-killed 复用"已终止"徽标 */
-    public Message updateToolResult(Message target, String result, boolean success, String arguments) {
+    public Message updateToolResult(String targetId, String result, boolean success, String arguments) {
         for (int i = 0; i < messages.size(); i++) {
-            if (messages.get(i) == target) {
+            if (Objects.equals(messages.get(i).messageId(), targetId)) {
+                Message target = messages.get(i);
                 String status = success ? "ok" : "error";
                 if (success && isBackGroundSubmission(target.toolName(), arguments, result)) {
                     status = STATUS_BG_RUNNING;
@@ -383,11 +372,11 @@ public class Conversation {
         return null;
     }
 
-    /** 流式结束：正文与独立思考一起替换（按消息对象同一性查找），返回替换后的新记录；没找到返回 null */
-    public Message updateMessageContent(Message target, String text, String thinking) {
+    /** 流式结束：正文与独立思考一起替换，返回替换后的新记录；没找到返回 null */
+    public Message updateMessageContent(String target, String text, String thinking) {
         for (int i = 0; i < messages.size(); i++) {
-            if (messages.get(i) == target) {
-                Message updated = target.withContent(text, thinking);
+            if (Objects.equals(messages.get(i).messageId(), target)) {
+                Message updated = messages.get(i).withContent(text, thinking);
                 messages.set(i, updated);
                 touch();
                 return updated;

@@ -1082,7 +1082,7 @@ public class Window extends JFrame {
             liveStreams.remove(this);
             refreshSidebarBadges(); // 兜底：审批未来得及决出就被清理时熄灭"待确认"
             String finalArgs = (arguments == null || arguments.isEmpty()) ? args.toString() : arguments;
-            Message updated = store.completeToolCall(conversationId, message, result, success, finalArgs);
+            Message updated = store.completeToolCall(conversationId, message.messageId(), result, success, finalArgs);
             if (updated == null) {
                 return;
             }
@@ -1972,7 +1972,7 @@ public class Window extends JFrame {
         if (isGenerating(displayedConvId)) {
             return;
         }
-        store.fork(displayedConvId, card.message);
+        store.fork(displayedConvId, card.message.messageId());
     }
 
     /** 瀑布流一行的 GridBag 约束：用户卡片靠右上且不定宽，AI 卡片水平撑满 */
@@ -2573,10 +2573,10 @@ public class Window extends JFrame {
             liveStreams.remove(this);
             flush();
             String thinkingText = thinking.length() == 0 ? null : thinking.toString();
-            Message updated = store.updateMessageContent(conversationId, message,
+            Message updated = store.updateMessageContent(conversationId, message.messageId(),
                     full.toString(), thinkingText); // 正文与独立思考分别落库
             if (updated != null && card != null) {
-                card.message = updated; // 仓库记录已换成新对象，卡片同步持有（分叉按同一性定位）
+                card.message = updated; // 仓库记录已换成新对象，卡片同步持有
             }
         }
 
