@@ -84,48 +84,10 @@ public class Main {
     private static Window window;
 
     public static void main(String[] args) {
-
-        SwingUtilities.invokeLater(() -> {
-            window = new Window("Agent");
-            // 尺寸/位置/分隔条由 Window 从 AppSettings 恢复（无记录回落居中），关闭行为 Window 自己接管
-            window.setVisible(true);
-
-            // 回调触发时本轮用户消息已入库（Window.submitInput 先画卡再回调），
-            // 历史快照直接取整个会话，无需单独传问题文本
-            window.onInputSubmitted((conversation, text) -> startAgentLoop(conversation, false));
-
-            // 重新生成：先抢会话锁再删旧回答，然后带全量历史重新请求
-            window.onRegenerate(conversation -> startAgentLoop(conversation, true));
-
-            window.onStopRequested(() -> {
-                // 停的是当前显示的会话：通知那轮链中断；审批等待 200ms 内退出，已生成部分照常落库
-                AtomicBoolean token = RUNNING.get(window.getStore().getActive().getId());
-                if (token != null) {
-                    token.set(true);
-                    // 已派发的工具还在后台跑完才收尾（P2-5）：胶囊上说明状态，避免用户以为卡死连点。
-                    // 纯文案不改停止语义；链结束 setConversationGenerating(false) 会把胶囊刷回"就绪"
-                    window.setRealtimeInfo("正在等待工具收尾…");
-                    LOG.info("停止生成......");
-                }
-            });
-
-            window.setBackGroundTaskControl(new Window.BackGroundTaskControl() {
-                @Override
-                public boolean kill(String conversationId, String callId) {
-                    TaskHandle killed = ShutDownJob.kill(callId);
-                    if (killed != null && killed.background()) {
-                        SwingUtilities.invokeLater(() ->
-                                window.onBackGroundTaskKilled(conversationId, callId));
-                    }
-                    return killed != null;
-                }
-
-                @Override
-                public String output(String conversationId, String callId) {
-                    return ShutDownJob.getBufferedOutput(callId);
-                }
-            });
-        });
+        // 前端只认 core.interfaces.AgentApp：内核实现就绪后，在这里把实现传进去——
+        //     SwingApp.start(new YourAgentApp(...));
+        // 在那之前传 null：界面照常起来，但所有命令都会提示"核心未就绪"。
+        SwingApp.start(null);
         Runtime.getRuntime().addShutdownHook(new Thread(ShutDownJob::clean));
         // 暂定这里执行。
         WarmUpStuff.warmup();

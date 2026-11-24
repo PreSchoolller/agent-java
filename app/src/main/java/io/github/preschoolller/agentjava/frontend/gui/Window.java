@@ -925,6 +925,19 @@ public class Window extends JFrame {
     }
 
     /**
+     * 渲染一条**已落库**的用户消息：只建卡，不写仓库（core 已经写了）。
+     * 后台会话不出卡，切回该会话时按落库内容重建。须在 EDT 上调用。
+     */
+    public void showUserMessage(String conversationId, Message message) {
+        if (!conversationId.equals(displayedConvId)) {
+            return;
+        }
+        insertMessageCard(message);
+        updateMaterialization();
+        scrollToBottom();
+    }
+
+    /**
      * 外部注入一条用户消息到指定会话（dsh-shim 经 AgentApiServer 调，须在 EDT 上）：
      * 显示中的会话照常出卡滚底；后台会话只落库不出卡（与 onBackGroundTaskDone 同一模式），
      * 切回时随瀑布流上屏。会话不存在则按该 id 新建（外部 id 稳定映射，如 "bili-whale"）。
@@ -947,12 +960,21 @@ public class Window extends JFrame {
      */
     public AiStream addAiMessage(String conversationId, String text) {
         Message message = store.appendMessage(conversationId, Conversation.ROLE_AI, text);
+        return openAiCard(conversationId, message, true);
+    }
+
+    /** 渲染一条**已落库**的 AI 消息：只建卡与流句柄，不写仓库。须在 EDT 上调用。 */
+    public AiStream openAiCard(String conversationId, Message message) {
+        return openAiCard(conversationId, message, false);
+    }
+
+    private AiStream openAiCard(String conversationId, Message message, boolean persist) {
         MessageCard card = conversationId.equals(displayedConvId) ? insertMessageCard(message) : null;
         if (card != null) {
             updateMaterialization(); // 流式卡片是最后一张，窗口化时保证它已物化
             scrollToBottom();
         }
-        AiStreamImpl stream = new AiStreamImpl(conversationId, message, card);
+        AiStreamImpl stream = new AiStreamImpl(conversationId, message, card, persist);
         liveStreams.add(stream);
         return stream;
     }
@@ -989,17 +1011,49 @@ public class Window extends JFrame {
     /** 指定会话的版本（并行生成时目标会话可能不在前台）：非显示中的会话只落库，卡片等切回时重绑上屏 */
     public ToolCallHandle addToolCall(String conversationId, String toolName, String argsSummary, String callId) {
         Message message = store.appendToolCall(conversationId, toolName, argsSummary, callId);
+        return openToolCard(conversationId, message, true);
+    }
+
+    /** 渲染一条**已落库**的工具消息：只建卡与句柄，不写仓库。须在 EDT 上调用。 */
+    public ToolCallHandle openToolCard(String conversationId, Message message) {
+        return openToolCard(conversationId, message, false);
+    }
+
+    private ToolCallHandle openToolCard(String conversationId, Message message, boolean persist) {
         MessageCard card = conversationId.equals(displayedConvId) ? insertMessageCard(message) : null;
         if (card != null) {
             updateMaterialization(); // 新卡片在末尾，窗口化时补物化
             scrollToBottom();
         }
-        ToolCallImpl handle = new ToolCallImpl(conversationId, message, card);
+        ToolCallImpl handle = new ToolCallImpl(conversationId, message, card, persist);
         liveStreams.add(handle);
         return handle;
     }
 
-    /** 工具调用卡的落库与刷新：参数增量只显示不写盘（120ms 节流，与 AiStream 同款），finish 时终态参数与结果一起落库 */
+    /** 后台任务完成后的重绘：工具卡换成新记录，注入的用户消息补一张卡。两条都必须已落库。 */
+    public void showBackgroundDone(String conversationId, Message toolMessage, Message userMessage) {
+        if (!conversationId.equals(displayedConvId)) {
+            return; // 后台会话不出卡，切回时按落库内容重建
+        }
+        if (toolMessage != null && toolMessage.callId() != null) {
+            for (MessageCard card : messageCards) {
+                if (card.tool && toolMessage.callId().equals(card.message.callId())) {
+                    expandedToolCalls.add(toolKey(card.message)); // 完成即自动展开
+                    card.peekResult = null;
+                    card.message = toolMessage;
+                    rebuildCard(card);
+                    break;
+                }
+            }
+        }
+        if (userMessage != null) {
+            insertMessageCard(userMessage);
+        }
+        updateMaterialization();
+        scrollToBottom();
+    }
+
+    /** 工具调用卡的落库与刷新：参数增量只显示不写盘（120ms 节流，与 AiStream 同款）；persist=true 时 finish 把终态参数与结果一起落库 */
     private final class ToolCallImpl implements ToolCallHandle, LiveStream {
         private final String conversationId;
         private final Message message;
@@ -1019,10 +1073,13 @@ public class Window extends JFrame {
             return pendingApproval != null && !pendingApproval.isDone();
         }
 
-        private ToolCallImpl(String conversationId, Message message, MessageCard card) {
+        private final boolean persist;
+
+        private ToolCallImpl(String conversationId, Message message, MessageCard card, boolean persist) {
             this.conversationId = conversationId;
             this.message = message;
             this.card = card;
+            this.persist = persist;
             argsTimer.setRepeats(false);
         }
 
@@ -1084,7 +1141,13 @@ public class Window extends JFrame {
             liveStreams.remove(this);
             refreshSidebarBadges(); // 兜底：审批未来得及决出就被清理时熄灭"待确认"
             String finalArgs = (arguments == null || arguments.isEmpty()) ? args.toString() : arguments;
-            Message updated = store.completeToolCall(conversationId, message.messageId(), result, success, finalArgs);
+            String finalResult = result == null ? "" : result;
+            String status = success ? "ok" : "error";
+            Message updated = persist
+                    ? store.completeToolCall(conversationId, message.messageId(), finalResult, success, finalArgs)
+                    // persist=false：终态由 core 写库，卡片自己拼出新记录，不回查仓库
+                    : new Message(message.role(), finalResult, message.time(), message.toolName(),
+                    finalArgs, status, message.callId(), message.thinking(), message.messageId());
             if (updated == null) {
                 return;
             }
@@ -1161,6 +1224,20 @@ public class Window extends JFrame {
             updateMaterialization(); // 通知卡是最后一张，窗口化时保证它已物化
             scrollToBottom();
         }
+    }
+
+    /**
+     * 只画不落库的通知卡：内容由 core 决定，UI 不写仓库。
+     * conversationId 为 null 时画到当前显示的会话上。
+     */
+    public void showNotice(String conversationId, String text) {
+        if (conversationId != null && !conversationId.equals(displayedConvId)) {
+            return;
+        }
+        Message message = new Message(Conversation.ROLE_AI, text, System.currentTimeMillis());
+        insertMessageCard(message);
+        updateMaterialization();
+        scrollToBottom();
     }
 
     /**
@@ -2480,10 +2557,13 @@ public class Window extends JFrame {
         private long thinkingStartNanos = -1;
         private Double thinkingSeconds;
 
-        private AiStreamImpl(String conversationId, Message message, MessageCard card) {
+        private final boolean persist;
+
+        private AiStreamImpl(String conversationId, Message message, MessageCard card, boolean persist) {
             this.conversationId = conversationId;
             this.message = message;
             this.card = card;
+            this.persist = persist;
             this.full.append(message.text() == null ? "" : message.text());
             flushTimer.setRepeats(false);
         }
@@ -2580,10 +2660,17 @@ public class Window extends JFrame {
             liveStreams.remove(this);
             flush();
             String thinkingText = thinking.length() == 0 ? null : thinking.toString();
-            Message updated = store.updateMessageContent(conversationId, message.messageId(),
-                    full.toString(), thinkingText); // 正文与独立思考分别落库
-            if (updated != null && card != null) {
-                card.message = updated; // 仓库记录已换成新对象，卡片同步持有
+            if (persist) {
+                Message updated = store.updateMessageContent(conversationId, message.messageId(),
+                        full.toString(), thinkingText); // 正文与独立思考分别落库
+                if (updated != null && card != null) {
+                    card.message = updated; // 仓库记录已换成新对象，卡片同步持有
+                }
+            } else if (card != null) {
+                // persist=false：终态由 core 写库，这里只更新卡片持有的记录，切回会话时能按最终正文重建
+                card.message = new Message(message.role(), full.toString(), message.time(),
+                        message.toolName(), message.toolArgs(), message.toolStatus(), message.callId(),
+                        thinkingText, message.messageId());
             }
         }
 
@@ -2658,10 +2745,13 @@ public class Window extends JFrame {
             return;
         }
         stampConversationOptions(store.getActive()); // 先盖戳再入库：模型/偏好记忆随本次消息一起落盘
-        addUserMessage(text);
         inputTextArea.setText("");
+        // 用户消息由 core 落库、经事件回来渲染：UI 不再自己写仓库。
+        // 没有接 core 的场景（独立预览、GUI 测试）退回自绘，保证"回车出一张卡"的窗口语义还在
         if (inputHandler != null) {
             inputHandler.accept(store.getActive(), text);
+        } else {
+            addUserMessage(text);
         }
     }
 
