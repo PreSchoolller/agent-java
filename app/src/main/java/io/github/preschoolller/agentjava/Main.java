@@ -29,10 +29,10 @@ import io.github.preschoolller.agentjava.spi.provider.event.ResponseDeltaStartEv
 import io.github.preschoolller.agentjava.spi.provider.event.ErrorMessageEvent;
 import io.github.preschoolller.agentjava.spi.provider.Provider;
 import io.github.preschoolller.agentjava.frontend.gui.Window;
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.core.repository.AppSettings;
 import io.github.preschoolller.agentjava.core.repository.Conversation;
 import io.github.preschoolller.agentjava.core.repository.Message;
-import io.github.preschoolller.agentjava.frontend.store.Profile;
+import io.github.preschoolller.agentjava.core.repository.Profile;
 import org.slf4j.LoggerFactory;
 
 import javax.swing.SwingUtilities;

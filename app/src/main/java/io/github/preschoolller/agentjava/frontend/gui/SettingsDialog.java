@@ -1,12 +1,12 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
 import io.github.preschoolller.agentjava.backend.provider.ProviderFactory;
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.core.repository.AppSettings;
 import io.github.preschoolller.agentjava.frontend.store.ContextCatalog;
 import io.github.preschoolller.agentjava.frontend.store.McpCatalog;
-import io.github.preschoolller.agentjava.frontend.store.McpServer;
-import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
-import io.github.preschoolller.agentjava.frontend.store.Profile;
+import io.github.preschoolller.agentjava.core.repository.McpServer;
+import io.github.preschoolller.agentjava.core.repository.ModelMeta;
+import io.github.preschoolller.agentjava.core.repository.Profile;
 import io.github.preschoolller.agentjava.frontend.store.ProviderCatalog;
 import io.github.preschoolller.agentjava.frontend.store.ToolCatalog;
 

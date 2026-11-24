@@ -1,10 +1,10 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.core.repository.AppSettings;
 import io.github.preschoolller.agentjava.core.repository.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 import io.github.preschoolller.agentjava.core.repository.Message;
-import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
+import io.github.preschoolller.agentjava.core.repository.ModelMeta;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;

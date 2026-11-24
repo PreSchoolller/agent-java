@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.backend.maintenance;
 
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.core.repository.AppSettings;
 
 public class PluginManager {
 

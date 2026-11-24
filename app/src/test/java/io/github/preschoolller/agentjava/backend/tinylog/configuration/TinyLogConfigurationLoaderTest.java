@@ -1,6 +1,6 @@
 package io.github.preschoolller.agentjava.backend.tinylog.configuration;
 
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.core.repository.AppSettings;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

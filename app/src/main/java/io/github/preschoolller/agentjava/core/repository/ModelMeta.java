@@ -1,4 +1,4 @@
-package io.github.preschoolller.agentjava.frontend.store;
+package io.github.preschoolller.agentjava.core.repository;
 
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
 

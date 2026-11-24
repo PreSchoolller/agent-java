@@ -2,12 +2,12 @@ package io.github.preschoolller.agentjava.frontend.gui;
 
 import io.github.preschoolller.agentjava.spi.enums.AgentMode;
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
+import io.github.preschoolller.agentjava.core.repository.AppSettings;
 import io.github.preschoolller.agentjava.core.repository.Conversation;
 import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 import io.github.preschoolller.agentjava.core.repository.Message;
-import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
-import io.github.preschoolller.agentjava.frontend.store.Profile;
+import io.github.preschoolller.agentjava.core.repository.ModelMeta;
+import io.github.preschoolller.agentjava.core.repository.Profile;
 
 import javax.swing.BorderFactory;
 import javax.swing.AbstractAction;
