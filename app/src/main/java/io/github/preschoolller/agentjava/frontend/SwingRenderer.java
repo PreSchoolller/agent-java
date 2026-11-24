@@ -12,14 +12,16 @@ import io.github.preschoolller.agentjava.core.events.RoundCancelled;
 import io.github.preschoolller.agentjava.core.events.RoundFailed;
 import io.github.preschoolller.agentjava.core.events.RoundFinished;
 import io.github.preschoolller.agentjava.core.events.RoundStarted;
+import io.github.preschoolller.agentjava.core.events.SessionCreated;
+import io.github.preschoolller.agentjava.core.events.SessionPinned;
+import io.github.preschoolller.agentjava.core.events.SessionRemoved;
+import io.github.preschoolller.agentjava.core.events.SessionRenamed;
 import io.github.preschoolller.agentjava.core.events.StateEvent;
 import io.github.preschoolller.agentjava.core.events.ToolStateChanged;
 import io.github.preschoolller.agentjava.core.events.UserMessageRejected;
 import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
 import io.github.preschoolller.agentjava.core.interfaces.EventListener;
 import io.github.preschoolller.agentjava.core.interfaces.HostRequests;
-import io.github.preschoolller.agentjava.core.records.MessageView;
-import io.github.preschoolller.agentjava.core.records.ToolView;
 import io.github.preschoolller.agentjava.core.records.UsageView;
 import io.github.preschoolller.agentjava.core.repository.Conversation;
 import io.github.preschoolller.agentjava.core.repository.Message;
@@ -88,7 +90,7 @@ public final class SwingRenderer implements EventListener {
         } else if (event instanceof RoundFinished finished) {
             later(() -> {
                 if (finished.usage() != null) {
-                    window.setUsageInfo(label(finished.usage()));
+                    window.setUsageInfo(ViewAdapter.usageLabel(finished.usage()));
                 }
                 if (finished.chainEnded()) {
                     window.setConversationGenerating(finished.sessionId(), false);
@@ -105,6 +107,9 @@ public final class SwingRenderer implements EventListener {
             later(() -> window.showNotice(rejected.sessionId(), "消息未发送：" + rejected.reason()));
         } else if (event instanceof Notice notice) {
             later(() -> notice(notice));
+        } else if (event instanceof SessionCreated || event instanceof SessionRemoved
+                || event instanceof SessionRenamed || event instanceof SessionPinned) {
+            later(window::refreshSessions);
         } else if (event instanceof GapDetected gap) {
             // 事件缺口：当前只提示。接侧栏/历史快照时在这里补一次 session()/snapshot() 全量拉取
             later(() -> window.showNotice(null,
@@ -118,7 +123,7 @@ public final class SwingRenderer implements EventListener {
 
     private void appended(MessageAppended appended) {
         String sessionId = appended.sessionId();
-        Message message = toMessage(appended.message());
+        Message message = ViewAdapter.message(appended.message());
         if (message == null) {
             return;
         }
@@ -207,47 +212,6 @@ public final class SwingRenderer implements EventListener {
     private void notice(Notice notice) {
         String text = notice.level() == NoticeLevel.ERROR ? "Error: " + notice.text() : notice.text();
         window.showNotice(notice.sessionId(), text);
-    }
-
-    // ---------- 投影 → 渲染载体 ----------
-
-    /**
-     * 把 core 的投影转成卡片能画的 {@link Message}。
-     * 只用于显示，不写仓库；工具结果正文由 ToolStateChanged 另发。
-     */
-    private static Message toMessage(MessageView view) {
-        if (view == null) {
-            return null;
-        }
-        String role = switch (view.role()) {
-            case USER -> Conversation.ROLE_USER;
-            case ASSISTANT -> Conversation.ROLE_AI;
-            case TOOL_RESULT -> Conversation.ROLE_TOOL;
-        };
-        ToolView tool = view.tool();
-        if (tool == null) {
-            return new Message(role, view.text(), view.time(), null, null, null, null,
-                    view.thinking(), view.messageId());
-        }
-        return new Message(role, view.text(), view.time(), tool.name(), tool.argsSummary(),
-                status(tool.state()), tool.callId(), view.thinking(), view.messageId());
-    }
-
-    private static String status(ToolState state) {
-        return switch (state) {
-            case RUNNING -> "running";
-            case OK -> "ok";
-            case ERROR -> "error";
-            case INTERRUPTED -> "interrupted";
-            case BG_RUNNING -> "bg-running";
-            case BG_DONE -> "bg-done";
-            case BG_KILLED -> "bg-killed";
-        };
-    }
-
-    private static String label(UsageView usage) {
-        return String.format("↑%,d ↓%,d · %.1fs", usage.inputTokens(), usage.outputTokens(),
-                usage.elapsedSeconds());
     }
 
     // ---------- 线程 ----------

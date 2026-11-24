@@ -2,12 +2,22 @@ package io.github.preschoolller.agentjava.frontend.gui;
 
 import io.github.preschoolller.agentjava.spi.enums.AgentMode;
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
+import io.github.preschoolller.agentjava.core.enums.SessionStatus;
+import io.github.preschoolller.agentjava.core.enums.ToolState;
+import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
+import io.github.preschoolller.agentjava.core.records.MessageView;
+import io.github.preschoolller.agentjava.core.records.ModelView;
+import io.github.preschoolller.agentjava.core.records.ProfileView;
+import io.github.preschoolller.agentjava.core.records.SessionSummary;
+import io.github.preschoolller.agentjava.core.records.SessionView;
+import io.github.preschoolller.agentjava.core.records.ToolView;
+import io.github.preschoolller.agentjava.core.records.UsageView;
 import io.github.preschoolller.agentjava.core.repository.AppSettings;
 import io.github.preschoolller.agentjava.core.repository.Conversation;
-import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 import io.github.preschoolller.agentjava.core.repository.Message;
 import io.github.preschoolller.agentjava.core.repository.ModelMeta;
 import io.github.preschoolller.agentjava.core.repository.Profile;
+import io.github.preschoolller.agentjava.frontend.ViewAdapter;
 
 import javax.swing.BorderFactory;
 import javax.swing.AbstractAction;
@@ -95,19 +105,13 @@ import java.util.function.Supplier;
  * 输入框（圆角输入区，回车发送，Shift+回车换行）、底部居中的实时数据小胶囊。
  * 层次感靠浅灰主区/侧栏 + 白色卡片体现。
  *
- * 后端接入方式：
- * onInputSubmitted((conversation, text) -> ...) 在用户回车后拿到文本（输入已自动画成卡片），
- * 期间 setGenerating(true)。拿到回复后回到 EDT（SwingUtilities.invokeLater）展示，两种写法：
- * 1) 一次性：addAiMessage(完整回复)（内部已落库）；
- * 2) 流式：AiStream stream = addAiMessage("") 起一张空卡片，逐段 stream.appendChunk(增量)
- *    （内部按 120ms 节流重渲染），结束调 stream.finish() 把最终文本写回会话仓库。
- * AI 回复按 Markdown 渲染（MarkdownRenderer）；重新生成：onRegenerate(conv -> ...) 注册回调，
- * 点击最后一张 AI 卡片上的"重新生成"按钮时旧回复已先从界面移除，后端应调
- * store.removeLastMessage 删掉旧回答再重新请求（回调在 EDT 上执行，耗时操作自己开线程）。
- * 底部胶囊分立两枚：setRealtimeInfo 刷状态（就绪/生成中…）、setUsageInfo 刷用量（tokens/耗时，
- * 有数据后常驻不被状态刷新冲掉）；getStore() 可直接读写会话数据（本地持久化到 ~/.agentjava）。
+ * 后端接入方式：业务状态一律走 {@code core.interfaces.AgentApp}。
+ * 出站：onInputSubmitted / onRegenerate / onStopRequested 与侧栏回调发出命令；
+ * 入站：showSession 灌投影、showUserMessage / openAiCard / openToolCard 建卡并返回流式句柄，
+ * 由渲染器把 StateEvent 翻译成这些调用。窗口自己不写仓库，只保留"当前显示哪个会话"与 UI 偏好。
+ * AI 回复按 Markdown 渲染；底部胶囊分立两枚：setRealtimeInfo 刷状态、setUsageInfo 刷用量。
  */
-public class Window extends JFrame {
+public class Window extends JFrame implements Sidebar.Sessions {
 
     /** 瀑布流区域和输入框距离主区左右边缘的留白 */
     private static final int SIDE_MARGIN = 140;
@@ -156,7 +160,12 @@ public class Window extends JFrame {
     private static final DateTimeFormatter TIME_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
-    private final ConversationStore store;
+    /** 内核接口；null = 实现尚未就绪。前端只通过它读写业务状态 */
+    private AgentApp app;
+    /** 当前显示在瀑布流里的会话 id（由前端持有，仅用于"我正在看哪个"） */
+    private String activeId;
+    /** 侧栏数据：来自 AgentApp.snapshot()，由事件驱动刷新 */
+    private List<SessionSummary> sessionSummaries = List.of();
 
     /** 主区。以下组件都由 buildUi 创建，换主题时 Window 原地重建（retheme），所以不是 final */
     private JPanel innerPanel;
@@ -206,17 +215,19 @@ public class Window extends JFrame {
 
     private Sidebar sidebar;
     private Sidebar.Callbacks sidebarCallbacks;
-    /** 当前显示在瀑布流里的会话 id，仓库的当前会话变化时据此决定是否重建 */
+    /** 当前显示在瀑布流里的会话 id，与 activeId 同步 */
     private String displayedConvId;
     /** 切换会话后等卡片高度测量完毕，滚到最底部（聊天应用的惯例：打开即最新消息） */
     private boolean pendingScrollToBottom;
     /** 生成中保存了设置：换主题/字号的重建挂起，显示中的会话空闲时补做（rebind 之后的重建对流式引用是安全的） */
     private boolean pendingRebuild;
+    /** 恢复下拉选项期间抑制"用户改动 → 写回 core"，避免把投影值原样打回去 */
+    private boolean restoringOptions;
     /** 托盘图标（系统支持即常驻注册，关闭行为实时读 AppSettings 的偏好）；null=未注册 */
     private TrayIcon trayIcon;
-    private BiConsumer<Conversation, String> inputHandler;
+    private BiConsumer<String, String> inputHandler;
     private Runnable stopHandler;
-    private Consumer<Conversation> regenerateHandler;
+    private Consumer<String> regenerateHandler;
     /** 各会话的生成态：并行 agent 循环下每个会话独立一把锁，输入区/停止按钮永远跟随当前显示的会话 */
     private final Set<String> generatingConversations = new HashSet<>();
     /** 还在进行中的流式句柄（未 finish 的 AiStream/ToolCallHandle）：会话切走卡片被丢弃，切回时按消息同一性重绑 */
@@ -427,12 +438,12 @@ public class Window extends JFrame {
     }
 
     public Window(String title) throws HeadlessException {
-        this(title, new ConversationStore());
+        this(title, null);
     }
 
-    public Window(String title, ConversationStore store) throws HeadlessException {
+    public Window(String title, AgentApp app) throws HeadlessException {
         super(title);
-        this.store = store;
+        this.app = app;
         // 应用图标：与托盘同一份程序化绘制，多尺寸让系统挑最合适的缩放
         setIconImages(java.util.List.of(Ui.createAppIcon(16), Ui.createAppIcon(32), Ui.createAppIcon(48)));
 
@@ -463,7 +474,7 @@ public class Window extends JFrame {
 
             @Override
             public void onSelectConversation(String conversationId) {
-                store.switchTo(conversationId); // 变更监听里会触发主区重建
+                loadSession(conversationId);
             }
 
             @Override
@@ -471,9 +482,11 @@ public class Window extends JFrame {
                 openSettings();
             }
         };
-        store.addChangeListener(this::onStoreChanged);
         buildUi();
-        showConversation(store.getActive());
+        if (app != null) {
+            reloadSessions();
+        }
+        showActiveSession();
         initCloseBehavior();
         applyPersistedBounds();
         initStopShortcut();
@@ -485,7 +498,13 @@ public class Window extends JFrame {
     private void createInWorkspace(String workspace) {
         boolean isDefault = workspace == null || workspace.isBlank()
                 || workspace.equals(AppSettings.defaultWorkspace().toString());
-        showConversation(store.newConversation(isDefault ? null : workspace));
+        if (app == null) {
+            showNotice(null, "核心未就绪，无法新建对话。");
+            return;
+        }
+        AgentApp.CreateSessionResult result = app.createSession(isDefault ? null : workspace, activeId);
+        reloadSessions();
+        loadSession(result.sessionId());
     }
 
     /**
@@ -883,12 +902,12 @@ public class Window extends JFrame {
         boolean expanded = sidebar == null || sidebar.isExpanded();
         int divider = splitPane == null ? Sidebar.EXPANDED_WIDTH : splitPane.getDividerLocation();
         if (sidebar != null) {
-            sidebar.detach(); // 旧侧栏注销仓库监听，否则每换一次主题多挂一个
+            sidebar.detach();
         }
         messageCards.clear();
         getContentPane().removeAll();
         buildUi();
-        showConversation(store.getActive());
+        showActiveSession();
         if (expanded) {
             splitPane.setDividerLocation(Math.max(divider, Sidebar.EXPANDED_WIDTH));
         } else {
@@ -899,8 +918,9 @@ public class Window extends JFrame {
         getContentPane().repaint();
     }
 
-    public ConversationStore getStore() {
-        return store;
+    /** 当前显示会话的 id；无会话时 null */
+    public String getActiveSessionId() {
+        return activeId;
     }
 
     public Sidebar getSidebar() {
@@ -916,12 +936,13 @@ public class Window extends JFrame {
         return waterfallPanel;
     }
 
-    /** 往当前对话追加一张用户输入卡片 */
+    /** 往当前对话追加一张用户输入卡片（只渲染；落库由 core 负责） */
     public void addUserMessage(String text) {
-        Message message = store.appendMessage(store.getActive().getId(), Conversation.ROLE_USER, text);
-        insertMessageCard(message);
-        updateMaterialization(); // 新卡片在末尾，窗口化时补物化
-        scrollToBottom();
+        if (displayedConvId == null) {
+            return;
+        }
+        showUserMessage(displayedConvId,
+                new Message(Conversation.ROLE_USER, text, System.currentTimeMillis()));
     }
 
     /**
@@ -938,43 +959,22 @@ public class Window extends JFrame {
     }
 
     /**
-     * 外部注入一条用户消息到指定会话（dsh-shim 经 AgentApiServer 调，须在 EDT 上）：
-     * 显示中的会话照常出卡滚底；后台会话只落库不出卡（与 onBackGroundTaskDone 同一模式），
-     * 切回时随瀑布流上屏。会话不存在则按该 id 新建（外部 id 稳定映射，如 "bili-whale"）。
-     * 返回落库的会话。
-     */
-    public Conversation injectUserMessage(String conversationId, String text) {
-        Conversation conversation = store.getOrCreate(conversationId, null);
-        Message message = store.appendMessage(conversationId, Conversation.ROLE_USER, text);
-        if (conversationId.equals(displayedConvId)) {
-            insertMessageCard(message);
-            updateMaterialization(); // 新卡片在末尾，窗口化时补物化
-            scrollToBottom();
-        }
-        return conversation;
-    }
-
-    /**
-     * 往指定会话追加 AI 输出卡片（并行生成时目标会话可能不在前台）：非显示中的会话只落库不出卡，
-     * 流式增量攒在句柄里，切回该会话时经 rebind 一次性补画。须在 EDT 上调用。
+     * 往指定会话追加 AI 输出卡片（并行生成时目标会话可能不在前台）：
+     * 非显示中的会话只建句柄不出卡，切回该会话时经 rebind 一次性补画。须在 EDT 上调用。
      */
     public AiStream addAiMessage(String conversationId, String text) {
-        Message message = store.appendMessage(conversationId, Conversation.ROLE_AI, text);
-        return openAiCard(conversationId, message, true);
+        return openAiCard(conversationId,
+                new Message(Conversation.ROLE_AI, text, System.currentTimeMillis()));
     }
 
-    /** 渲染一条**已落库**的 AI 消息：只建卡与流句柄，不写仓库。须在 EDT 上调用。 */
+    /** 渲染一条 AI 消息：只建卡与流句柄，不写仓库。须在 EDT 上调用。 */
     public AiStream openAiCard(String conversationId, Message message) {
-        return openAiCard(conversationId, message, false);
-    }
-
-    private AiStream openAiCard(String conversationId, Message message, boolean persist) {
         MessageCard card = conversationId.equals(displayedConvId) ? insertMessageCard(message) : null;
         if (card != null) {
             updateMaterialization(); // 流式卡片是最后一张，窗口化时保证它已物化
             scrollToBottom();
         }
-        AiStreamImpl stream = new AiStreamImpl(conversationId, message, card, persist);
+        AiStreamImpl stream = new AiStreamImpl(conversationId, message, card);
         liveStreams.add(stream);
         return stream;
     }
@@ -1008,24 +1008,20 @@ public class Window extends JFrame {
         String getMessageId();
     }
 
-    /** 指定会话的版本（并行生成时目标会话可能不在前台）：非显示中的会话只落库，卡片等切回时重绑上屏 */
+    /** 指定会话的版本（并行生成时目标会话可能不在前台）：非显示中的会话只建句柄，卡片等切回时重绑上屏 */
     public ToolCallHandle addToolCall(String conversationId, String toolName, String argsSummary, String callId) {
-        Message message = store.appendToolCall(conversationId, toolName, argsSummary, callId);
-        return openToolCard(conversationId, message, true);
+        return openToolCard(conversationId, new Message(Conversation.ROLE_TOOL, "",
+                System.currentTimeMillis(), toolName, argsSummary, "running", callId));
     }
 
-    /** 渲染一条**已落库**的工具消息：只建卡与句柄，不写仓库。须在 EDT 上调用。 */
+    /** 渲染一条工具消息：只建卡与句柄，不写仓库。须在 EDT 上调用。 */
     public ToolCallHandle openToolCard(String conversationId, Message message) {
-        return openToolCard(conversationId, message, false);
-    }
-
-    private ToolCallHandle openToolCard(String conversationId, Message message, boolean persist) {
         MessageCard card = conversationId.equals(displayedConvId) ? insertMessageCard(message) : null;
         if (card != null) {
             updateMaterialization(); // 新卡片在末尾，窗口化时补物化
             scrollToBottom();
         }
-        ToolCallImpl handle = new ToolCallImpl(conversationId, message, card, persist);
+        ToolCallImpl handle = new ToolCallImpl(conversationId, message, card);
         liveStreams.add(handle);
         return handle;
     }
@@ -1053,7 +1049,30 @@ public class Window extends JFrame {
         scrollToBottom();
     }
 
-    /** 工具调用卡的落库与刷新：参数增量只显示不写盘（120ms 节流，与 AiStream 同款）；persist=true 时 finish 把终态参数与结果一起落库 */
+    /**
+     * 工具卡的展示终态：与后端协议文案一致（后台提交成功/失败、前台被终止），
+     * 只影响徽标，不参与任何落库判定。
+     */
+    private static String toolStatus(String toolName, String arguments, String result, boolean success) {
+        if (!success) {
+            return "error";
+        }
+        if ("bash".equals(toolName)) {
+            if (result.startsWith("background task submitted successfully")
+                    && arguments != null && arguments.replace(" ", "").contains("\"background\":true")) {
+                return Conversation.STATUS_BG_RUNNING;
+            }
+            if (result.startsWith("background task submitted failed")) {
+                return "error";
+            }
+        }
+        if (result.contains("(已手动终止)")) {
+            return Conversation.STATUS_BG_KILLED;
+        }
+        return "ok";
+    }
+
+    /** 工具调用卡的渲染与刷新：参数增量只显示不写盘（120ms 节流，与 AiStream 同款）；finish 拼出终态记录刷卡片 */
     private final class ToolCallImpl implements ToolCallHandle, LiveStream {
         private final String conversationId;
         private final Message message;
@@ -1073,13 +1092,10 @@ public class Window extends JFrame {
             return pendingApproval != null && !pendingApproval.isDone();
         }
 
-        private final boolean persist;
-
-        private ToolCallImpl(String conversationId, Message message, MessageCard card, boolean persist) {
+        private ToolCallImpl(String conversationId, Message message, MessageCard card) {
             this.conversationId = conversationId;
             this.message = message;
             this.card = card;
-            this.persist = persist;
             argsTimer.setRepeats(false);
         }
 
@@ -1142,11 +1158,8 @@ public class Window extends JFrame {
             refreshSidebarBadges(); // 兜底：审批未来得及决出就被清理时熄灭"待确认"
             String finalArgs = (arguments == null || arguments.isEmpty()) ? args.toString() : arguments;
             String finalResult = result == null ? "" : result;
-            String status = success ? "ok" : "error";
-            Message updated = persist
-                    ? store.completeToolCall(conversationId, message.messageId(), finalResult, success, finalArgs)
-                    // persist=false：终态由 core 写库，卡片自己拼出新记录，不回查仓库
-                    : new Message(message.role(), finalResult, message.time(), message.toolName(),
+            String status = toolStatus(message.toolName(), finalArgs, finalResult, success);
+            Message updated = new Message(message.role(), finalResult, message.time(), message.toolName(),
                     finalArgs, status, message.callId(), message.thinking(), message.messageId());
             if (updated == null) {
                 return;
@@ -1212,18 +1225,9 @@ public class Window extends JFrame {
         }
     }
 
-    /**
-     * 往指定会话追加一条错误通知（AI 身份消息，Markdown 渲染）。通知属于**出错的会话**而不是
-     * 当前显示的会话：后台会话链上出的错要落它自己的库——按当前活动会话落会把别人的错写进
-     * 无辜会话。显示中的才出卡滚动到底；不在前台只落库，切回来随会话重建上屏。须在 EDT 上调用。
-     */
+    /** 往指定会话追加一条错误通知（AI 身份消息，Markdown 渲染）；只画不写库。须在 EDT 上调用。 */
     public void addNotifyMessage(String conversationId, String text) {
-        Message message = store.appendMessage(conversationId, Conversation.ROLE_AI, text);
-        if (conversationId.equals(displayedConvId)) {
-            insertMessageCard(message);
-            updateMaterialization(); // 通知卡是最后一张，窗口化时保证它已物化
-            scrollToBottom();
-        }
+        showNotice(conversationId, text);
     }
 
     /**
@@ -1238,43 +1242,6 @@ public class Window extends JFrame {
         insertMessageCard(message);
         updateMaterialization();
         scrollToBottom();
-    }
-
-    /**
-     * 后台任务结束（agent 循环的 markDone 回调，须在 EDT 上调用）：完成与被终止的任务都从
-     * 这里统一收尾——输出回填进提交时的工具卡（bg-done 翻"后台完成"；bg-killed 保持"已终止"、
-     * 把 EOF 后的完整输出补进"已手动终止"段下），并按决策1以用户身份注入消息告知模型
-     * （【后台任务完成】/【后台任务已终止】+ 输出）。会话不在前台时只落库不出卡；会话已删除
-     * 或找不到对应工具卡时什么都不做并返回 false（调用方据此跳过自动续轮），true = 已落库。
-     */
-    public boolean onBackGroundTaskDone(String conversationId, String callId, String output) {
-        Message updated = store.completeBackGroundTask(conversationId, callId, output);
-        if (updated == null) {
-            return false;
-        }
-        boolean killed = Conversation.STATUS_BG_KILLED.equals(updated.toolStatus());
-        Message userMessage = store.appendMessage(conversationId, Conversation.ROLE_USER,
-                (killed ? "【后台任务已终止 id: " : "【后台任务完成 id: ") + callId + "】\n"
-                        + (output == null || output.isBlank() ? "(无输出)" : output.strip()));
-        if (conversationId.equals(displayedConvId)) {
-            insertMessageCard(userMessage);
-            for (MessageCard card : messageCards) {
-                if (card.tool && callId.equals(card.message.callId())) {
-                    expandedToolCalls.add(toolKey(card.message)); // 完成即自动展开，输出不用翻卡找
-                    card.peekResult = null; // 快照被真实输出取代
-                    card.message = updated;
-                    rebuildCard(card);
-                    break;
-                }
-            }
-            updateMaterialization(); // 新用户卡在末尾，窗口化时补物化
-            scrollToBottom();
-        }
-        if (!killed) {
-            // 终止是用户自己点的，不需要托盘提醒
-            showTrayNotification("后台任务完成", toolArgsSummary(updated.toolArgs()));
-        }
-        return true;
     }
 
     /**
@@ -1298,32 +1265,8 @@ public class Window extends JFrame {
         this.backGroundTaskControl = control;
     }
 
-    /**
-     * 后台任务被手动终止（BackGroundTaskControl.kill 实现方经 EDT 调用）：工具卡立即翻
-     * "已终止"（点完按钮的即时反馈）。输出、模型通知与续轮不在这里——markDone（EOF 后的
-     * 完整缓冲）随后经 onBackGroundTaskDone 的 bg-killed 分支统一收尾。找不到对应卡片返回
-     * false（如 markDone 抢先完成落卡）。须在 EDT 上调用。
-     */
-    public boolean onBackGroundTaskKilled(String conversationId, String callId) {
-        Message updated = store.terminateBackGroundTask(conversationId, callId);
-        if (updated == null) {
-            return false;
-        }
-        if (conversationId.equals(displayedConvId)) {
-            for (MessageCard card : messageCards) {
-                if (card.tool && callId.equals(card.message.callId())) {
-                    card.peekResult = null; // 快照随终态丢弃
-                    card.message = updated;
-                    rebuildCard(card);
-                    break;
-                }
-            }
-        }
-        return true;
-    }
-
     /** 设置输入框回车提交后的回调：输入会先自动加为用户卡片并清空输入框，然后 (会话, 文本) 交给回调 */
-    public void onInputSubmitted(BiConsumer<Conversation, String> handler) {
+    public void onInputSubmitted(BiConsumer<String, String> handler) {
         this.inputHandler = handler;
     }
 
@@ -1334,10 +1277,10 @@ public class Window extends JFrame {
 
     /**
      * 设置"重新生成"回调：点击最后一张 AI 卡片上的"重新生成"按钮后触发（EDT 上执行）。
-     * 触发时旧回复已从界面移除，后端应先 store.removeLastMessage(conv.getId()) 删掉旧回答，
+     * 触发时旧回复已从界面移除，core 应先删掉旧回答，
      * 再重新请求并照常走 addAiMessage / 流式句柄展示新回复。
      */
-    public void onRegenerate(Consumer<Conversation> handler) {
+    public void onRegenerate(Consumer<String> handler) {
         this.regenerateHandler = handler;
     }
 
@@ -1403,28 +1346,40 @@ public class Window extends JFrame {
         usagePill.setVisible(true);
     }
 
-    /** 切会话时用量胶囊跟回该会话的记忆（随会话落盘，重启恢复）：没跑过轮的会话胶囊藏起不占位 */
-    private void restoreUsagePill(Conversation conversation) {
-        Conversation.Usage usage = conversation.getUsage();
+    /** 切会话时用量胶囊跟回该会话的投影；没跑过轮的会话胶囊藏起不占位 */
+    private void restoreUsagePill(UsageView usage) {
         if (usage == null) {
             usageLabel.setText("");
             usagePill.setVisible(false);
         } else {
-            setUsageInfo(usage.label());
+            setUsageInfo(ViewAdapter.usageLabel(usage));
         }
     }
 
-    /** 用会话内容重建瀑布流（切换会话、设置变更后调用），并把窗口标题带上会话名 */
-    public void showConversation(Conversation conversation) {
-        displayedConvId = conversation.getId();
+    /**
+     * 用 core 的会话投影重建瀑布流（切换会话、命令回执后调用），窗口标题带上会话名。
+     * 只读投影：不写仓库、不碰本地持久化。
+     */
+    public void showSession(SessionView session) {
+        if (session == null) {
+            showEmptySession();
+            return;
+        }
+        activeId = session.id();
+        displayedConvId = session.id();
         messageCards.clear();
         waterfallPanel.removeAll();
         waterfallRowCount = 0;
         // 草稿按会话取回：上次没发完的文本还在（setText 会触发 DocumentListener 写回同值，无碍）
-        inputTextArea.setText(draftsByConversation.getOrDefault(conversation.getId(), ""));
-        restoreConversationModel(conversation); // 模型下拉跟回会话记忆（该会话上次用的模型）
-        restoreConversationOptions(conversation); // 思考强度/权限模式跟回会话记忆（在模型恢复之后：模型默认强度先带出、会话记忆覆盖之）
-        if (conversation.isEmpty()) {
+        inputTextArea.setText(draftsByConversation.getOrDefault(session.id(), ""));
+        restoringOptions = true;
+        try {
+            restoreConversationModel(session); // 模型下拉跟回该会话的选择
+            restoreConversationOptions(session); // 思考强度/权限模式跟回该会话的选择
+        } finally {
+            restoringOptions = false;
+        }
+        if (session.messages().isEmpty()) {
             GridBagConstraints gbc = rowConstraints(false);
             gbc.fill = GridBagConstraints.NONE;
             gbc.anchor = GridBagConstraints.CENTER;
@@ -1437,46 +1392,149 @@ public class Window extends JFrame {
             emptyHint.setVisible(false);
             pendingScrollToBottom = true;
         }
-        for (Message message : conversation.getMessages()) {
-            if (message.isContextMarker()) {
-                continue; // 压缩水位线标记不渲染（内部簿记，用户看到的历史不变）
-            }
-            insertMessageCard(message);
+        for (MessageView view : session.messages()) {
+            insertMessageCard(ViewAdapter.message(view));
         }
-        rebindLiveStreams(conversation.getId()); // 切回还在生成的会话：把进行中的句柄挂回新卡片（要在物化前，待确认态才画得出来）
-        restoreUsagePill(conversation); // 用量胶囊跟回会话记忆：后台会话的轮次用量不丢，没有数据的会话不占位
+        rebindLiveStreams(session.id()); // 切回还在生成的会话：把进行中的句柄挂回新卡片（要在物化前，待确认态才画得出来）
+        restoreUsagePill(session.usage());
         updateMaterialization(); // 长会话只物化视口附近；短会话在这里全量补齐
-        setTitle("Agent - " + displayTitle(conversation));
+        setTitle("Agent - " + displayTitle(session.title()));
         waterfallPanel.revalidate();
         waterfallPanel.repaint();
         refreshGeneratingUi(); // 输入区状态跟随目标会话：切到生成中的会话要置灰并出停止按钮
         inputTextArea.requestFocusInWindow();
     }
 
-    /** 把输入区当前的模型/思考强度/权限模式盖到会话的记忆字段上（发送/重新生成时调；随本会话
-     *  随后的消息写一起落盘）。会话级记忆：链启动读自己的戳而不读全局下拉——后台会话的续轮/
-     *  补偿链若读下拉，读到的是当前显示会话的选择（串台） */
-    private void stampConversationOptions(Conversation conversation) {
-        if (getSelectedModel() != null && getSelectedModelProfile() != null) {
-            conversation.setModelOption(getSelectedModelProfile(), getSelectedModel());
-        }
-        conversation.setDialogPreferences(getSelectedEffort(), getSelectedMode());
+    /** 无会话（内核未就绪或仓库为空）：清空消息区并给提示 */
+    public void showEmptySession() {
+        activeId = null;
+        displayedConvId = null;
+        messageCards.clear();
+        waterfallPanel.removeAll();
+        waterfallRowCount = 0;
+        GridBagConstraints gbc = rowConstraints(false);
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.anchor = GridBagConstraints.CENTER;
+        gbc.insets = new Insets(12, 0, 12, 0);
+        waterfallPanel.add(emptyHint, gbc);
+        waterfallRowCount++;
+        emptyHint.setVisible(true);
+        pendingScrollToBottom = false;
+        setTitle("Agent");
+        waterfallPanel.revalidate();
+        waterfallPanel.repaint();
+        refreshGeneratingUi();
     }
 
-    /** 会话级偏好恢复：思考强度/权限模式下拉跟回该会话上次的选择；没盖过戳（旧会话/新会话）
-     *  保持当前选中不动。要在模型恢复之后调——模型下拉的监听器可能带出模型默认强度，会话记忆后到覆盖之 */
-    private void restoreConversationOptions(Conversation conversation) {
-        if (conversation.getReasoningEffort() != null) {
+    /** 切到指定会话：拉投影、重建瀑布流，并同步侧栏高亮 */
+    public void loadSession(String sessionId) {
+        if (sessionId == null) {
+            showEmptySession();
+            if (sidebar != null) {
+                sidebar.refresh();
+            }
+            return;
+        }
+        activeId = sessionId;
+        SessionView view = app == null ? null : app.session(sessionId);
+        if (view == null) {
+            showEmptySession();
+        } else {
+            showSession(view);
+        }
+        if (sidebar != null) {
+            sidebar.refresh();
+        }
+    }
+
+    /** 重拉会话列表（命令回执或事件到达后调用） */
+    public void reloadSessions() {
+        sessionSummaries = app == null ? List.of() : app.snapshot().sessions();
+        if (sidebar != null) {
+            sidebar.refresh();
+        }
+    }
+
+    /** 列表或当前会话被外部改动：刷新侧栏；当前会话已不存在时落到第一个 */
+    public void refreshSessions() {
+        reloadSessions();
+        boolean gone = activeId == null || sessionSummaries.stream()
+                .noneMatch(summary -> summary.id().equals(activeId));
+        if (gone) {
+            String next = sessionSummaries.isEmpty() ? null : sessionSummaries.get(0).id();
+            loadSession(next);
+        }
+    }
+
+    private void showActiveSession() {
+        if (app == null) {
+            showEmptySession();
+            return;
+        }
+        if (activeId == null && !sessionSummaries.isEmpty()) {
+            activeId = sessionSummaries.get(0).id();
+        }
+        loadSession(activeId);
+    }
+
+    // ---------- Sidebar.Sessions：只暴露投影与命令 ----------
+
+    @Override
+    public List<SessionSummary> sessions() {
+        // 实时拉投影：外部（测试/插件）新建或改名后，侧栏下一次刷新就能看到
+        sessionSummaries = app == null ? List.of() : app.snapshot().sessions();
+        return sessionSummaries;
+    }
+
+    @Override
+    public String activeId() {
+        return activeId;
+    }
+
+    @Override
+    public List<MessageView> messages(String sessionId) {
+        SessionView view = app == null ? null : app.session(sessionId);
+        return view == null ? List.of() : view.messages();
+    }
+
+    @Override
+    public void pin(String sessionId, boolean pinned) {
+        if (app != null) {
+            app.pinSession(sessionId, pinned);
+        }
+    }
+
+    @Override
+    public void rename(String sessionId, String title) {
+        if (app != null) {
+            app.renameSession(sessionId, title);
+        }
+    }
+
+    @Override
+    public void delete(String sessionId) {
+        if (app == null) {
+            return;
+        }
+        app.deleteSession(sessionId);
+        refreshSessions();
+    }
+
+    /** 会话级偏好恢复：思考强度/权限模式下拉跟回该会话的选择；投影没值就保持当前选中不动 */
+    private void restoreConversationOptions(SessionView session) {
+        ReasoningEffortEnum effort = ViewAdapter.spiEffort(session.effort());
+        if (effort != null) {
             for (int i = 0; i < EFFORT_OPTIONS.length; i++) {
-                if (EFFORT_OPTIONS[i] == conversation.getReasoningEffort()) {
+                if (EFFORT_OPTIONS[i] == effort) {
                     effortCombo.setSelectedIndex(i);
                     break;
                 }
             }
         }
-        if (conversation.getAgentMode() != null) {
+        AgentMode mode = ViewAdapter.spiMode(session.mode());
+        if (mode != null) {
             for (int i = 0; i < MODE_OPTIONS.length; i++) {
-                if (MODE_OPTIONS[i] == conversation.getAgentMode()) {
+                if (MODE_OPTIONS[i] == mode) {
                     modeCombo.setSelectedIndex(i);
                     break;
                 }
@@ -1484,16 +1542,15 @@ public class Window extends JFrame {
         }
     }
 
-    /** 会话级模型记忆恢复：记录的（方案，模型）还在下拉里就选中它——setSelectedItem 触发监听器
-     *  顺带带出该模型的思考强度默认值；没记录或已失效（方案/模型被删）保持当前选中不动 */
-    private void restoreConversationModel(Conversation conversation) {
-        if (conversation.getModelName() == null) {
+    /** 模型下拉恢复：记录的（方案，模型）还在下拉里就选中它；没记录或已失效保持当前选中不动 */
+    private void restoreConversationModel(SessionView session) {
+        if (session.modelName() == null) {
             return;
         }
         for (int i = 0; i < modelCombo.getItemCount(); i++) {
             if (!(modelCombo.getItemAt(i) instanceof ModelOption option)
-                    || !option.modelName().equals(conversation.getModelName())
-                    || !option.profileName().equals(conversation.getModelProfile())) {
+                    || !option.modelName().equals(session.modelName())
+                    || !option.profileName().equals(session.modelProfile())) {
                 continue;
             }
             if (!option.equals(modelCombo.getSelectedItem())) {
@@ -1518,12 +1575,6 @@ public class Window extends JFrame {
         }
     }
 
-    private void onStoreChanged() {
-        String activeId = store.getActive().getId();
-        if (!activeId.equals(displayedConvId)) {
-            showConversation(store.getActive());
-        }
-    }
 
     /** 把一条消息的卡片骨架插到瀑布流末尾：用户卡片定宽靠右、AI 卡片通栏，返回卡片记录。
      * 内容组件不在这里建（窗口化），由 updateMaterialization 决定哪些卡片 fillCard */
@@ -2050,13 +2101,16 @@ public class Window extends JFrame {
         popup.show(anchor, 0, anchor.getHeight() + 2);
     }
 
-    /** 分叉：以这条 AI 回复为分叉点开新会话（含这条回复，从该状态继续），原会话不动；
-     *  store.fork 会把新会话设为当前并通知，主区自动切过去 */
+    /** 分叉：以这条 AI 回复为分叉点开新会话（含这条回复，从该状态继续），原会话不动 */
     private void forkConversation(MessageCard card) {
-        if (isGenerating(displayedConvId)) {
+        if (isGenerating(displayedConvId) || app == null) {
             return;
         }
-        store.fork(displayedConvId, card.message.messageId());
+        String forked = app.forkSession(displayedConvId, card.message.messageId());
+        if (forked != null) {
+            reloadSessions();
+            loadSession(forked);
+        }
     }
 
     /** 瀑布流一行的 GridBag 约束：用户卡片靠右上且不定宽，AI 卡片水平撑满 */
@@ -2189,14 +2243,12 @@ public class Window extends JFrame {
         waterfallRowCount = Math.max(0, waterfallRowCount - 1);
         refreshRegenerateButtons();
         waterfallPanel.revalidate();
-        if (regenerateHandler != null) {
-            stampConversationOptions(store.getActive()); // 重新生成同样按当前选中的模型/偏好盖戳
-            regenerateHandler.accept(store.getActive());
+        if (regenerateHandler != null && activeId != null) {
+            regenerateHandler.accept(activeId);
         }
     }
 
-    private static String displayTitle(Conversation conversation) {
-        String title = conversation.getTitle();
+    private static String displayTitle(String title) {
         return title == null || title.isBlank() ? "新对话" : title;
     }
 
@@ -2557,13 +2609,10 @@ public class Window extends JFrame {
         private long thinkingStartNanos = -1;
         private Double thinkingSeconds;
 
-        private final boolean persist;
-
-        private AiStreamImpl(String conversationId, Message message, MessageCard card, boolean persist) {
+        private AiStreamImpl(String conversationId, Message message, MessageCard card) {
             this.conversationId = conversationId;
             this.message = message;
             this.card = card;
-            this.persist = persist;
             this.full.append(message.text() == null ? "" : message.text());
             flushTimer.setRepeats(false);
         }
@@ -2660,14 +2709,8 @@ public class Window extends JFrame {
             liveStreams.remove(this);
             flush();
             String thinkingText = thinking.length() == 0 ? null : thinking.toString();
-            if (persist) {
-                Message updated = store.updateMessageContent(conversationId, message.messageId(),
-                        full.toString(), thinkingText); // 正文与独立思考分别落库
-                if (updated != null && card != null) {
-                    card.message = updated; // 仓库记录已换成新对象，卡片同步持有
-                }
-            } else if (card != null) {
-                // persist=false：终态由 core 写库，这里只更新卡片持有的记录，切回会话时能按最终正文重建
+            if (card != null) {
+                // 只更新卡片持有的记录，切回会话时能按最终正文重建；落库由 core 负责
                 card.message = new Message(message.role(), full.toString(), message.time(),
                         message.toolName(), message.toolArgs(), message.toolStatus(), message.callId(),
                         thinkingText, message.messageId());
@@ -2738,20 +2781,19 @@ public class Window extends JFrame {
         label.setForeground(Ui.TEXT_SECONDARY);
     }
 
-    /** 输入框回车：输入自动加为用户卡片并清空输入框，(会话, 文本) 再交给 inputHandler */
+    /** 输入框回车：清空输入框，把 (会话, 文本) 交给 inputHandler；用户卡片由 core 的事件回来渲染 */
     private void submitInput() {
         String text = inputTextArea.getText().strip();
         if (text.isEmpty() || isGenerating(displayedConvId)) {
             return;
         }
-        stampConversationOptions(store.getActive()); // 先盖戳再入库：模型/偏好记忆随本次消息一起落盘
+        if (activeId == null) {
+            showNotice(null, "核心未就绪，消息未发送。");
+            return;
+        }
         inputTextArea.setText("");
-        // 用户消息由 core 落库、经事件回来渲染：UI 不再自己写仓库。
-        // 没有接 core 的场景（独立预览、GUI 测试）退回自绘，保证"回车出一张卡"的窗口语义还在
         if (inputHandler != null) {
-            inputHandler.accept(store.getActive(), text);
-        } else {
-            addUserMessage(text);
+            inputHandler.accept(activeId, text);
         }
     }
 
@@ -2885,13 +2927,17 @@ public class Window extends JFrame {
         effortCombo.setSelectedIndex(3);
         effortCombo.setPreferredSize(new Dimension(90, 26));
         effortCombo.setToolTipText("思考强度");
+        effortCombo.addActionListener(e -> pushEffort());
         Ui.styleComboBox(modelCombo);
         Ui.styleComboBox(effortCombo);
         // 渲染器在 styleComboBox 之后挂（它会给非 ModelOption 项换默认渲染）
         modelCombo.setRenderer(renderModelOption());
         // 模型元数据里的"默认推理等级"接出：选中模型变化时思考强度带出该模型的默认值
         //（元数据没设 = 跟随当前选择，不动）
-        modelCombo.addActionListener(e -> syncEffortToModelDefault());
+        modelCombo.addActionListener(e -> {
+            syncEffortToModelDefault();
+            pushModel();
+        });
         syncEffortToModelDefault(); // 初值也带一次（上面 setSelectedItem 早于监听器注册）
 
         // 输入框左下角：权限模式（计划=只读 / 编辑=允许改文件 / 完全访问=不受限）
@@ -2899,6 +2945,7 @@ public class Window extends JFrame {
         modeCombo.setSelectedIndex(1);
         modeCombo.setPreferredSize(new Dimension(132, 26));
         modeCombo.setToolTipText("权限模式：计划=只读规划；编辑=允许改文件；完全访问=不受限；纯聊天=不挂工具");
+        modeCombo.addActionListener(e -> pushMode());
         Ui.styleComboBox(modeCombo);
 
         // 一排两端：左下角权限模式，右下角模型 + 思考强度 + 发送/停止
@@ -3040,8 +3087,35 @@ public class Window extends JFrame {
         return MODE_OPTIONS[modeCombo.getSelectedIndex()];
     }
 
+    // ---------- 输入区选项回写：只发命令，不碰会话对象 ----------
+
+    private void pushModel() {
+        if (restoringOptions || app == null || activeId == null) {
+            return;
+        }
+        String model = getSelectedModel();
+        String profile = getSelectedModelProfile();
+        if (model != null && profile != null) {
+            app.setModel(activeId, profile, model);
+        }
+    }
+
+    private void pushEffort() {
+        if (restoringOptions || app == null || activeId == null) {
+            return;
+        }
+        app.setReasoningEffort(activeId, ViewAdapter.coreEffort(getSelectedEffort()));
+    }
+
+    private void pushMode() {
+        if (restoringOptions || app == null || activeId == null) {
+            return;
+        }
+        app.setAgentMode(activeId, ViewAdapter.coreMode(getSelectedMode()));
+    }
+
     private void initSidebar() {
-        sidebar = new Sidebar(store, sidebarCallbacks);
+        sidebar = new Sidebar(this, sidebarCallbacks);
         sidebar.setBadgeLookup(this::badgeFor);
     }
 
