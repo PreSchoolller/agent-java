@@ -133,7 +133,7 @@ public class ConversationRepository {
     /**
      * 向指定会话追加一条消息，会话同时挪到"最近使用"首位
      */
-    public Message appendMessage(String id, String role, String text) {
+    public Message appendMessage(String id, Message.Role role, String text) {
         Conversation conversation = findById(id);
         if (conversation == null) {
             throw new IllegalArgumentException("会话不存在: " + id);
@@ -177,7 +177,7 @@ public class ConversationRepository {
         int cut = -1;
         for (int i = 0; i < messages.size(); i++) {
             if (Objects.equals(messages.get(i).messageId(), targetId)) {
-                if (!Conversation.ROLE_AI.equals(messages.get(i).role())) {
+                if (!Message.Role.ROLE_AI.equals(messages.get(i).role())) {
                     return null;
                 }
                 cut = i;
@@ -494,9 +494,9 @@ public class ConversationRepository {
                 // 残留，翻成 interrupted（前端显示"已中断"灰态）；其空结果回传时本就被
                 // buildRoleMessages 的空文本跳过，不会发给后端。
                 // bg-running 同理：后台进程已随 ShutDownJob 的退出清理被杀，回不到"后台完成"了
-                String status = str(item.toolStatus());
-                if ("running".equals(status) || Conversation.STATUS_BG_RUNNING.equals(status)) {
-                    status = "interrupted";
+                Message.ToolStatus status = item.toolStatus();
+                if (Message.ToolStatus.RUNNING.equals(status) || Message.ToolStatus.STATUS_BG_RUNNING.equals(status)) {
+                    status = Message.ToolStatus.INTERRUPTED;
                 }
                 item = item.withStatus(item.toolName() == null ? null : status);
                 if (item.messageId() == null) {

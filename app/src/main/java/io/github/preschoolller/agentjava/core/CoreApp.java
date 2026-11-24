@@ -14,90 +14,96 @@ import io.github.preschoolller.agentjava.core.records.ProfileView;
 import io.github.preschoolller.agentjava.core.records.SessionSummary;
 import io.github.preschoolller.agentjava.core.records.SessionView;
 import io.github.preschoolller.agentjava.core.records.Snapshot;
+import io.github.preschoolller.agentjava.core.repository.ConversationRepository;
 
 import java.util.List;
 
 public class CoreApp implements AgentApp {
 
-    private final AppView view;
-    private final AppCommands commands;
-    private final AppEvents events;
+    private final AppView appView;
+    private final AppCommands appCommands;
+    private final AppEvents appEvents;
     private final HostRequests hostRequests;
     private final RuntimeConfig runtimeConfig;
+    private final AgentLoop agentLoop;
+    private final ConversationRepository conversationRepository;
 
     public CoreApp() {
-        this.view = new AppViewImpl();
-        this.commands = new AppCommandsImpl();
-        this.events = AppEventsImpl.getInstance();
+        this.appView = new AppViewImpl();
+        this.appCommands = new AppCommandsImpl();
+        AppEventsImpl appEventsImpl = new AppEventsImpl();
+        this.appEvents = appEventsImpl;
         this.hostRequests = new  HostRequestsImpl();
         this.runtimeConfig = new  RuntimeConfigImpl();
+        this.conversationRepository = new ConversationRepository();
+        this.agentLoop = new AgentLoop(conversationRepository, appEventsImpl);
     }
 
     // ----- AppCommands -----
 
     @Override
     public CreateSessionResult createSession(String workspace, String reuseIfEmptySessionId) {
-        return commands.createSession(workspace, reuseIfEmptySessionId);
+        return appCommands.createSession(workspace, reuseIfEmptySessionId);
     }
 
     @Override
     public String ensureSession(String sessionId, String workspace) {
-        return commands.ensureSession(sessionId, workspace);
+        return appCommands.ensureSession(sessionId, workspace);
     }
 
     @Override
     public void renameSession(String sessionId, String title) {
-        commands.renameSession(sessionId, title);
+        appCommands.renameSession(sessionId, title);
     }
 
     @Override
     public void pinSession(String sessionId, boolean pinned) {
-        commands.pinSession(sessionId, pinned);
+        appCommands.pinSession(sessionId, pinned);
     }
 
     @Override
     public void deleteSession(String sessionId) {
-        commands.deleteSession(sessionId);
+        appCommands.deleteSession(sessionId);
     }
 
     @Override
     public void deleteSessionIfEmpty(String sessionId) {
-        commands.deleteSessionIfEmpty(sessionId);
+        appCommands.deleteSessionIfEmpty(sessionId);
     }
 
     @Override
     public String forkSession(String sessionId, String fromMessageId) {
-        return commands.forkSession(sessionId, fromMessageId);
+        return appCommands.forkSession(sessionId, fromMessageId);
     }
 
     @Override
     public void submit(String sessionId, String clientMsgId, String text) {
-        commands.submit(sessionId, clientMsgId, text);
+        appCommands.submit(sessionId, clientMsgId, text);
     }
 
     @Override
     public void regenerate(String sessionId, String fromMessageId) {
-        commands.regenerate(sessionId, fromMessageId);
+        appCommands.regenerate(sessionId, fromMessageId);
     }
 
     @Override
     public void setWorkspace(String sessionId, String workspace) {
-        commands.setWorkspace(sessionId, workspace);
+        appCommands.setWorkspace(sessionId, workspace);
     }
 
     @Override
     public void setModel(String sessionId, String profileName, String modelName) {
-        commands.setModel(sessionId, profileName, modelName);
+        appCommands.setModel(sessionId, profileName, modelName);
     }
 
     @Override
     public void setReasoningEffort(String sessionId, ReasoningEffort effort) {
-        commands.setReasoningEffort(sessionId, effort);
+        appCommands.setReasoningEffort(sessionId, effort);
     }
 
     @Override
     public void setAgentMode(String sessionId, AgentMode mode) {
-        commands.setAgentMode(sessionId, mode);
+        appCommands.setAgentMode(sessionId, mode);
     }
 
     // ----- HostRequests -----
@@ -121,24 +127,24 @@ public class CoreApp implements AgentApp {
 
     @Override
     public AutoCloseable subscribe(long sinceSeq, EventListener listener) {
-        return events.subscribe(sinceSeq, listener);
+        return appEvents.subscribe(sinceSeq, listener);
     }
 
     // ----- AppView -----
 
     @Override
     public Snapshot snapshot() {
-        return view.snapshot();
+        return appView.snapshot();
     }
 
     @Override
     public SessionView session(String sessionId) {
-        return view.session(sessionId);
+        return appView.session(sessionId);
     }
 
     @Override
     public List<SessionSummary> sessionsSince(long seq) {
-        return view.sessionsSince(seq);
+        return appView.sessionsSince(seq);
     }
 
     // ----- RuntimeConfig -----

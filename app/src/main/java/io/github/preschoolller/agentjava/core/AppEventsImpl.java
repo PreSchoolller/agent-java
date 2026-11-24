@@ -14,7 +14,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
-public class AppEventsImpl implements AppEvents {
+public class AppEventsImpl implements AppEvents, EventPublisher {
 
     private static final List<EventListener> listeners = new CopyOnWriteArrayList<>();
     private static final int STORAGE_CAPACITY = 4096;
@@ -25,21 +25,13 @@ public class AppEventsImpl implements AppEvents {
     private static long seq = 0L;
     private static final Logger LOG = LoggerFactory.getLogger(AppEventsImpl.class);
 
-    private AppEventsImpl() {
+    AppEventsImpl() {
         Thread broadcast = new Thread(AppEventsImpl::broadcast);
         broadcast.setDaemon(true);
         broadcast.setName("app-events-broadcast-thread");
         broadcast.start();
 
         ShutDownJob.addShutDownHook(broadcast::interrupt);
-    }
-
-    public static AppEventsImpl getInstance() {
-        return InstanceHolder.INSTANCE;
-    }
-
-    private static class InstanceHolder {
-        private static final AppEventsImpl INSTANCE = new AppEventsImpl();
     }
 
     @Override
@@ -60,7 +52,8 @@ public class AppEventsImpl implements AppEvents {
         return () -> listeners.remove(listener);
     }
 
-    public static synchronized void publish(Function<Long, StateEvent> function) {
+    @Override
+    public synchronized void publish(Function<Long, StateEvent> function) {
         StateEvent event = function.apply(seq);
         if (event.seq() != seq) {
             throw new IllegalArgumentException("sequence mismatch");

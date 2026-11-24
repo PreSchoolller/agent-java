@@ -8,11 +8,9 @@ package io.github.preschoolller.agentjava.core.events;
  * 所以 StateEvent 跟着事件一起落在 core.events，而不是 core.interfaces。
  */
 public sealed interface StateEvent
-        permits SessionCreated, SessionRemoved, SessionRenamed, SessionPinned,
-        MessageAppended, MessageDelta, MessageCompleted, ToolStateChanged,
-        UserMessageConfirmed, UserMessageRejected,
-        RoundStarted, RoundFinished, RoundFailed, RoundCancelled,
-        HostRequestOpened, HostRequestClosed, ConfigChanged, Notice, GapDetected {
+        permits ConfigChanged, GapDetected, HostRequestClosed, HostRequestOpened, MessageAppended, MessageCompleted,
+        MessageDelta, Notice, RoundCancelled, RoundFailed, RoundFinished, RoundStarted, SessionCreated, SessionPinned,
+        SessionRemoved, SessionRenamed, ToolArgsDelta, ToolStateChanged, UserMessageConfirmed, UserMessageRejected {
 
     long seq();
 

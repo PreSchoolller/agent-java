@@ -1,11 +1,17 @@
 package io.github.preschoolller.agentjava.core.repository;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonValue;
 
+import java.util.Arrays;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * 一条消息。role 取 Conversation.ROLE_USER / ROLE_AI / ROLE_TOOL / ROLE_CONTEXT_MANAGER。
@@ -17,36 +23,36 @@ import java.util.UUID;
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonIgnoreProperties(ignoreUnknown = true)
-public record Message(@JsonProperty("role") String role,
+public record Message(@JsonProperty("role") Role role,
                       @JsonProperty("text") String text,
                       @JsonProperty("time") long time,
                       @JsonProperty("name") String toolName,
                       @JsonProperty("args") String toolArgs,
-                      @JsonProperty("status") String toolStatus,
+                      @JsonProperty("status") ToolStatus toolStatus,
                       @JsonProperty("callId") String callId,
                       @JsonProperty("thinking") String thinking,
                       @JsonProperty("message_id") String messageId) {
 
     /** 聊天消息（user/ai）用这个构造，工具字段与思考为 null */
-    public Message(String role, String text, long time) {
+    public Message(Role role, String text, long time) {
         this(role, text, time, null, null, null, null, null, UUID.randomUUID().toString());
     }
 
     /** 工具调用消息构造：思考恒为 null（保留既有调用点的形状） */
-    public Message(String role, String text, long time, String toolName, String toolArgs,
-                   String toolStatus, String callId) {
+    public Message(Role role, String text, long time, String toolName, String toolArgs,
+                   ToolStatus toolStatus, String callId) {
         this(role, text, time, toolName, toolArgs, toolStatus, callId, null, UUID.randomUUID().toString());
     }
 
     @JsonIgnore
     public boolean isToolCall() {
-        return Conversation.ROLE_TOOL.equals(role);
+        return Message.Role.ROLE_TOOL.equals(role);
     }
 
     /** 上下文压缩水位线标记：不进请求（请求构建按它裁剪水位线之前的历史）、瀑布流/导出不渲染 */
     @JsonIgnore
     public boolean isContextMarker() {
-        return Conversation.ROLE_CONTEXT_MANAGER.equals(role);
+        return Message.Role.ROLE_CONTEXT_MANAGER.equals(role);
     }
 
     /** 有独立思考内容（卡片才渲染思考区、落盘才写 thinking 键） */
@@ -69,7 +75,7 @@ public record Message(@JsonProperty("role") String role,
         return new Message(role, newText, time, toolName, toolArgs, toolStatus, callId, newThinking, messageId);
     }
 
-    public Message withStatus(String status) {
+    public Message withStatus(ToolStatus status) {
         return new Message(role, text, time, toolName, toolArgs, status, callId, thinking, messageId);
     }
 
@@ -79,5 +85,75 @@ public record Message(@JsonProperty("role") String role,
 
     public Message withMessageId(String id) {
         return new Message(role, text, time, toolName, toolArgs, toolStatus, callId, thinking, id);
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public enum Role {
+        ROLE_USER("user"),
+        ROLE_AI("ai"),
+        ROLE_TOOL("tool"),
+        /** 上下文压缩水位线标记：上下文管理插件把此标记之前的历史压缩后的边界。
+         *  请求构建按最后一个标记裁剪（标记本身与更早的消息不进请求），瀑布流/导出不渲染；
+         *  落盘按普通消息往返（role 字符串序列化，text 恒空串） */
+        ROLE_CONTEXT_MANAGER("context-manager"),
+        ;
+
+        @JsonValue
+        private final String role;
+
+        private static final  Map<String, Role> BY_ROLE = Arrays.stream(Role.values())
+                .collect(Collectors.toMap(Role::getRole, Function.identity()));
+
+        Role(String role) {
+            this.role = role;
+        }
+
+        public String getRole() {
+            return role;
+        }
+
+        @JsonCreator
+        public static Role fromString(String role) {
+            return BY_ROLE.get(role);
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public enum ToolStatus {
+        RUNNING("running"),
+        OK("ok"),
+        ERROR("error"),
+        /** 工具卡状态：命令已转入后台、当次只回了提交成功（终态等后台任务完成的回调回填） */
+        STATUS_BG_RUNNING("bg-running"),
+        /** 工具卡状态：后台任务已完成，输出已回填进结果区 */
+        STATUS_BG_DONE("bg-done"),
+        /** 工具卡状态：后台任务被用户手动终止（终态；与"已中断"区分——那是异常退出残留） */
+        STATUS_BG_KILLED("bg-killed"),
+        INTERRUPTED("interrupted"),
+        ;
+
+        @JsonValue
+        private final String status;
+
+        private static final Map<String, ToolStatus> BY_STATUS = Arrays.stream(ToolStatus.values())
+                .collect(Collectors.toUnmodifiableMap(ToolStatus::getStatus, Function.identity()));
+
+        ToolStatus(String status) {
+            this.status = status;
+        }
+
+        public String getStatus() {
+            return status;
+        }
+
+        @JsonCreator
+        public static ToolStatus getByStatus(String status) {
+            return BY_STATUS.get(status);
+        }
+
+        @Override
+        public String toString() {
+            return status;
+        }
     }
 }

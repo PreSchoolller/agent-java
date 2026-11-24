@@ -13,20 +13,13 @@ import java.util.function.Supplier;
 /** 一段对话：标题 + 消息列表，首条用户消息会自动截取为标题。 */
 public class Conversation {
 
-    public static final String ROLE_USER = "user";
-    public static final String ROLE_AI = "ai";
-    public static final String ROLE_TOOL = "tool";
+    public static final Message.Role ROLE_USER = Message.Role.ROLE_USER;
+    public static final Message.Role ROLE_AI = Message.Role.ROLE_AI;
+    public static final Message.Role ROLE_TOOL = Message.Role.ROLE_TOOL;
     /** 上下文压缩水位线标记：上下文管理插件把此标记之前的历史压缩后的边界。
      *  请求构建按最后一个标记裁剪（标记本身与更早的消息不进请求），瀑布流/导出不渲染；
      *  落盘按普通消息往返（role 字符串序列化，text 恒空串） */
-    public static final String ROLE_CONTEXT_MANAGER = "context-manager";
-
-    /** 工具卡状态：命令已转入后台、当次只回了提交成功（终态等后台任务完成的回调回填） */
-    public static final String STATUS_BG_RUNNING = "bg-running";
-    /** 工具卡状态：后台任务已完成，输出已回填进结果区 */
-    public static final String STATUS_BG_DONE = "bg-done";
-    /** 工具卡状态：后台任务被用户手动终止（终态；与"已中断"区分——那是异常退出残留） */
-    public static final String STATUS_BG_KILLED = "bg-killed";
+    public static final Message.Role ROLE_CONTEXT_MANAGER = Message.Role.ROLE_CONTEXT_MANAGER;
 
     private final String id;
     private String title;
@@ -209,12 +202,12 @@ public class Conversation {
         touch();
     }
 
-    public Message addMessage(String role, String text) {
+    public Message addMessage(Message.Role role, String text) {
         List<Message> loadedMessages = ensureLoaded();
         Message message = new Message(role, text, System.currentTimeMillis());
         loadedMessages.add(message);
         touch();
-        if (ROLE_USER.equals(role) && loadedMessages.size() == 1) {
+        if (Message.Role.ROLE_USER.equals(role) && loadedMessages.size() == 1) {
             title = abbreviate(text, 20);
         }
         return message;
@@ -222,7 +215,7 @@ public class Conversation {
 
     /** 追加一条工具调用消息（"运行中"占位，结果由 updateToolResult 回填），返回消息记录 */
     public Message addToolCall(String toolName, String toolArgs, String callId) {
-        Message message = new Message(ROLE_TOOL, "", System.currentTimeMillis(), toolName, toolArgs, "running", callId);
+        Message message = new Message(Message.Role.ROLE_TOOL, "", System.currentTimeMillis(), toolName, toolArgs, Message.ToolStatus.RUNNING, callId);
         ensureLoaded().add(message);
         touch();
         return message;
@@ -231,7 +224,7 @@ public class Conversation {
     /** 追加上下文压缩水位线标记（上下文管理插件在压缩轮结束时落库）：
      *  下一轮请求构建以它为裁剪起点；标记本身不进请求，UI 也不渲染 */
     public Message addContextMarker() {
-        Message message = new Message(ROLE_CONTEXT_MANAGER, "", System.currentTimeMillis());
+        Message message = new Message(Message.Role.ROLE_CONTEXT_MANAGER, "", System.currentTimeMillis());
         ensureLoaded().add(message);
         touch();
         return message;
@@ -269,13 +262,13 @@ public class Conversation {
         for (int i = 0; i < messages.size(); i++) {
             if (Objects.equals(messages.get(i).messageId(), targetId)) {
                 Message target = messages.get(i);
-                String status = success ? "ok" : "error";
+                Message.ToolStatus status = success ? Message.ToolStatus.OK : Message.ToolStatus.ERROR;
                 if (success && isBackGroundSubmission(target.toolName(), arguments, result)) {
-                    status = STATUS_BG_RUNNING;
+                    status = Message.ToolStatus.STATUS_BG_RUNNING;
                 } else if (success && isFailedBackGroundSubmission(target.toolName(), result)) {
-                    status = "error";
+                    status = Message.ToolStatus.ERROR;
                 } else if (success && isManuallyTerminated(result)) {
-                    status = STATUS_BG_KILLED;
+                    status = Message.ToolStatus.STATUS_BG_KILLED;
                 }
                 Message updated = target.withText(result).withArgs(arguments).withStatus(status);
                 messages.set(i, updated);
@@ -334,17 +327,17 @@ public class Conversation {
             if (callId == null || !callId.equals(target.callId())) {
                 continue;
             }
-            if (STATUS_BG_RUNNING.equals(target.toolStatus())) {
+            if (Message.ToolStatus.STATUS_BG_RUNNING.equals(target.toolStatus())) {
                 String section = "—— 后台任务完成 ——\n"
                         + (output == null || output.isBlank() ? "(无输出)" : output.strip());
-                Message updated = target.withText(target.text() + "\n" + section).withStatus(STATUS_BG_DONE);
+                Message updated = target.withText(target.text() + "\n" + section).withStatus(Message.ToolStatus.STATUS_BG_DONE);
                 loadedMessages.set(i, updated);
                 touch();
                 return updated;
             }
-            if (STATUS_BG_KILLED.equals(target.toolStatus())) {
+            if (Message.ToolStatus.STATUS_BG_KILLED.equals(target.toolStatus())) {
                 Message updated = output == null || output.isBlank() ? target
-                        : target.withText(target.text() + "\n" + output.strip()).withStatus(STATUS_BG_KILLED);
+                        : target.withText(target.text() + "\n" + output.strip()).withStatus(Message.ToolStatus.STATUS_BG_KILLED);
                 loadedMessages.set(i, updated);
                 touch();
                 return updated;
@@ -362,8 +355,8 @@ public class Conversation {
         for (int i = loadedMessages.size() - 1; i >= 0; i--) {
             Message target = loadedMessages.get(i);
             if (callId != null && callId.equals(target.callId())
-                    && STATUS_BG_RUNNING.equals(target.toolStatus())) {
-                Message updated = target.withText(target.text() + "\n—— 已手动终止 ——").withStatus(STATUS_BG_KILLED);
+                    && Message.ToolStatus.STATUS_BG_RUNNING.equals(target.toolStatus())) {
+                Message updated = target.withText(target.text() + "\n—— 已手动终止 ——").withStatus(Message.ToolStatus.STATUS_BG_KILLED);
                 loadedMessages.set(i, updated);
                 touch();
                 return updated;
