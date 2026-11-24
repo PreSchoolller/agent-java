@@ -2,8 +2,6 @@ package io.github.preschoolller.agentjava.frontend.gui;
 
 import io.github.preschoolller.agentjava.spi.enums.AgentMode;
 import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
-import io.github.preschoolller.agentjava.core.enums.SessionStatus;
-import io.github.preschoolller.agentjava.core.enums.ToolState;
 import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
 import io.github.preschoolller.agentjava.core.records.MessageView;
 import io.github.preschoolller.agentjava.core.records.ModelView;
@@ -11,10 +9,8 @@ import io.github.preschoolller.agentjava.core.records.ProfileView;
 import io.github.preschoolller.agentjava.core.records.ProfileView;
 import io.github.preschoolller.agentjava.core.records.SessionSummary;
 import io.github.preschoolller.agentjava.core.records.SessionView;
-import io.github.preschoolller.agentjava.core.records.ToolView;
 import io.github.preschoolller.agentjava.core.records.UsageView;
-import io.github.preschoolller.agentjava.core.repository.Conversation;
-import io.github.preschoolller.agentjava.core.repository.Message;
+import io.github.preschoolller.agentjava.frontend.Message;
 import io.github.preschoolller.agentjava.frontend.AppPreferences;
 import io.github.preschoolller.agentjava.frontend.AppSettingsPreferences;
 import io.github.preschoolller.agentjava.frontend.ViewAdapter;
@@ -242,7 +238,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
     /** 展开全文的用户消息（长内容折叠，主流聊天做法）：按消息同一性记，内存态不落盘 */
     private final Set<Message> expandedUserTexts = new HashSet<>();
     /** 各会话的输入框草稿：切会话保留各自的未发送文本，也防 A 会话的草稿误发进 B。
-     *  输入区 DocumentListener 实时写、showConversation 按会话取；内存态不落盘 */
+     *  输入区 DocumentListener 实时写、showSession 按会话取；内存态不落盘 */
     private final Map<String, String> draftsByConversation = new HashMap<>();
     /** 会话内搜索（Ctrl+F）：搜索条 + 消息级匹配。匹配按卡片下标记，定位滚到卡片
      *  （骨架占位就有 bounds，滚动顺带触发窗口化重物化）+ 描边闪烁 */
@@ -953,15 +949,6 @@ public class Window extends JFrame implements Sidebar.Sessions {
         return waterfallPanel;
     }
 
-    /** 往当前对话追加一张用户输入卡片（只渲染；落库由 core 负责） */
-    public void addUserMessage(String text) {
-        if (displayedConvId == null) {
-            return;
-        }
-        showUserMessage(displayedConvId,
-                new Message(Conversation.ROLE_USER, text, System.currentTimeMillis()));
-    }
-
     /**
      * 渲染一条**已落库**的用户消息：只建卡，不写仓库（core 已经写了）。
      * 后台会话不出卡，切回该会话时按落库内容重建。须在 EDT 上调用。
@@ -981,7 +968,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
      */
     public AiStream addAiMessage(String conversationId, String text) {
         return openAiCard(conversationId,
-                new Message(Conversation.ROLE_AI, text, System.currentTimeMillis()));
+                new Message(Message.ROLE_AI, text, System.currentTimeMillis()));
     }
 
     /** 渲染一条 AI 消息：只建卡与流句柄，不写仓库。须在 EDT 上调用。 */
@@ -1027,7 +1014,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
 
     /** 指定会话的版本（并行生成时目标会话可能不在前台）：非显示中的会话只建句柄，卡片等切回时重绑上屏 */
     public ToolCallHandle addToolCall(String conversationId, String toolName, String argsSummary, String callId) {
-        return openToolCard(conversationId, new Message(Conversation.ROLE_TOOL, "",
+        return openToolCard(conversationId, new Message(Message.ROLE_TOOL, "",
                 System.currentTimeMillis(), toolName, argsSummary, "running", callId));
     }
 
@@ -1043,29 +1030,6 @@ public class Window extends JFrame implements Sidebar.Sessions {
         return handle;
     }
 
-    /** 后台任务完成后的重绘：工具卡换成新记录，注入的用户消息补一张卡。两条都必须已落库。 */
-    public void showBackgroundDone(String conversationId, Message toolMessage, Message userMessage) {
-        if (!conversationId.equals(displayedConvId)) {
-            return; // 后台会话不出卡，切回时按落库内容重建
-        }
-        if (toolMessage != null && toolMessage.callId() != null) {
-            for (MessageCard card : messageCards) {
-                if (card.tool && toolMessage.callId().equals(card.message.callId())) {
-                    expandedToolCalls.add(toolKey(card.message)); // 完成即自动展开
-                    card.peekResult = null;
-                    card.message = toolMessage;
-                    rebuildCard(card);
-                    break;
-                }
-            }
-        }
-        if (userMessage != null) {
-            insertMessageCard(userMessage);
-        }
-        updateMaterialization();
-        scrollToBottom();
-    }
-
     /**
      * 工具卡的展示终态：与后端协议文案一致（后台提交成功/失败、前台被终止），
      * 只影响徽标，不参与任何落库判定。
@@ -1077,14 +1041,14 @@ public class Window extends JFrame implements Sidebar.Sessions {
         if ("bash".equals(toolName)) {
             if (result.startsWith("background task submitted successfully")
                     && arguments != null && arguments.replace(" ", "").contains("\"background\":true")) {
-                return Conversation.STATUS_BG_RUNNING;
+                return Message.STATUS_BG_RUNNING;
             }
             if (result.startsWith("background task submitted failed")) {
                 return "error";
             }
         }
         if (result.contains("(已手动终止)")) {
-            return Conversation.STATUS_BG_KILLED;
+            return Message.STATUS_BG_KILLED;
         }
         return "ok";
     }
@@ -1242,11 +1206,6 @@ public class Window extends JFrame implements Sidebar.Sessions {
         }
     }
 
-    /** 往指定会话追加一条错误通知（AI 身份消息，Markdown 渲染）；只画不写库。须在 EDT 上调用。 */
-    public void addNotifyMessage(String conversationId, String text) {
-        showNotice(conversationId, text);
-    }
-
     /**
      * 只画不落库的通知卡：内容由 core 决定，UI 不写仓库。
      * conversationId 为 null 时画到当前显示的会话上。
@@ -1255,7 +1214,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
         if (conversationId != null && !conversationId.equals(displayedConvId)) {
             return;
         }
-        Message message = new Message(Conversation.ROLE_AI, text, System.currentTimeMillis());
+        Message message = new Message(Message.ROLE_AI, text, System.currentTimeMillis());
         insertMessageCard(message);
         updateMaterialization();
         scrollToBottom();
@@ -1303,7 +1262,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
 
     /**
      * 标记某个会话的生成态（并行 agent 循环，每个会话独立）：发送/停止按钮、输入框置灰、
-     * 重新生成显隐永远跟随当前显示的会话，切换会话时由 showConversation 重新刷。
+     * 重新生成显隐永远跟随当前显示的会话，切换会话时由 refreshGeneratingUi 重新刷。
      */
     public void setConversationGenerating(String conversationId, boolean value) {
         if (value) {
@@ -1354,7 +1313,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
 
     /** 更新底部用量胶囊（tokens 输入/输出 · 耗时）：一旦有过数据就常驻显示，切生成态/回到
      *  就绪都不清空，直到下一轮用量覆盖。空文本忽略（没有"没有数据"的中间态可画）。
-     *  数据源是会话上的 Conversation.Usage：Main 每轮写入会话并在这里同步显示，切会话走 restoreUsagePill */
+     *  数据源是 core 投影里的 UsageView：Main 每轮写入会话并在这里同步显示，切会话走 restoreUsagePill */
     public void setUsageInfo(String text) {
         if (text == null || text.isBlank()) {
             return;
@@ -1596,7 +1555,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
     /** 把一条消息的卡片骨架插到瀑布流末尾：用户卡片定宽靠右、AI 卡片通栏，返回卡片记录。
      * 内容组件不在这里建（窗口化），由 updateMaterialization 决定哪些卡片 fillCard */
     private MessageCard insertMessageCard(Message message) {
-        boolean user = Conversation.ROLE_USER.equals(message.role());
+        boolean user = Message.ROLE_USER.equals(message.role());
         boolean tool = message.isToolCall();
         MarkdownPane markdown = null;
         ThinkingPane thinking = null;
@@ -1800,9 +1759,9 @@ public class Window extends JFrame implements Sidebar.Sessions {
         boolean running = "running".equals(message.toolStatus());
         boolean error = "error".equals(message.toolStatus());
         boolean interrupted = "interrupted".equals(message.toolStatus()); // 崩溃残留（P0-5），灰态
-        boolean bgRunning = Conversation.STATUS_BG_RUNNING.equals(message.toolStatus());
-        boolean bgDone = Conversation.STATUS_BG_DONE.equals(message.toolStatus());
-        boolean bgKilled = Conversation.STATUS_BG_KILLED.equals(message.toolStatus());
+        boolean bgRunning = Message.STATUS_BG_RUNNING.equals(message.toolStatus());
+        boolean bgDone = Message.STATUS_BG_DONE.equals(message.toolStatus());
+        boolean bgKilled = Message.STATUS_BG_KILLED.equals(message.toolStatus());
         // 待确认（P0-4 权限确认卡）：卡片手里攥着一个还没被点的审批 future。
         // 徽标沿用三态色位，警示色比"失败"收敛；旁边挂"允许/拒绝"两按钮
         boolean pending = running && messageCard.approval != null && !messageCard.approval.isDone();
@@ -1919,9 +1878,9 @@ public class Window extends JFrame implements Sidebar.Sessions {
         if (card.peekResult != null) {
             return TOOL_RESULT_CAP;
         }
-        boolean bg = Conversation.STATUS_BG_RUNNING.equals(m.toolStatus())
-                || Conversation.STATUS_BG_DONE.equals(m.toolStatus())
-                || Conversation.STATUS_BG_KILLED.equals(m.toolStatus());
+        boolean bg = Message.STATUS_BG_RUNNING.equals(m.toolStatus())
+                || Message.STATUS_BG_DONE.equals(m.toolStatus())
+                || Message.STATUS_BG_KILLED.equals(m.toolStatus());
         if (!bg || expandedBgResults.contains(toolKey(m))) {
             return TOOL_RESULT_CAP;
         }
@@ -2863,7 +2822,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
                 }
             }
         });
-        // 草稿按会话暂存：输入内容一变就写当前会话的键，切会话由 showConversation 取回；
+        // 草稿按会话暂存：输入内容一变就写当前会话的键，切会话由 showSession 取回；
         // 同一事件顺带重算输入框高度（随内容长高/回落/触帽）
         inputTextArea.getDocument().addDocumentListener(new DocumentListener() {
             @Override
@@ -3179,7 +3138,7 @@ public class Window extends JFrame implements Sidebar.Sessions {
         SettingsDialog dialog = new SettingsDialog(this, app, prefs);
         dialog.setVisible(true);
         if (dialog.isSaved()) {
-            retheme(); // 主题/字号等变化后按新设置整体重建（内部含 showConversation）
+            retheme(); // 主题/字号等变化后按新设置整体重建（内部含 showSession）
         }
     }
 }

@@ -7,9 +7,7 @@ import io.github.preschoolller.agentjava.core.records.ModelView;
 import io.github.preschoolller.agentjava.core.records.ProfileView;
 import io.github.preschoolller.agentjava.core.records.ToolView;
 import io.github.preschoolller.agentjava.core.records.UsageView;
-import io.github.preschoolller.agentjava.core.repository.Conversation;
 import io.github.preschoolller.agentjava.core.repository.McpServer;
-import io.github.preschoolller.agentjava.core.repository.Message;
 import io.github.preschoolller.agentjava.core.repository.ModelMeta;
 import io.github.preschoolller.agentjava.core.repository.Profile;
 
@@ -32,9 +30,9 @@ public final class ViewAdapter {
             return null;
         }
         String role = switch (view.role()) {
-            case USER -> Conversation.ROLE_USER;
-            case ASSISTANT -> Conversation.ROLE_AI;
-            case TOOL_RESULT -> Conversation.ROLE_TOOL;
+            case USER -> Message.ROLE_USER;
+            case ASSISTANT -> Message.ROLE_AI;
+            case TOOL_RESULT -> Message.ROLE_TOOL;
         };
         ToolView tool = view.tool();
         if (tool == null) {

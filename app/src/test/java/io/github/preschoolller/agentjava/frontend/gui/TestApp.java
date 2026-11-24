@@ -6,10 +6,8 @@ import io.github.preschoolller.agentjava.core.enums.ReasoningEffort;
 import io.github.preschoolller.agentjava.core.enums.Role;
 import io.github.preschoolller.agentjava.core.enums.SessionStatus;
 import io.github.preschoolller.agentjava.core.enums.ToolState;
-import io.github.preschoolller.agentjava.core.events.StateEvent;
 import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
 import io.github.preschoolller.agentjava.core.interfaces.EventListener;
-import io.github.preschoolller.agentjava.core.interfaces.HostRequests;
 import io.github.preschoolller.agentjava.core.records.McpServerView;
 import io.github.preschoolller.agentjava.core.records.MessageView;
 import io.github.preschoolller.agentjava.core.records.ProfileView;
@@ -19,49 +17,180 @@ import io.github.preschoolller.agentjava.core.records.Snapshot;
 import io.github.preschoolller.agentjava.core.records.ToolView;
 import io.github.preschoolller.agentjava.core.records.UsageView;
 import io.github.preschoolller.agentjava.core.repository.AppSettings;
-import io.github.preschoolller.agentjava.core.repository.Conversation;
-import io.github.preschoolller.agentjava.core.repository.Message;
 import io.github.preschoolller.agentjava.core.repository.McpServer;
 import io.github.preschoolller.agentjava.core.repository.Profile;
+import io.github.preschoolller.agentjava.frontend.Message;
 import io.github.preschoolller.agentjava.frontend.ViewAdapter;
-import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.UUID;
 
 /**
- * GUI 测试用的 AgentApp 桩：数据由 {@link ConversationStore} 造，读出口一律转成投影。
- * 只实现测试需要的行为，命令直接作用于 store（等价于一个最小的内存内核）。
+ * GUI 测试用的 AgentApp 桩：自带一套内存会话模型，读出口一律转成投影。
+ *
+ * <p>夹具入口沿用 {@code newConversation / appendMessage / getConversations / getActive} 这套名字：
+ * 用例造完数据后由 {@link Window} 通过 {@code AgentApp} 读回。生产代码不依赖本类。
  */
 public final class TestApp implements AgentApp {
 
-    private final ConversationStore store;
-    private long seq;
+    /** 测试会话：消息、标题、工作区、模型与输入区偏好都放这里 */
+    public static final class Session {
 
-    public TestApp(ConversationStore store) {
-        this.store = store;
+        private final String id = UUID.randomUUID().toString();
+        private final List<Message> messages = new ArrayList<>();
+        private String title;
+        private String workspace;
+        private boolean pinned;
+        private long updatedAt = System.currentTimeMillis();
+        private String modelName;
+        private String modelProfile;
+        private ReasoningEffort effort;
+        private AgentMode mode;
+        private UsageView usage;
+
+        public String getId() {
+            return id;
+        }
+
+        public String getTitle() {
+            return title;
+        }
+
+        public void setTitle(String title) {
+            this.title = title;
+        }
+
+        public String getWorkspace() {
+            return workspace;
+        }
+
+        public void setWorkspace(String workspace) {
+            this.workspace = workspace;
+        }
+
+        public boolean isPinned() {
+            return pinned;
+        }
+
+        public long getUpdatedAt() {
+            return updatedAt;
+        }
+
+        public List<Message> getMessages() {
+            return List.copyOf(messages);
+        }
+
+        public UsageView getUsage() {
+            return usage;
+        }
+
+        public void setUsage(UsageView usage) {
+            this.usage = usage;
+        }
     }
 
-    public ConversationStore store() {
-        return store;
+    private final List<Session> sessions = new ArrayList<>();
+    private String activeId;
+    private long seq;
+
+    // ---------- 夹具入口 ----------
+
+    public Session newConversation() {
+        return newConversation(null);
+    }
+
+    public Session newConversation(String workspace) {
+        Session session = new Session();
+        session.setWorkspace(workspace);
+        sessions.add(session);
+        activeId = session.getId();
+        return session;
+    }
+
+    public List<Session> getConversations() {
+        return List.copyOf(sessions);
+    }
+
+    /** 当前会话；没有会话时建一段空的（侧栏"至少有一个会话"的展示语义） */
+    public Session getActive() {
+        Session active = getConversation(activeId);
+        if (active != null) {
+            return active;
+        }
+        if (sessions.isEmpty()) {
+            return newConversation();
+        }
+        active = sessions.get(0);
+        activeId = active.getId();
+        return active;
+    }
+
+    public Session getConversation(String sessionId) {
+        for (Session session : sessions) {
+            if (session.getId().equals(sessionId)) {
+                return session;
+            }
+        }
+        return null;
+    }
+
+    public Message appendMessage(String sessionId, String role, String text) {
+        Session session = require(sessionId);
+        Message message = new Message(role, text, System.currentTimeMillis());
+        session.messages.add(message);
+        session.updatedAt = message.time();
+        return message;
+    }
+
+    /** 追加一条工具消息（工具卡断言用） */
+    public Message appendToolCall(String sessionId, String toolName, String args, String callId) {
+        Session session = require(sessionId);
+        Message message = new Message(Message.ROLE_TOOL, "", System.currentTimeMillis(),
+                toolName, args, Message.STATUS_RUNNING, callId);
+        session.messages.add(message);
+        session.updatedAt = message.time();
+        return message;
+    }
+
+    public void setPinned(String sessionId, boolean pinned) {
+        Session session = getConversation(sessionId);
+        if (session != null) {
+            session.pinned = pinned;
+        }
+    }
+
+    public void switchTo(String sessionId) {
+        if (getConversation(sessionId) != null) {
+            activeId = sessionId;
+        }
+    }
+
+    private Session require(String sessionId) {
+        Session session = getConversation(sessionId);
+        if (session == null) {
+            throw new IllegalArgumentException("会话不存在: " + sessionId);
+        }
+        return session;
     }
 
     // ---------- AppView ----------
 
     @Override
     public Snapshot snapshot() {
-        List<SessionSummary> sessions = new ArrayList<>();
-        for (Conversation conversation : store.getConversations()) {
-            sessions.add(summary(conversation));
+        List<SessionSummary> summaries = new ArrayList<>();
+        for (Session session : sessions) {
+            summaries.add(new SessionSummary(session.getId(), session.getTitle(), session.isPinned(),
+                    session.getWorkspace(), SessionStatus.IDLE, session.getUpdatedAt()));
         }
-        return new Snapshot(seq, List.copyOf(sessions));
+        return new Snapshot(seq, List.copyOf(summaries));
     }
 
     @Override
     public SessionView session(String sessionId) {
-        Conversation conversation = store.getConversation(sessionId);
-        return conversation == null ? null : view(conversation);
+        Session session = getConversation(sessionId);
+        return session == null ? null : view(session);
     }
 
     @Override
@@ -74,55 +203,75 @@ public final class TestApp implements AgentApp {
     @Override
     public CreateSessionResult createSession(String workspace, String reuseIfEmptySessionId) {
         if (reuseIfEmptySessionId != null) {
-            Conversation existing = store.getConversation(reuseIfEmptySessionId);
-            if (existing != null && existing.isKnownEmpty()) {
+            Session existing = getConversation(reuseIfEmptySessionId);
+            if (existing != null && existing.getMessages().isEmpty()) {
                 existing.setWorkspace(workspace);
-                store.switchTo(existing.getId());
+                activeId = existing.getId();
                 return new CreateSessionResult(existing.getId(), true);
             }
         }
-        Conversation created = store.newConversation(workspace);
-        store.switchTo(created.getId());
-        return new CreateSessionResult(created.getId(), false);
+        return new CreateSessionResult(newConversation(workspace).getId(), false);
     }
 
     @Override
     public String ensureSession(String sessionId, String workspace) {
-        return store.getOrCreate(sessionId, workspace).getId();
+        Session session = getConversation(sessionId);
+        if (session == null) {
+            session = new Session();
+            session.setWorkspace(workspace);
+            sessions.add(session);
+        }
+        return session.getId();
     }
 
     @Override
     public void renameSession(String sessionId, String title) {
-        store.rename(sessionId, title);
+        Session session = getConversation(sessionId);
+        if (session != null) {
+            session.setTitle(title);
+        }
     }
 
     @Override
     public void pinSession(String sessionId, boolean pinned) {
-        store.setPinned(sessionId, pinned);
+        setPinned(sessionId, pinned);
     }
 
     @Override
     public void deleteSession(String sessionId) {
-        store.remove(sessionId);
+        sessions.removeIf(session -> session.getId().equals(sessionId));
+        if (sessionId != null && sessionId.equals(activeId)) {
+            activeId = sessions.isEmpty() ? null : sessions.get(0).getId();
+        }
     }
 
     @Override
     public void deleteSessionIfEmpty(String sessionId) {
-        Conversation conversation = store.getConversation(sessionId);
-        if (conversation != null && conversation.isKnownEmpty()) {
-            store.remove(sessionId);
+        Session session = getConversation(sessionId);
+        if (session != null && session.getMessages().isEmpty()) {
+            deleteSession(sessionId);
         }
     }
 
     @Override
     public String forkSession(String sessionId, String fromMessageId) {
-        Conversation forked = store.fork(sessionId, fromMessageId);
-        return forked == null ? null : forked.getId();
+        Session source = getConversation(sessionId);
+        if (source == null) {
+            return null;
+        }
+        Session forked = newConversation(source.getWorkspace());
+        for (Message message : source.getMessages()) {
+            forked.messages.add(message);
+            if (message.messageId().equals(fromMessageId)) {
+                return forked.getId();
+            }
+        }
+        return null;
     }
 
     @Override
     public void submit(String sessionId, String clientMsgId, String text) {
-        // 测试只验 UI：由用例直接调 addUserMessage/openAiCard，这里不模拟整条链
+        // 测试只验 UI：用例直接调 addAiMessage/openAiCard，这里不模拟整条链
     }
 
     @Override
@@ -137,33 +286,34 @@ public final class TestApp implements AgentApp {
 
     @Override
     public void setWorkspace(String sessionId, String workspace) {
-        Conversation conversation = store.getConversation(sessionId);
-        if (conversation != null) {
-            conversation.setWorkspace(workspace);
+        Session session = getConversation(sessionId);
+        if (session != null) {
+            session.setWorkspace(workspace);
         }
     }
 
     @Override
     public void setModel(String sessionId, String profileName, String modelName) {
-        Conversation conversation = store.getConversation(sessionId);
-        if (conversation != null) {
-            conversation.setModelOption(profileName, modelName);
+        Session session = getConversation(sessionId);
+        if (session != null) {
+            session.modelProfile = profileName;
+            session.modelName = modelName;
         }
     }
 
     @Override
     public void setReasoningEffort(String sessionId, ReasoningEffort effort) {
-        Conversation conversation = store.getConversation(sessionId);
-        if (conversation != null) {
-            conversation.setDialogPreferences(ViewAdapter.spiEffort(effort), conversation.getAgentMode());
+        Session session = getConversation(sessionId);
+        if (session != null) {
+            session.effort = effort;
         }
     }
 
     @Override
     public void setAgentMode(String sessionId, AgentMode mode) {
-        Conversation conversation = store.getConversation(sessionId);
-        if (conversation != null) {
-            conversation.setDialogPreferences(conversation.getReasoningEffort(), ViewAdapter.spiMode(mode));
+        Session session = getConversation(sessionId);
+        if (session != null) {
+            session.mode = mode;
         }
     }
 
@@ -186,9 +336,8 @@ public final class TestApp implements AgentApp {
     public void answer(String requestId, Answer answer) {
     }
 
-    // ---------- RuntimeConfig ----------
+    // ---------- RuntimeConfig：代理到 AppSettings，等价于一个最小内核 ----------
 
-    /** 配置面直接代理到 AppSettings：测试用它造数据、再用投影读回，等价于一个最小内核 */
     @Override
     public List<ProfileView> profiles() {
         List<ProfileView> views = new ArrayList<>();
@@ -289,6 +438,15 @@ public final class TestApp implements AgentApp {
     }
 
     @Override
+    public String toolProperty(String toolId, String key) {
+        return null;
+    }
+
+    @Override
+    public void setToolProperty(String toolId, String key, String value) {
+    }
+
+    @Override
     public String pluginInput(String pluginName) {
         return AppSettings.get().getPersistentPluginInput(pluginName);
     }
@@ -296,15 +454,6 @@ public final class TestApp implements AgentApp {
     @Override
     public void setPluginInput(String pluginName, String input) {
         AppSettings.get().setPersistentPluginInput(pluginName, input);
-    }
-
-    @Override
-    public String toolProperty(String toolId, String key) {
-        return null;
-    }
-
-    @Override
-    public void setToolProperty(String toolId, String key, String value) {
     }
 
     @Override
@@ -319,16 +468,11 @@ public final class TestApp implements AgentApp {
 
     // ---------- 投影转换 ----------
 
-    private SessionSummary summary(Conversation conversation) {
-        return new SessionSummary(conversation.getId(), conversation.getTitle(), conversation.isPinned(),
-                conversation.getWorkspace(), SessionStatus.IDLE, conversation.getUpdatedAt());
-    }
-
-    private SessionView view(Conversation conversation) {
+    private SessionView view(Session session) {
         List<MessageView> messages = new ArrayList<>();
-        for (Message message : conversation.getMessages()) {
-            Role role = Conversation.ROLE_USER.equals(message.role()) ? Role.USER
-                    : Conversation.ROLE_TOOL.equals(message.role()) ? Role.TOOL_RESULT : Role.ASSISTANT;
+        for (Message message : session.getMessages()) {
+            Role role = Message.ROLE_USER.equals(message.role()) ? Role.USER
+                    : Message.ROLE_TOOL.equals(message.role()) ? Role.TOOL_RESULT : Role.ASSISTANT;
             ToolView tool = message.isToolCall()
                     ? new ToolView(message.callId(), message.toolName(), message.toolArgs(),
                     toolState(message.toolStatus()), false)
@@ -336,14 +480,9 @@ public final class TestApp implements AgentApp {
             messages.add(new MessageView(message.messageId(), null, role, message.text(),
                     message.thinking(), message.time(), MessageState.CONFIRMED, tool));
         }
-        Conversation.Usage usage = conversation.getUsage();
-        return new SessionView(conversation.getId(), conversation.getTitle(), conversation.getWorkspace(),
-                SessionStatus.IDLE, conversation.getModelName(), conversation.getModelProfile(),
-                ViewAdapter.coreEffort(conversation.getReasoningEffort()),
-                ViewAdapter.coreMode(conversation.getAgentMode()),
-                usage == null ? null : new UsageView(usage.inputTokens(), usage.outputTokens(),
-                        usage.elapsedSeconds()),
-                List.copyOf(messages));
+        return new SessionView(session.getId(), session.getTitle(), session.getWorkspace(),
+                SessionStatus.IDLE, session.modelName, session.modelProfile,
+                session.effort, session.mode, session.getUsage(), List.copyOf(messages));
     }
 
     private static ToolState toolState(String status) {
@@ -359,10 +498,5 @@ public final class TestApp implements AgentApp {
             case "bg-killed" -> ToolState.BG_KILLED;
             default -> ToolState.RUNNING;
         };
-    }
-
-    /** 事件构造辅助：用例需要发事件时用 */
-    public static StateEvent event(long seq, StateEvent body) {
-        return body;
     }
 }

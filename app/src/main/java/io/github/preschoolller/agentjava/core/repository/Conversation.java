@@ -62,9 +62,9 @@ public class Conversation {
     private final List<Message> messages = new ArrayList<>();
     /** 消息是否已在内存。新建/分叉出来的会话天然为 true；从索引装载的为 false，首次触达时经 loader 补齐 */
     private boolean loaded;
-    /** 单会话消息回读钩子（ConversationStore 装载索引时注入，消费一次即清空）；内存新建的会话为 null */
+    /** 单会话消息回读钩子（仓库装载索引时注入，消费一次即清空）；内存新建的会话为 null */
     private Supplier<List<Message>> loader;
-    /** 落盘钩子（ConversationStore 持有本对象时注入）：元数据级变更（setUsage）用它即写盘 */
+    /** 落盘钩子（仓库持有本对象时注入）：元数据级变更（setUsage）用它即写盘 */
     private Runnable saver;
 
     /** 装载索引用构造：只有元数据，消息等按需加载（attachLoader 注入回读钩子） */

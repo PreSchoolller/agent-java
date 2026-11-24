@@ -1,9 +1,7 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
 import io.github.preschoolller.agentjava.core.repository.AppSettings;
-import io.github.preschoolller.agentjava.core.repository.Conversation;
-import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
-import io.github.preschoolller.agentjava.core.repository.Message;
+import io.github.preschoolller.agentjava.frontend.Message;
 import io.github.preschoolller.agentjava.core.repository.ModelMeta;
 
 import org.junit.jupiter.api.AfterAll;
@@ -76,10 +74,11 @@ class WindowGuiTest {
     private static boolean gateAborted;
 
     /** 窗口挂在侧栏/主区监听后，store 操作必须进 EDT；窗口建起来之前随便（见用例 s01 前 @BeforeAll） */
-    private static ConversationStore store;
-    private static Conversation c1;
-    private static Conversation c2;
-    private static Conversation c3;
+    /** 夹具兼内核桩：造数据与读投影是同一个对象 */
+    private static TestApp store;
+    private static TestApp.Session c1;
+    private static TestApp.Session c2;
+    private static TestApp.Session c3;
     private static Window WINDOW;
     private static SettingsDialog dialogHolder;
     private static List<ModelMeta> oldMetas;
@@ -87,7 +86,6 @@ class WindowGuiTest {
     /** s06 钉模型目录的方案（测试环境的第一个方案；设置里已无活动方案概念） */
     private static String pinnedProfileName;
     private static String wsPath;
-    private static Path storePath;
 
     /** 审批/窄窗口段的 handle 跨 EDT 存放位（EDT 里创建，后续 edt 段收尾用） */
     private static final Window.ToolCallHandle[] APPROVAL_HOLDER = new Window.ToolCallHandle[1];
@@ -108,31 +106,30 @@ class WindowGuiTest {
         AppSettings.installForTest(dir.resolve("settings.properties"));
         // 截图配色固定浅色：开发者本机存过深色时回归图才有确定基线（写的是上面的临时配置）
         AppSettings.get().setUiTheme("light");
-        store = new ConversationStore(dir.resolve("shot.json"));
+        store = new TestApp();
         // —— 造两段会话（c1 六条消息让瀑布流溢出，滚动条才可见） ——
         c1 = store.newConversation();
-        store.appendMessage(c1.getId(), Conversation.ROLE_USER, "帮我看看这段代码有什么问题");
-        store.appendMessage(c1.getId(), Conversation.ROLE_AI,
+        store.appendMessage(c1.getId(), Message.ROLE_USER, "帮我看看这段代码有什么问题");
+        store.appendMessage(c1.getId(), Message.ROLE_AI,
                 "好的，请把代码贴出来。\n收到后我会逐段分析并给出修改建议，重点关注空指针风险、资源关闭顺序以及并发场景下的可见性问题，这几类问题在实际项目里最常见。");
-        store.appendMessage(c1.getId(), Conversation.ROLE_USER, "为什么并发场景下可见性会出问题？");
-        store.appendMessage(c1.getId(), Conversation.ROLE_AI,
+        store.appendMessage(c1.getId(), Message.ROLE_USER, "为什么并发场景下可见性会出问题？");
+        store.appendMessage(c1.getId(), Message.ROLE_AI,
                 "因为每个线程可能把共享变量缓存在自己的工作内存里，写回主内存的时机不确定，其他线程读到的可能是旧值。"
                         + "解决思路是使用 volatile、锁或者原子类来建立 happens-before 关系，保证一个线程的写对另一个线程立即可见。");
-        store.appendMessage(c1.getId(), Conversation.ROLE_USER, "volatile 能保证原子性吗？");
-        store.appendMessage(c1.getId(), Conversation.ROLE_AI,
+        store.appendMessage(c1.getId(), Message.ROLE_USER, "volatile 能保证原子性吗？");
+        store.appendMessage(c1.getId(), Message.ROLE_AI,
                 "不能。volatile 只保证可见性和禁止指令重排，像 i++ 这种复合操作还是需要原子类或锁。");
         c2 = store.newConversation();
-        store.appendMessage(c2.getId(), Conversation.ROLE_USER, "总结一下今天聊的内容");
-        store.appendMessage(c2.getId(), Conversation.ROLE_AI, "今天聊了前端布局的三点改动。");
+        store.appendMessage(c2.getId(), Message.ROLE_USER, "总结一下今天聊的内容");
+        store.appendMessage(c2.getId(), Message.ROLE_AI, "今天聊了前端布局的三点改动。");
         // c3：Markdown 渲染样例（6 号截图）
         c3 = store.newConversation();
-        store.appendMessage(c3.getId(), Conversation.ROLE_USER, "给我演示一下 Markdown 渲染");
-        store.appendMessage(c3.getId(), Conversation.ROLE_AI, SampleMd.SAMPLE_MD);
+        store.appendMessage(c3.getId(), Message.ROLE_USER, "给我演示一下 Markdown 渲染");
+        store.appendMessage(c3.getId(), Message.ROLE_AI, SampleMd.SAMPLE_MD);
         // 工作区弹窗段用（目录到 s17 才真正创建，那时确定时不会触发"是否创建"确认）
         wsPath = dir.resolve("ws-project").toString();
-        storePath = dir.resolve("shot.json");
         edt(() -> {
-            WINDOW = new Window("Agent", new TestApp(store));
+            WINDOW = new Window("Agent", store);
             WINDOW.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
             // 尺寸/位置由 Window 按设置恢复——设置已隔离到临时文件（首跑默认 1280×720 居中，
             // 回归尺寸只写临时文件，不碰用户真实配置）
@@ -437,7 +434,7 @@ class WindowGuiTest {
     void s09_toolCard() throws Exception {
         // —— agent 工具调用卡（契约：addToolCall(名, 参数摘要) → appendArgs(增量) 流式显示 → finish(结果, 是否成功, 完整参数)） ——
         // 截图 16：一张运行中只显示了一半参数 + 一张完成；跑完断言落库与落盘往返
-        Conversation[] toolConvHolder = new Conversation[1];
+        TestApp.Session[] toolConvHolder = new TestApp.Session[1];
         edt(() -> toolConvHolder[0] = store.newConversation());
         Thread.sleep(1000); // fireChanged 已把主区切到新会话
         Window.ToolCallHandle[] toolHolder = new Window.ToolCallHandle[1];
@@ -649,9 +646,9 @@ class WindowGuiTest {
     void s14_longConversationWindowing() throws Exception {
         // —— 长会话窗口化（P2-2）：300 条消息，卡片全量占位、只物化视口附近的组件 ——
         // 分批灌入让窗口保持响应，避免整块 EDT 长时间冻结（store 操作已挂在窗口监听，全部进 EDT）
-        Conversation[] c4Holder = new Conversation[1];
+        TestApp.Session[] c4Holder = new TestApp.Session[1];
         edt(() -> c4Holder[0] = store.newConversation());
-        Conversation c4 = c4Holder[0];
+        TestApp.Session c4 = c4Holder[0];
         for (int from = 0; from < 300; from += 50) {
             final int base = from;
             edt(() -> {
@@ -660,7 +657,7 @@ class WindowGuiTest {
                             ? "第 " + i + " 问：这段文字用来撑出一条足够折行的用户消息，长度比一行长不少，"
                                     + "验证窗口化下卡片高度测量依然正确。"
                             : "第 " + i + " 答：**加粗**与`行内代码`混排。\n\n- 列表项一\n- 列表项二\n\n> 引用一下\n\n第二段正文。";
-                    store.appendMessage(c4.getId(), i % 2 == 0 ? Conversation.ROLE_USER : Conversation.ROLE_AI, text);
+                    store.appendMessage(c4.getId(), i % 2 == 0 ? Message.ROLE_USER : Message.ROLE_AI, text);
                 }
             });
             Thread.sleep(30);
@@ -960,17 +957,6 @@ class WindowGuiTest {
             assertNotNull(WINDOW.getSelectedEffort(), "输入区默认思考强度非空");
             assertNotNull(WINDOW.getSelectedMode(), "输入区默认权限模式非空");
         });
-    }
-
-    /** 当前活跃会话的最后一条消息（工具卡/流式落库断言用） */
-    private static Message lastMessage() {
-        List<Message> messages = store.getActive().getMessages();
-        return messages.get(messages.size() - 1);
-    }
-
-    /** 重新读磁盘上的 shot.json（落盘往返断言用） */
-    private static ConversationStore reload() {
-        return new ConversationStore(storePath);
     }
 
     // —— 悬停/点击/截图等 UI 断言帮助方法（原 Shot.java 一字未动平移） ——

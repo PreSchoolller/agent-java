@@ -1,9 +1,5 @@
-package io.github.preschoolller.agentjava.frontend.store;
+package io.github.preschoolller.agentjava.core.repository;
 
-import io.github.preschoolller.agentjava.core.repository.AppSettings;
-import io.github.preschoolller.agentjava.core.repository.McpServer;
-import io.github.preschoolller.agentjava.core.repository.ModelMeta;
-import io.github.preschoolller.agentjava.core.repository.Profile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

@@ -1,8 +1,5 @@
-package io.github.preschoolller.agentjava.frontend.store;
+package io.github.preschoolller.agentjava.core.repository;
 
-import io.github.preschoolller.agentjava.core.repository.Conversation;
-import io.github.preschoolller.agentjava.core.repository.JsonKit;
-import io.github.preschoolller.agentjava.core.repository.Message;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;
 import org.junit.jupiter.api.Order;
@@ -23,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 持久化往返单元测试（原 foragent/tools/Shot.java 的 PERSIST 段平移，逐条保留原断言文案）。
- * 纯模型操作不涉及 UI；临时目录整个类共享，各用例靠重新从磁盘读 store 承接上一步的落盘状态。
+ * 纯模型操作不涉及 UI；临时目录整个类共享，各用例靠重新从磁盘读仓库承接上一步的落盘状态。
  */
 @TestMethodOrder(OrderAnnotation.class)
 class PersistenceTest {
@@ -47,20 +44,19 @@ class PersistenceTest {
     @Order(1)
     void t01_roundTripTrimAndSessionFiles() throws Exception {
         // —— 持久化往返（含特殊字符）+ 删尾消息 ——
-        ConversationStore first = new ConversationStore(historyFile());
+        ConversationRepository first = new ConversationRepository(historyFile());
         convId = first.newConversation().getId();
         first.appendMessage(convId, Conversation.ROLE_USER, "带\"引号\"、\n换行、\t制表和中文✓的消息");
         first.appendMessage(convId, Conversation.ROLE_AI, "回复");
         first.appendMessage(convId, Conversation.ROLE_AI, "将被删掉的旧回答");
         assertEquals("将被删掉的旧回答", first.removeLastMessage(convId).text(), "删尾返回值");
-        assertEquals(2, first.getActive().getMessages().size(), "删尾后消息数");
+        assertEquals(2, first.getConversations().get(0).getMessages().size(), "删尾后消息数");
         first.rename(convId, "往返测试标题");
-        ConversationStore second = new ConversationStore(historyFile());
-        assertEquals(1, second.getConversations().size(), "会话数");
-        assertEquals(2, second.getActive().getMessages().size(), "消息数");
-        assertTrue(second.getActive().getMessages().get(0).text().contains("\n"), "换行保留");
-        assertEquals("回复", second.getActive().getMessages().get(1).text(), "删尾后落盘内容");
-        assertEquals("往返测试标题", second.getActive().getTitle(), "标题");
+        Conversation reloaded = new ConversationRepository(historyFile()).getConversations().get(0);
+        assertEquals(2, reloaded.getMessages().size(), "消息数");
+        assertTrue(reloaded.getMessages().get(0).text().contains("\n"), "换行保留");
+        assertEquals("回复", reloaded.getMessages().get(1).text(), "删尾后落盘内容");
+        assertEquals("往返测试标题", reloaded.getTitle(), "标题");
         // 主文件只存元数据：messages 字段已移除，消息全部由 sessions/<会话id> 单文件承载
         Object mainRoot = JsonKit.parse(Files.readString(historyFile()));
         for (Object item : (List<?>) ((Map<?, ?>) mainRoot).get("conversations")) {
@@ -74,51 +70,52 @@ class PersistenceTest {
     @Test
     @Order(2)
     void t02_fork() {
-        // 分叉：从 AI 回复分叉出新会话（含这条回复，从该状态继续），原会话不动，当前会话切到分叉
-        ConversationStore second = new ConversationStore(historyFile());
+        // 分叉：从 AI 回复分叉出新会话（含这条回复，从该状态继续），原会话不动，分叉会话排到列表首位
+        ConversationRepository second = new ConversationRepository(historyFile());
+        assertEquals(1, second.getConversations().size(), "会话数");
         Conversation original = byId(second, assertConvId());
         Message forkPoint = original.getMessages().get(1);
         Conversation forked = second.fork(original.getId(), forkPoint.messageId());
         assertNotNull(forked, "分叉返回新会话");
-        assertTrue(second.getActive().getId().equals(forked.getId()), "分叉后切到新会话");
+        assertEquals(forked.getId(), second.getConversations().get(0).getId(), "分叉会话排到列表首位");
         assertEquals(2, forked.getMessages().size(), "分叉会话消息数");
         assertEquals("带\"引号\"、\n换行、\t制表和中文✓的消息", forked.getMessages().get(0).text(), "分叉复制用户轮");
         assertEquals("回复", forked.getMessages().get(1).text(), "分叉含分叉点AI回复");
         assertEquals("往返测试标题（分叉）", forked.getTitle(), "分叉标题带来源");
         assertTrue(second.fork(forked.getId(), forked.getMessages().get(0).messageId()) == null, "用户消息不可分叉");
         assertEquals(2, second.getConversations().get(1).getMessages().size(), "原会话不动");
-        ConversationStore third = new ConversationStore(historyFile());
+        ConversationRepository third = new ConversationRepository(historyFile());
         assertEquals(2, third.getConversations().size(), "分叉落盘会话数");
-        assertTrue(third.getActive().getId().equals(forked.getId()), "分叉后活跃会话落盘");
+        assertEquals(forked.getId(), third.getConversations().get(0).getId(), "分叉会话落盘在首位");
     }
 
     @Test
     @Order(3)
     void t03_pinnedRoundTrip() {
         // 置顶落盘（v1 文件格式）：置顶→重读→取消置顶→重读（分叉后列表首位是新会话，按 id 找原会话）
-        ConversationStore pinnedStore = new ConversationStore(historyFile());
+        ConversationRepository pinnedStore = new ConversationRepository(historyFile());
         pinnedStore.setPinned(assertConvId(), true);
-        assertTrue(pinnedOf(new ConversationStore(historyFile()), assertConvId()), "置顶落盘");
-        new ConversationStore(historyFile()).setPinned(assertConvId(), false);
-        assertFalse(pinnedOf(new ConversationStore(historyFile()), assertConvId()), "取消置顶落盘");
+        assertTrue(pinnedOf(new ConversationRepository(historyFile()), assertConvId()), "置顶落盘");
+        new ConversationRepository(historyFile()).setPinned(assertConvId(), false);
+        assertFalse(pinnedOf(new ConversationRepository(historyFile()), assertConvId()), "取消置顶落盘");
     }
 
     @Test
     @Order(4)
     void t04_emptyConversationCleanupAndCrashRecovery() throws Exception {
-        // 删空活跃会话（重新生成走 removeLastMessage 删到最后一条）：主文件不再落盘，残留单文件清掉
-        ConversationStore fifth = new ConversationStore(historyFile());
-        String fifthId = fifth.getActive().getId();
+        // 删空会话（重新生成走 removeLastMessage 删到最后一条）：主文件不再落盘，残留单文件清掉
+        ConversationRepository fifth = new ConversationRepository(historyFile());
+        String fifthId = fifth.getConversations().get(0).getId();
         while (fifth.removeLastMessage(fifthId) != null) {
         }
         assertTrue(Files.notExists(dir.resolve("sessions").resolve(fifthId)), "删空会话清残留单文件");
         // 崩溃恢复（P0-5）：落盘的 running 工具消息（程序中途崩了/被杀的残留），重载后翻成"已中断"
         Files.createDirectories(dir.resolve("crash"));
-        ConversationStore crashFirst = new ConversationStore(dir.resolve("crash/history.json"));
+        ConversationRepository crashFirst = new ConversationRepository(dir.resolve("crash/history.json"));
         String crashId = crashFirst.newConversation().getId();
         crashFirst.appendToolCall(crashId, "read_file", "{}", "call_crash");
-        Message crashTool = new ConversationStore(dir.resolve("crash/history.json"))
-                .getActive().getMessages().get(0);
+        Message crashTool = new ConversationRepository(dir.resolve("crash/history.json"))
+                .getConversations().get(0).getMessages().get(0);
         assertTrue(crashTool.isToolCall() && "interrupted".equals(crashTool.toolStatus()),
                 "崩溃残留 running 翻成已中断");
     }
@@ -126,32 +123,25 @@ class PersistenceTest {
     @Test
     @Order(5)
     void t05_workspaceLifecycle() {
-        // 工作区（计划外）：会话绑定目录落盘往返；分叉沿用；默认（null）不写键；空会话复用时改绑
+        // 工作区（计划外）：会话绑定目录落盘往返；分叉沿用；默认（null）不写键
         String wsPath = dir.resolve("ws-project").toString();
-        ConversationStore wsStore = new ConversationStore(historyFile());
-        wsStore.newConversation(wsPath);
-        String activeId = wsStore.getActive().getId();
-        wsStore.appendMessage(activeId, Conversation.ROLE_USER, "工作区测试");
-        wsStore.appendMessage(activeId, Conversation.ROLE_AI, "好");
-        Conversation wsForked = wsStore.fork(activeId, wsStore.getActive().getMessages().get(1).messageId());
+        ConversationRepository wsStore = new ConversationRepository(historyFile());
+        Conversation wsConv = wsStore.newConversation(wsPath);
+        String wsId = wsConv.getId();
+        wsStore.appendMessage(wsId, Conversation.ROLE_USER, "工作区测试");
+        wsStore.appendMessage(wsId, Conversation.ROLE_AI, "好");
+        Conversation wsForked = wsStore.fork(wsId, wsConv.getMessages().get(1).messageId());
         assertTrue(wsPath.equals(wsForked.getWorkspace()), "分叉沿用工作区");
-        ConversationStore wsReread = new ConversationStore(historyFile());
+        ConversationRepository wsReread = new ConversationRepository(historyFile());
         assertTrue(wsReread.getConversations().stream()
                 .anyMatch(conversation -> wsPath.equals(conversation.getWorkspace())), "工作区落盘往返");
-        ConversationStore wsDefaultStore = new ConversationStore(
+        ConversationRepository wsDefaultStore = new ConversationRepository(
                 dir.resolve("ws-default").resolve("history.json"));
         Conversation defaultConv = wsDefaultStore.newConversation();
         assertNull(defaultConv.getWorkspace(), "默认工作区为 null");
         wsDefaultStore.appendMessage(defaultConv.getId(), Conversation.ROLE_USER, "x");
-        assertNull(new ConversationStore(dir.resolve("ws-default/history.json"))
-                .getActive().getWorkspace(), "默认工作区不落盘");
-        // 空会话复用时改绑：当前是没说过话的空会话，再 new 一次直接改工作区而不是新建
-        ConversationStore reuseStore = new ConversationStore(
-                dir.resolve("reuse").resolve("history.json"));
-        Conversation firstEmpty = reuseStore.newConversation();
-        Conversation reusedConv = reuseStore.newConversation(wsPath);
-        assertTrue(reusedConv.getId().equals(firstEmpty.getId()), "空会话复用");
-        assertTrue(wsPath.equals(reusedConv.getWorkspace()), "复用空会话改绑工作区");
+        assertNull(new ConversationRepository(dir.resolve("ws-default/history.json"))
+                .getConversations().get(0).getWorkspace(), "默认工作区不落盘");
     }
 
     @Test
@@ -159,17 +149,17 @@ class PersistenceTest {
     void t06_usageRoundTrip() {
         // 最近一轮用量落盘往返（胶囊恢复 + 以后上下文管理的数据源）：setUsage 即写盘，
         // 不搭消息保存的车——链末轮用量到得比消息落盘晚；没跑过轮的会话不写键
-        ConversationStore usageStore = new ConversationStore(historyFile());
+        ConversationRepository usageStore = new ConversationRepository(historyFile());
         String usageId = usageStore.newConversation().getId();
         usageStore.appendMessage(usageId, Conversation.ROLE_USER, "x"); // 先有消息（空会话从不进主文件）
-        usageStore.getActive().setUsage(new Conversation.Usage(120, 34, 2.05));
-        Conversation.Usage reloaded = byId(new ConversationStore(historyFile()), usageId).getUsage();
+        byId(usageStore, usageId).setUsage(new Conversation.Usage(120, 34, 2.05));
+        Conversation.Usage reloaded = byId(new ConversationRepository(historyFile()), usageId).getUsage();
         assertNotNull(reloaded, "用量落盘往返");
         assertEquals(120, reloaded.inputTokens(), "输入 token 往返");
         assertEquals(34, reloaded.outputTokens(), "输出 token 往返");
         assertEquals(2.05, reloaded.elapsedSeconds(), 1e-9, "耗时往返");
         assertEquals("tokens 输入 120 · 输出 34 · 耗时 2.05 秒", reloaded.label(), "胶囊文本格式");
-        assertNull(byId(new ConversationStore(historyFile()), assertConvId()).getUsage(), "没跑过轮的会话无用量");
+        assertNull(byId(new ConversationRepository(historyFile()), assertConvId()).getUsage(), "没跑过轮的会话无用量");
     }
 
     @Test
@@ -178,14 +168,14 @@ class PersistenceTest {
         // 上下文压缩水位线标记：落盘往返（role 字符串序列化，与普通消息同机制）+ 追加位置——
         // 压缩轮 appendUiMessages 的落库顺序是 标记→续轮 user→AI 占位卡（摘要稍后填进占位卡，
         // 必须落在标记之后，下轮请求构建按标记裁剪时摘要才在窗口里；标记前的历史不再发给模型）
-        ConversationStore markerStore = new ConversationStore(historyFile());
+        ConversationRepository markerStore = new ConversationRepository(historyFile());
         String markerId = markerStore.newConversation().getId();
         markerStore.appendMessage(markerId, Conversation.ROLE_USER, "被压缩的旧历史");
         markerStore.appendContextMarker(markerId);
         markerStore.appendMessage(markerId, Conversation.ROLE_USER, "续轮指令（压缩后合成）");
         markerStore.appendMessage(markerId, Conversation.ROLE_AI, "压缩摘要（本轮回复占位卡）");
         markerStore.appendMessage(markerId, Conversation.ROLE_USER, "标记后的新问题");
-        Conversation reloaded = byId(new ConversationStore(historyFile()), markerId);
+        Conversation reloaded = byId(new ConversationRepository(historyFile()), markerId);
         List<Message> messages = reloaded.getMessages();
         assertEquals(5, messages.size(), "标记消息与普通消息一起落盘");
         Message marker = messages.get(1);
@@ -205,8 +195,8 @@ class PersistenceTest {
         return convId;
     }
 
-    private static Conversation byId(ConversationStore store, String id) {
-        for (Conversation conversation : store.getConversations()) {
+    private static Conversation byId(ConversationRepository repository, String id) {
+        for (Conversation conversation : repository.getConversations()) {
             if (conversation.getId().equals(id)) {
                 return conversation;
             }
@@ -215,8 +205,8 @@ class PersistenceTest {
     }
 
     /** 在仓库里按 id 找会话的置顶标记（分叉后列表首位不一定是目标会话） */
-    private static boolean pinnedOf(ConversationStore store, String id) {
-        for (Conversation conversation : store.getConversations()) {
+    private static boolean pinnedOf(ConversationRepository repository, String id) {
+        for (Conversation conversation : repository.getConversations()) {
             if (conversation.getId().equals(id)) {
                 return conversation.isPinned();
             }

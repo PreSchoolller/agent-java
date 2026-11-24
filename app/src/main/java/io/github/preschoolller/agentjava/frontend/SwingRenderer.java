@@ -22,9 +22,6 @@ import io.github.preschoolller.agentjava.core.events.UserMessageRejected;
 import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
 import io.github.preschoolller.agentjava.core.interfaces.EventListener;
 import io.github.preschoolller.agentjava.core.interfaces.HostRequests;
-import io.github.preschoolller.agentjava.core.records.UsageView;
-import io.github.preschoolller.agentjava.core.repository.Conversation;
-import io.github.preschoolller.agentjava.core.repository.Message;
 import io.github.preschoolller.agentjava.frontend.gui.Window;
 
 import javax.swing.SwingUtilities;
@@ -135,7 +132,7 @@ public final class SwingRenderer implements EventListener {
                     callIds.put(key(sessionId, message.callId()), message.messageId());
                 }
             });
-        } else if (Conversation.ROLE_USER.equals(message.role())) {
+        } else if (Message.ROLE_USER.equals(message.role())) {
             later(() -> window.showUserMessage(sessionId, message));
         } else {
             later(() -> aiStreams.put(key(sessionId, message.messageId()),
