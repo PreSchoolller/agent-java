@@ -116,7 +116,7 @@ class PersistenceTest {
         crashFirst.appendToolCall(crashId, "read_file", "{}", "call_crash");
         Message crashTool = new ConversationRepository(dir.resolve("crash/history.json"))
                 .getConversations().get(0).getMessages().get(0);
-        assertTrue(crashTool.isToolCall() && "interrupted".equals(crashTool.toolStatus()),
+        assertTrue(crashTool.isToolCall() && Message.ToolStatus.INTERRUPTED.equals(crashTool.toolStatus()),
                 "崩溃残留 running 翻成已中断");
     }
 
@@ -186,7 +186,7 @@ class PersistenceTest {
                 && Conversation.ROLE_AI.equals(messages.get(3).role()), "标记后依次是续轮 user 与 AI 占位卡，摘要落在标记后");
         Object sessionRoot = JsonKit.parse(Files.readString(dir.resolve("sessions").resolve(markerId)));
         assertTrue(sessionRoot instanceof List<?> sessionList && sessionList.size() == 5
-                && Conversation.ROLE_CONTEXT_MANAGER.equals(((Map<?, ?>) sessionList.get(1)).get("role")),
+                && Message.Role.ROLE_CONTEXT_MANAGER.getRole().equals(((Map<?, ?>) sessionList.get(1)).get("role")),
                 "单会话文件承载标记");
     }
 
