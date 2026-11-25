@@ -193,11 +193,6 @@ public final class TestApp implements AgentApp {
         return session == null ? null : view(session);
     }
 
-    @Override
-    public List<SessionSummary> sessionsSince(long sinceSeq) {
-        return List.of();
-    }
-
     // ---------- AppCommands ----------
 
     @Override
@@ -334,6 +329,10 @@ public final class TestApp implements AgentApp {
 
     @Override
     public void answer(String requestId, Answer answer) {
+    }
+
+    @Override
+    public void cancelRequest(String requestId) {
     }
 
     // ---------- RuntimeConfig：代理到 AppSettings，等价于一个最小内核 ----------
@@ -482,7 +481,7 @@ public final class TestApp implements AgentApp {
         }
         return new SessionView(session.getId(), session.getTitle(), session.getWorkspace(),
                 SessionStatus.IDLE, session.modelName, session.modelProfile,
-                session.effort, session.mode, session.getUsage(), List.copyOf(messages));
+                session.effort, session.mode, session.getUsage(), List.copyOf(messages), 0);
     }
 
     private static ToolState toolState(String status) {

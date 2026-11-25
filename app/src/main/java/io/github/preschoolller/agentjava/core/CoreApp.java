@@ -29,15 +29,15 @@ public class CoreApp implements AgentApp {
     private final ConversationRepository conversationRepository;
 
     public CoreApp() {
-        this.appView = new AppViewImpl();
+        this.conversationRepository = new ConversationRepository();
         this.appCommands = new AppCommandsImpl();
         AppEventsImpl appEventsImpl = new AppEventsImpl();
         this.appEvents = appEventsImpl;
         HostRequestsImpl hostRequestsImpl = new HostRequestsImpl(appEventsImpl);
         this.hostRequests = hostRequestsImpl;
         this.runtimeConfig = new RuntimeConfigImpl();
-        this.conversationRepository = new ConversationRepository();
         this.agentLoop = new AgentLoop(conversationRepository, appEventsImpl, hostRequestsImpl);
+        this.appView = new AppViewImpl(conversationRepository, appEventsImpl, agentLoop);
     }
 
     // ----- AppCommands -----
@@ -146,11 +146,6 @@ public class CoreApp implements AgentApp {
     @Override
     public SessionView session(String sessionId) {
         return appView.session(sessionId);
-    }
-
-    @Override
-    public List<SessionSummary> sessionsSince(long seq) {
-        return appView.sessionsSince(seq);
     }
 
     // ----- RuntimeConfig -----

@@ -2,12 +2,13 @@ package io.github.preschoolller.agentjava.core;
 
 import io.github.preschoolller.agentjava.backend.context.ContextHandlerManager;
 import io.github.preschoolller.agentjava.backend.tool.ToolManager;
+import io.github.preschoolller.agentjava.core.converter.RecordConverter;
 import io.github.preschoolller.agentjava.core.enums.MessageState;
 import io.github.preschoolller.agentjava.core.enums.Role;
+import io.github.preschoolller.agentjava.core.enums.SessionStatus;
 import io.github.preschoolller.agentjava.core.enums.ToolState;
 import io.github.preschoolller.agentjava.core.events.CloseReason;
 import io.github.preschoolller.agentjava.core.events.HostRequestClosed;
-import io.github.preschoolller.agentjava.core.events.HostRequestOpened;
 import io.github.preschoolller.agentjava.core.events.MessageAppended;
 import io.github.preschoolller.agentjava.core.events.MessageCompleted;
 import io.github.preschoolller.agentjava.core.events.MessageDelta;
@@ -18,6 +19,7 @@ import io.github.preschoolller.agentjava.core.events.RoundCause;
 import io.github.preschoolller.agentjava.core.events.RoundFailed;
 import io.github.preschoolller.agentjava.core.events.RoundFinished;
 import io.github.preschoolller.agentjava.core.events.RoundStarted;
+import io.github.preschoolller.agentjava.core.events.StateEvent;
 import io.github.preschoolller.agentjava.core.events.ToolArgsDelta;
 import io.github.preschoolller.agentjava.core.events.ToolStateChanged;
 import io.github.preschoolller.agentjava.core.events.UserMessageRejected;
@@ -122,6 +124,18 @@ public class AgentLoop {
         startAgentLoop(conversation, regenerate, true);
     }
 
+    public Map<String, SessionStatus> getSessionStatus(List<Conversation> conversations) {
+        Map<String, SessionStatus> sessionStatusMap = new HashMap<>();
+        for (Conversation conversation : conversations) {
+            if (conversation == null) {
+                continue;
+            }
+            AtomicBoolean atomicBoolean = running.get(conversation.getId());
+            sessionStatusMap.put(conversation.getId(), atomicBoolean == null ? SessionStatus.IDLE : SessionStatus.RUNNING);
+        }
+        return sessionStatusMap;
+    }
+
     public void cancel(String conversationId) {
         LOG.info("cancelling conversation id {}", conversationId);
         AtomicBoolean atomicBoolean = running.get(conversationId);
@@ -134,10 +148,11 @@ public class AgentLoop {
     private static void addUserMessage(ConversationRepository repo, Conversation conversation,
                                        EventPublisher eventPublisher, String userInput) {
         String conversationId = conversation.getId();
-        Message userMessage = repo.appendMessage(conversationId, Message.Role.ROLE_USER, userInput);
-        eventPublisher.publish(seq -> new MessageAppended(conversationId,
-                buildMessageView(conversationId, userMessage, MessageState.CONFIRMED), seq));
-        eventPublisher.publish(seq -> new MessageCompleted(conversationId, userMessage.messageId(), seq));
+        eventPublisher.publish(seq -> {
+            Message userMessage = repo.appendMessage(conversationId, Message.Role.ROLE_USER, userInput);
+            return new MessageAppended(conversationId,
+                    buildMessageView(conversationId, userMessage, MessageState.CONFIRMED), seq);
+        });
     }
 
     /** 抢会话锁：抢到返回本链的取消令牌，该会话已在跑返回 null */
@@ -164,7 +179,8 @@ public class AgentLoop {
             return;
         }
         // 链配置在此冻结；每轮消息快照在 loop 内取，后台结果补偿续链在 loop 尾部另起
-        eventPublisher.publish(seq -> new RoundStarted(conversation.getId(), submit ? RoundCause.SUBMIT : RoundCause.BACKGROUND, seq));
+        RoundCause roundCause = regenerate ? RoundCause.REGENERATE : (submit ? RoundCause.SUBMIT : RoundCause.BACKGROUND);
+        eventPublisher.publish(seq -> new RoundStarted(conversation.getId(), roundCause, seq));
         loop(conversation, token, loopConfig);
     }
 
@@ -483,13 +499,18 @@ public class AgentLoop {
     public static boolean onBackGroundTaskDone(Conversation conversation, String callId, String output,
                                                ConversationRepository repo, EventPublisher eventPublisher) {
         String conversationId = conversation.getId();
-        Message updated = repo.completeBackGroundTask(conversationId, callId, output);
-        if (updated == null) {
+        StateEvent event = eventPublisher.publish(seq -> {
+            Message updated = repo.completeBackGroundTask(conversationId, callId, output);
+            if (updated == null) {
+                return null;
+            }
+            return new ToolStateChanged(conversationId, updated.messageId(), updated.callId(),
+                    RecordConverter.toToolState(updated.toolStatus()), updated.text(), updated.toolArgs(), false, seq);
+        });
+        if (!(event instanceof ToolStateChanged changed)) {
             return false;
         }
-        eventPublisher.publish(seq -> new ToolStateChanged(conversationId, updated.messageId(),
-                updated.callId(), buildToolState(updated), updated.text(), updated.toolArgs(), false, seq));
-        boolean killed = Message.ToolStatus.STATUS_BG_KILLED.equals(updated.toolStatus());
+        boolean killed = changed.state() == ToolState.BG_KILLED;
         String text = (killed ? "【后台任务已终止 id: " : "【后台任务完成 id: ") + callId + "】\n"
                 + (output == null || output.isBlank() ? "(无输出)" : output.strip());
         addUserMessage(repo, conversation, eventPublisher, text);
@@ -705,7 +726,7 @@ public class AgentLoop {
     }
 
     private static MessageView buildMessageView(String conId, Message message, MessageState messageState) {
-        Role role = buildRole(message);
+        Role role = RecordConverter.toRole(message.role());
         if (role == null) {
             return null;
         }
@@ -721,17 +742,8 @@ public class AgentLoop {
         if (message == null || message.isContextMarker() || !message.isToolCall()) {
             return null;
         }
-        return new ToolView(message.callId(), message.toolName(), message.toolArgs(), buildToolState(message), false);
-    }
-
-    private static Role buildRole(Message message) {
-        Role result = null;
-        switch (message.role()) {
-            case ROLE_USER -> result = Role.USER;
-            case ROLE_AI -> result = Role.ASSISTANT;
-            case ROLE_TOOL -> result = Role.TOOL_RESULT;
-        }
-        return result;
+        return new ToolView(message.callId(), message.toolName(), message.toolArgs(),
+                RecordConverter.toToolState(message.toolStatus()), false);
     }
 
     abstract class Flusher {
@@ -752,16 +764,18 @@ public class AgentLoop {
 
     class AiMessage extends Flusher {
         final String conId;
-        final Message message;
+        Message message;
         final StringBuffer thinking = new StringBuffer();
         final StringBuffer content =  new StringBuffer();
         private boolean thinkDone;
 
         AiMessage(String conId) {
             this.conId = conId;
-            message = repo.appendMessage(conId, Message.Role.ROLE_AI, "");
-            eventPublisher.publish(seq -> new MessageAppended(conId,
-                    buildMessageView(conId, message, MessageState.PENDING), seq));
+            eventPublisher.publish(seq -> {
+                message = repo.appendMessage(conId, Message.Role.ROLE_AI, "");
+                return new MessageAppended(conId,
+                        buildMessageView(conId, message, MessageState.PENDING), seq);
+            });
         }
 
         public void appendContent(String delta) {
@@ -787,8 +801,10 @@ public class AgentLoop {
 
         public void finish() {
             super.timer.cancel();
-            repo.updateMessageContent(conId, message.messageId(), content.toString(), thinking.toString());
-            eventPublisher.publish(seq -> new MessageCompleted(conId, message.messageId(), seq));
+            eventPublisher.publish(seq -> {
+                repo.updateMessageContent(conId, message.messageId(), content.toString(), thinking.toString());
+                return new MessageCompleted(conId, message.messageId(), seq);
+            });
         }
 
         @Override
@@ -806,8 +822,10 @@ public class AgentLoop {
 
         ToolCallHandle(String conversationId, String name, String callId) {
             this.conId = conversationId;
-            message = repo.appendToolCall(conversationId, name, "", callId);
-            eventPublisher.publish(seq -> new MessageAppended(conversationId, buildMessageView(conId, message, MessageState.PENDING), seq));
+            eventPublisher.publish(seq -> {
+                message = repo.appendToolCall(conversationId, name, "", callId);
+                return new MessageAppended(conversationId, buildMessageView(conId, message, MessageState.PENDING), seq);
+            });
         }
 
         public void appendArgs(String delta) {
@@ -825,9 +843,11 @@ public class AgentLoop {
 
         public void finish(String result, boolean b, String arguments) {
             String finalArgs = (arguments == null || arguments.isEmpty()) ? args.toString() : arguments;
-            message = repo.completeToolCall(conId, message.messageId(), result, b, finalArgs);
-            eventPublisher.publish(seq -> new ToolStateChanged(conId, message.messageId(),
-                    message.callId(), buildToolState(message), result, finalArgs, false, seq));
+            eventPublisher.publish(seq -> {
+                message = repo.completeToolCall(conId, message.messageId(), result, b, finalArgs);
+                return new ToolStateChanged(conId, message.messageId(),
+                        message.callId(), RecordConverter.toToolState(message.toolStatus()), result, finalArgs, false, seq);
+            });
             eventPublisher.publish(seq -> new MessageCompleted(conId, message.messageId(), seq));
         }
 
@@ -887,19 +907,5 @@ public class AgentLoop {
                 LOG.info("tool approval was canceled for reason: {}", cancel.reason());
             }
         }
-    }
-
-    private static ToolState buildToolState(Message message) {
-        ToolState result = null;
-        switch (message.toolStatus()) {
-            case OK ->  result = ToolState.OK;
-            case ERROR ->   result = ToolState.ERROR;
-            case RUNNING ->   result = ToolState.RUNNING;
-            case INTERRUPTED ->    result = ToolState.INTERRUPTED;
-            case STATUS_BG_DONE -> result = ToolState.BG_DONE;
-            case STATUS_BG_KILLED ->  result = ToolState.BG_KILLED;
-            case STATUS_BG_RUNNING ->   result = ToolState.BG_RUNNING;
-        }
-        return result;
     }
 }

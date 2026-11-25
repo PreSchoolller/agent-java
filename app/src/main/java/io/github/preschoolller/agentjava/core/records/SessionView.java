@@ -9,5 +9,5 @@ import java.util.List;
 public record SessionView(String id, String title, String workspace, SessionStatus status,
                           String modelName, String modelProfile,
                           ReasoningEffort effort, AgentMode mode,
-                          UsageView usage, List<MessageView> messages) {
+                          UsageView usage, List<MessageView> messages, long seq) {
 }
