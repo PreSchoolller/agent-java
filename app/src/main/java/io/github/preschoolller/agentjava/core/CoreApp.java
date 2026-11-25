@@ -33,10 +33,11 @@ public class CoreApp implements AgentApp {
         this.appCommands = new AppCommandsImpl();
         AppEventsImpl appEventsImpl = new AppEventsImpl();
         this.appEvents = appEventsImpl;
-        this.hostRequests = new  HostRequestsImpl();
-        this.runtimeConfig = new  RuntimeConfigImpl();
+        HostRequestsImpl hostRequestsImpl = new HostRequestsImpl(appEventsImpl);
+        this.hostRequests = hostRequestsImpl;
+        this.runtimeConfig = new RuntimeConfigImpl();
         this.conversationRepository = new ConversationRepository();
-        this.agentLoop = new AgentLoop(conversationRepository, appEventsImpl);
+        this.agentLoop = new AgentLoop(conversationRepository, appEventsImpl, hostRequestsImpl);
     }
 
     // ----- AppCommands -----
@@ -82,6 +83,11 @@ public class CoreApp implements AgentApp {
     }
 
     @Override
+    public void cancel(String sessionId) {
+        appCommands.cancel(sessionId);
+    }
+
+    @Override
     public void regenerate(String sessionId, String fromMessageId) {
         appCommands.regenerate(sessionId, fromMessageId);
     }
@@ -119,8 +125,8 @@ public class CoreApp implements AgentApp {
     }
 
     @Override
-    public void cancel(String sessionId) {
-        hostRequests.cancel(sessionId);
+    public void cancelRequest(String requestId) {
+        hostRequests.cancelRequest(requestId);
     }
 
     // ----- AppEvents -----

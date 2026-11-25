@@ -3,7 +3,7 @@ package io.github.preschoolller.agentjava.core.interfaces;
 import java.util.List;
 
 public interface HostRequests {
-    sealed interface Answer permits Approve, Reject, TextAnswer {
+    sealed interface Answer permits Approve, Cancel, Reject, TextAnswer {
     }
 
     record Approve() implements Answer {
@@ -13,6 +13,9 @@ public interface HostRequests {
     }
 
     record TextAnswer(String value) implements Answer {
+    }
+
+    record Cancel(String reason) implements Answer {
     }
 
     sealed interface Payload permits ApprovalPayload, InputPayload, ConfirmPayload {
@@ -37,5 +40,5 @@ public interface HostRequests {
 
     void answer(String requestId, Answer answer);
 
-    void cancel(String requestId);
+    void cancelRequest(String requestId);
 }

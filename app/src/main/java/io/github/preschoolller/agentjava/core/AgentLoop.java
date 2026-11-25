@@ -103,20 +103,32 @@ public class AgentLoop {
 
     private final ConversationRepository repo;
     private final EventPublisher eventPublisher;
+    private final HostRequestRegistry hostRequestRegistry;
 
-    public AgentLoop(ConversationRepository conRepo, EventPublisher eventPublisher) {
+    public AgentLoop(ConversationRepository conRepo, EventPublisher eventPublisher, HostRequestRegistry hostRequestRegistry) {
         repo = conRepo;
         this.eventPublisher = eventPublisher;
+        this.hostRequestRegistry = hostRequestRegistry;
     }
 
     public void submit(Conversation conversation, String userInput, boolean regenerate) {
         if (userInput == null || userInput.isBlank()) {
             eventPublisher.publish(seq -> new UserMessageRejected(conversation.getId(), null, "blank input", seq));
+            return;
         }
         if (!regenerate) {
             addUserMessage(repo, conversation, eventPublisher, userInput);
         }
         startAgentLoop(conversation, regenerate, true);
+    }
+
+    public void cancel(String conversationId) {
+        LOG.info("cancelling conversation id {}", conversationId);
+        AtomicBoolean atomicBoolean = running.get(conversationId);
+        if (atomicBoolean == null) {
+            return;
+        }
+        atomicBoolean.set(true);
     }
 
     private static void addUserMessage(ConversationRepository repo, Conversation conversation,
@@ -820,29 +832,11 @@ public class AgentLoop {
         }
 
         public void requestApproval(CompletableFuture<Boolean> decision) {
-            String requestId = HostRequestsImpl.makeRequest(answer -> {
-                if (answer == null) {
-                    decision.cancel(true);
-                    return;
-                }
-                if (answer instanceof HostRequests.Approve) {
-                    decision.complete(true);
-                } else if (answer instanceof HostRequests.Reject reject) {
-                    decision.complete(false);
-                    LOG.info("tool approval was rejected for reason: {}", reject.reason());
-                } else if (answer instanceof HostRequests.TextAnswer textAnswer) {
-                    decision.complete(false);
-                    LOG.info("tool approval was canceled for reason: {}", textAnswer.value());
-                }
-            });
             long waitingMillis = 60_000L;
-            long deadlineEpochMs = System.currentTimeMillis() + waitingMillis;
-            HostRequests.ApprovalPayload payload = new HostRequests.ApprovalPayload(message.toolName(),
-                    args.toString(), args.toString());
-            HostRequests.Request request = new HostRequests.Request(requestId, conId, message.callId(),
-                    HostRequests.Kind.TOOL_APPROVAL, payload, deadlineEpochMs);
-            eventPublisher.publish(seq -> new HostRequestOpened(conId, request, seq));
-            CloseReason reason = null;
+            String requestId = hostRequestRegistry.makeRequest(
+                    answer -> processAnswer(decision, answer),
+                    id -> getRequest(id, waitingMillis));
+            CloseReason reason;
             try {
                 decision.get(waitingMillis, TimeUnit.MILLISECONDS);
                 reason = CloseReason.ANSWERED;
@@ -864,6 +858,34 @@ public class AgentLoop {
             }
             CloseReason finalReason = reason;
             eventPublisher.publish(seq -> new HostRequestClosed(requestId, conId, finalReason, seq));
+        }
+
+        private HostRequests.Request getRequest(String id, long waitingMillis) {
+            long deadlineEpochMs = System.currentTimeMillis() + waitingMillis;
+            HostRequests.ApprovalPayload payload = new HostRequests.ApprovalPayload(message.toolName(),
+                    args.toString(), args.toString());
+            HostRequests.Request request = new HostRequests.Request(id, conId, message.callId(),
+                    HostRequests.Kind.TOOL_APPROVAL, payload, deadlineEpochMs);
+            return request;
+        }
+
+        private void processAnswer(CompletableFuture<Boolean> decision, HostRequests.Answer answer) {
+            if (answer == null) {
+                decision.cancel(true);
+                return;
+            }
+            if (answer instanceof HostRequests.Approve) {
+                decision.complete(true);
+            } else if (answer instanceof HostRequests.Reject reject) {
+                decision.complete(false);
+                LOG.info("tool approval was rejected for reason: {}", reject.reason());
+            } else if (answer instanceof HostRequests.TextAnswer textAnswer) {
+                decision.complete(false);
+                LOG.info("tool approval was canceled for reason: {}", textAnswer.value());
+            } else if (answer instanceof HostRequests.Cancel cancel) {
+                decision.cancel(true);
+                LOG.info("tool approval was canceled for reason: {}", cancel.reason());
+            }
         }
     }
 
