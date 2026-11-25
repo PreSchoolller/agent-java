@@ -1003,6 +1003,12 @@ public class Window extends JFrame implements Sidebar.Sessions {
         void requestApproval(CompletableFuture<Boolean> decision);
 
         /**
+         * 审批关闭（超时/取消/已答复）：清掉卡片上的待确认态并重画，别让"允许/拒绝"留在那儿。
+         * 只收显示——decision 的结果由等待方决定，卡片不改写。须在 EDT 上调用。
+         */
+        void closeApproval();
+
+        /**
          * 工具进入执行阶段（Main 在 FunctionToolCallDone 时标记）：参数拼接/审批等待期
          * 卡片不挂终止/查看输出按钮（进程还不存在），放行/免审批后执行期才挂。须在 EDT 上调用。
          */
@@ -1201,6 +1207,19 @@ public class Window extends JFrame implements Sidebar.Sessions {
                 // InvocationTargetException，requestToolApproval 只能误判成拒绝——"自动拒绝"事故。
                 // 决策 future 已挂好，这里吞掉显示层的失败，按钮没画出来也不影响等待与点击。
                 LOG.error("审批提醒/重绘失败（不影响审批）: {}", e.getMessage());
+            }
+        }
+
+        @Override
+        public void closeApproval() {
+            pendingApproval = null;
+            if (card != null) {
+                card.approval = null;
+            }
+            refreshSidebarBadges(); // "待确认"标注熄灭
+            if (card != null && conversationId.equals(displayedConvId)
+                    && messageCards.contains(card) && card.materialized) {
+                rebuildCard(card); // 头部从"待确认"回到运行/终态
             }
         }
     }

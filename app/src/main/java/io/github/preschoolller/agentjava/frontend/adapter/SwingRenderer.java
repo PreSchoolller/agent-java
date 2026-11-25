@@ -2,6 +2,7 @@ package io.github.preschoolller.agentjava.frontend.adapter;
 
 import io.github.preschoolller.agentjava.core.enums.ToolState;
 import io.github.preschoolller.agentjava.core.events.GapDetected;
+import io.github.preschoolller.agentjava.core.events.HostRequestClosed;
 import io.github.preschoolller.agentjava.core.events.HostRequestOpened;
 import io.github.preschoolller.agentjava.core.events.MessageAppended;
 import io.github.preschoolller.agentjava.core.events.MessageCompleted;
@@ -17,6 +18,7 @@ import io.github.preschoolller.agentjava.core.events.SessionPinned;
 import io.github.preschoolller.agentjava.core.events.SessionRemoved;
 import io.github.preschoolller.agentjava.core.events.SessionRenamed;
 import io.github.preschoolller.agentjava.core.events.StateEvent;
+import io.github.preschoolller.agentjava.core.events.ToolArgsDelta;
 import io.github.preschoolller.agentjava.core.events.ToolStateChanged;
 import io.github.preschoolller.agentjava.core.events.UserMessageRejected;
 import io.github.preschoolller.agentjava.core.interfaces.AgentApp;
@@ -49,6 +51,8 @@ public final class SwingRenderer implements EventListener {
     private final Map<String, Window.ToolCallHandle> toolCards = new ConcurrentHashMap<>();
     /** 会话内 callId → messageId：审批事件只带 callId，得先换回卡片 */
     private final Map<String, String> callIds = new ConcurrentHashMap<>();
+    /** 待审批请求 requestId → 卡片键：关闭事件只带 requestId，同样得先换回卡片 */
+    private final Map<String, String> approvals = new ConcurrentHashMap<>();
 
     public SwingRenderer(Window window, AgentApp app) {
         this.window = window;
@@ -80,8 +84,12 @@ public final class SwingRenderer implements EventListener {
             });
         } else if (event instanceof ToolStateChanged changed) {
             toolState(changed);
+        } else if (event instanceof ToolArgsDelta argsDelta) {
+            toolArgs(argsDelta);
         } else if (event instanceof HostRequestOpened opened) {
             approval(opened);
+        } else if (event instanceof HostRequestClosed closed) {
+            approvalClosed(closed);
         } else if (event instanceof RoundStarted started) {
             later(() -> window.setConversationGenerating(started.sessionId(), true));
         } else if (event instanceof RoundFinished finished) {
@@ -177,7 +185,18 @@ public final class SwingRenderer implements EventListener {
             if (changed.state() == ToolState.RUNNING) {
                 handle.markExecuting();
             } else {
-                handle.finish(result, success, null);
+                // 终态以事件里的完整参数为准：增量丢过（缺口/重连）也不会留下半截参数
+                handle.finish(result, success, changed.argsSummary());
+            }
+        });
+    }
+
+    /** 参数增量：卡片句柄内部有 120ms 合并，这里只负责换到对应卡片 */
+    private void toolArgs(ToolArgsDelta delta) {
+        later(() -> {
+            Window.ToolCallHandle handle = toolCards.get(key(delta.sessionId(), delta.messageId()));
+            if (handle != null) {
+                handle.appendArgs(delta.delta());
             }
         });
     }
@@ -196,11 +215,26 @@ public final class SwingRenderer implements EventListener {
                 app.answer(request.requestId(), new HostRequests.Reject("no card"));
                 return;
             }
+            approvals.put(request.requestId(), key(opened.sessionId(), messageId));
             CompletableFuture<Boolean> decision = new CompletableFuture<>();
             decision.whenComplete((approved, error) -> app.answer(request.requestId(),
                     approved != null && approved ? new HostRequests.Approve()
                             : new HostRequests.Reject(error == null ? "user" : "cancelled")));
             handle.requestApproval(decision);
+        });
+    }
+
+    /** 审批关闭（超时/取消/已答复）：把卡片上的待确认态收掉，别让"允许/拒绝"留在那儿没人响应 */
+    private void approvalClosed(HostRequestClosed closed) {
+        String cardKey = approvals.remove(closed.requestId());
+        if (cardKey == null) {
+            return; // 没挂过卡：打开时就已按拒绝处理
+        }
+        later(() -> {
+            Window.ToolCallHandle handle = toolCards.get(cardKey);
+            if (handle != null) {
+                handle.closeApproval();
+            }
         });
     }
 
