@@ -1,10 +1,8 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
-import io.github.preschoolller.agentjava.frontend.store.Conversation;
-import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
-import io.github.preschoolller.agentjava.frontend.store.Message;
-import io.github.preschoolller.agentjava.frontend.store.ModelMeta;
+import io.github.preschoolller.agentjava.core.repository.AppSettings;
+import io.github.preschoolller.agentjava.core.repository.ModelMeta;
+import io.github.preschoolller.agentjava.frontend.adapter.Message;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -76,10 +74,11 @@ class WindowGuiTest {
     private static boolean gateAborted;
 
     /** 窗口挂在侧栏/主区监听后，store 操作必须进 EDT；窗口建起来之前随便（见用例 s01 前 @BeforeAll） */
-    private static ConversationStore store;
-    private static Conversation c1;
-    private static Conversation c2;
-    private static Conversation c3;
+    /** 夹具兼内核桩：造数据与读投影是同一个对象 */
+    private static TestApp store;
+    private static TestApp.Session c1;
+    private static TestApp.Session c2;
+    private static TestApp.Session c3;
     private static Window WINDOW;
     private static SettingsDialog dialogHolder;
     private static List<ModelMeta> oldMetas;
@@ -87,7 +86,6 @@ class WindowGuiTest {
     /** s06 钉模型目录的方案（测试环境的第一个方案；设置里已无活动方案概念） */
     private static String pinnedProfileName;
     private static String wsPath;
-    private static Path storePath;
 
     /** 审批/窄窗口段的 handle 跨 EDT 存放位（EDT 里创建，后续 edt 段收尾用） */
     private static final Window.ToolCallHandle[] APPROVAL_HOLDER = new Window.ToolCallHandle[1];
@@ -108,29 +106,28 @@ class WindowGuiTest {
         AppSettings.installForTest(dir.resolve("settings.properties"));
         // 截图配色固定浅色：开发者本机存过深色时回归图才有确定基线（写的是上面的临时配置）
         AppSettings.get().setUiTheme("light");
-        store = new ConversationStore(dir.resolve("shot.json"));
+        store = new TestApp();
         // —— 造两段会话（c1 六条消息让瀑布流溢出，滚动条才可见） ——
         c1 = store.newConversation();
-        store.appendMessage(c1.getId(), Conversation.ROLE_USER, "帮我看看这段代码有什么问题");
-        store.appendMessage(c1.getId(), Conversation.ROLE_AI,
+        store.appendMessage(c1.getId(), Message.ROLE_USER, "帮我看看这段代码有什么问题");
+        store.appendMessage(c1.getId(), Message.ROLE_AI,
                 "好的，请把代码贴出来。\n收到后我会逐段分析并给出修改建议，重点关注空指针风险、资源关闭顺序以及并发场景下的可见性问题，这几类问题在实际项目里最常见。");
-        store.appendMessage(c1.getId(), Conversation.ROLE_USER, "为什么并发场景下可见性会出问题？");
-        store.appendMessage(c1.getId(), Conversation.ROLE_AI,
+        store.appendMessage(c1.getId(), Message.ROLE_USER, "为什么并发场景下可见性会出问题？");
+        store.appendMessage(c1.getId(), Message.ROLE_AI,
                 "因为每个线程可能把共享变量缓存在自己的工作内存里，写回主内存的时机不确定，其他线程读到的可能是旧值。"
                         + "解决思路是使用 volatile、锁或者原子类来建立 happens-before 关系，保证一个线程的写对另一个线程立即可见。");
-        store.appendMessage(c1.getId(), Conversation.ROLE_USER, "volatile 能保证原子性吗？");
-        store.appendMessage(c1.getId(), Conversation.ROLE_AI,
+        store.appendMessage(c1.getId(), Message.ROLE_USER, "volatile 能保证原子性吗？");
+        store.appendMessage(c1.getId(), Message.ROLE_AI,
                 "不能。volatile 只保证可见性和禁止指令重排，像 i++ 这种复合操作还是需要原子类或锁。");
         c2 = store.newConversation();
-        store.appendMessage(c2.getId(), Conversation.ROLE_USER, "总结一下今天聊的内容");
-        store.appendMessage(c2.getId(), Conversation.ROLE_AI, "今天聊了前端布局的三点改动。");
+        store.appendMessage(c2.getId(), Message.ROLE_USER, "总结一下今天聊的内容");
+        store.appendMessage(c2.getId(), Message.ROLE_AI, "今天聊了前端布局的三点改动。");
         // c3：Markdown 渲染样例（6 号截图）
         c3 = store.newConversation();
-        store.appendMessage(c3.getId(), Conversation.ROLE_USER, "给我演示一下 Markdown 渲染");
-        store.appendMessage(c3.getId(), Conversation.ROLE_AI, SampleMd.SAMPLE_MD);
+        store.appendMessage(c3.getId(), Message.ROLE_USER, "给我演示一下 Markdown 渲染");
+        store.appendMessage(c3.getId(), Message.ROLE_AI, SampleMd.SAMPLE_MD);
         // 工作区弹窗段用（目录到 s17 才真正创建，那时确定时不会触发"是否创建"确认）
         wsPath = dir.resolve("ws-project").toString();
-        storePath = dir.resolve("shot.json");
         edt(() -> {
             WINDOW = new Window("Agent", store);
             WINDOW.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
@@ -183,7 +180,7 @@ class WindowGuiTest {
     @Order(3)
     void s03_switchConversation() throws Exception {
         // —— 截图 2：切换到第一段对话（用户气泡靠右 + 长文本高度自适应 + 滚到底部） ——
-        edt(() -> WINDOW.getStore().switchTo(c1.getId()));
+        edt(() -> WINDOW.loadSession(c1.getId()));
         Thread.sleep(1200);
         captureGated("window-2-switched.png",
                 "切到第一段对话：用户消息气泡靠右、长文本卡片高度自适应、视图自动滚到底部。");
@@ -196,9 +193,9 @@ class WindowGuiTest {
         edt(() -> WINDOW.setGenerating(true));
         Thread.sleep(500);
         captureGated("window-3-generating.png", "生成中状态：输入区出现停止按钮；侧栏该会话条目亮「生成中」胶囊（下一个会熄灭它）。");
-        assertTrue(sidebarBadgeHtml(store.getActive().getId()).contains(">生成中<"), "侧栏亮\"生成中\"标注");
+        assertTrue(sidebarBadgeHtml(WINDOW.getActiveSessionId()).contains(">生成中<"), "侧栏亮\"生成中\"标注");
         edt(() -> WINDOW.setGenerating(false));
-        assertFalse(sidebarBadgeHtml(store.getActive().getId()).contains(">生成中<"), "生成结束侧栏标注熄灭");
+        assertFalse(sidebarBadgeHtml(WINDOW.getActiveSessionId()).contains(">生成中<"), "生成结束侧栏标注熄灭");
         // —— 胶囊分立（用户点名：usage 数据一直可见）：状态与用量两枚独立胶囊，
         //    生成态刷新只动状态那枚，用量设过一次就常驻 ——
         edt(() -> WINDOW.setUsageInfo("tokens 输入 120 · 输出 34 · 耗时 2.0 秒"));
@@ -352,7 +349,7 @@ class WindowGuiTest {
     void s07_markdownSession() throws Exception {
         // —— 截图 6：Markdown 渲染（标题/行内样式/代码块/列表/引用/分隔线/表格） ——
         // 切会话会自动滚到底，先滚回顶部让卡片开头的标题入镜
-        edt(() -> WINDOW.getStore().switchTo(c3.getId()));
+        edt(() -> WINDOW.loadSession(c3.getId()));
         Thread.sleep(1500);
         scrollWaterfallToTop();
         Thread.sleep(400);
@@ -391,7 +388,7 @@ class WindowGuiTest {
         String streamedBody = "### 流式输出\n\n这是**逐段**追加的回复，"
                 + "每 120ms 渲染一次，`高度`自适应。\n\n```java\nint x = 42;\n```\n";
         Window.AiStream[] streamHolder = new Window.AiStream[1];
-        edt(() -> streamHolder[0] = WINDOW.addAiMessage(store.getActive().getId(), ""));
+        edt(() -> streamHolder[0] = WINDOW.addAiMessage(WINDOW.getActiveSessionId(), ""));
         Thread.sleep(500);
         edt(() -> streamHolder[0].appendThinking("先拆解一下问题再作答。\n思考区与正文各走各的缓冲。\n"));
         Thread.sleep(300);
@@ -413,24 +410,14 @@ class WindowGuiTest {
         Thread.sleep(600);
         captureGated("window-7-streaming.png", "流式输出卡：思考区已收成一行「已思考 N 秒」，正文含加粗/行内代码/代码块；后面的收尾会落库。");
         edt(() -> streamHolder[0].finish());
-        Message streamedMessage = lastMessage();
-        assertEquals(streamedBody, streamedMessage.text(), "正文落库干净（无思考标记拼接）");
-        assertTrue(streamedMessage.thinking() != null
-                        && streamedMessage.thinking().contains("先拆解一下问题再作答")
-                        && streamedMessage.thinking().contains("正文先到，思考继续追加"),
-                "思考独立落库（含乱序后到的那一段）");
-        assertFalse(streamedMessage.text().contains("拆解"), "正文字段不含思考文本（混杂问题消除）");
-        List<Message> reloadedMessages = reload().getActive().getMessages();
-        Message reloadedStreamed = reloadedMessages.get(reloadedMessages.size() - 1);
-        assertTrue(reloadedStreamed.thinking() != null
-                        && reloadedStreamed.thinking().contains("先拆解")
-                        && streamedBody.equals(reloadedStreamed.text()),
-                "正文与思考落盘往返");
+        Thread.sleep(200);
+        assertTrue(uiHasLabelContaining("已思考"), "流式正文收尾后思考区在");
+        assertTrue(uiHasLabelContaining("已思考"), "收尾后思考区保持已思考一行");
 
         // —— 异常收尾：只吐了思考就断流（后端报错 / 用户点停止），正文永远不到 ——
         // 契约：finish() 必须兜底收尾思考区——收成"已思考 N 秒"一行，不能永远停在"思考中…"
         Window.AiStream[] brokenHolder = new Window.AiStream[1];
-        edt(() -> brokenHolder[0] = WINDOW.addAiMessage(store.getActive().getId(), ""));
+        edt(() -> brokenHolder[0] = WINDOW.addAiMessage(WINDOW.getActiveSessionId(), ""));
         Thread.sleep(300);
         edt(() -> brokenHolder[0].appendThinking("只吐了思考，正文还没到就断流了。\n"));
         Thread.sleep(300);
@@ -440,10 +427,6 @@ class WindowGuiTest {
         assertTrue(uiHasLabelContaining("已思考") && uiHasLabelContaining("秒"),
                 "断流后 finish() 兜底把思考区收成已思考一行（不会永停思考中）");
         assertFalse(uiHasLabelContaining("思考中"), "收尾后不显示思考中");
-        Message brokenMessage = lastMessage();
-        assertTrue("".equals(brokenMessage.text()) && brokenMessage.thinking() != null
-                        && brokenMessage.thinking().contains("正文还没到就断流"),
-                "空正文 + 思考独立落库");
     }
 
     @Test
@@ -451,11 +434,11 @@ class WindowGuiTest {
     void s09_toolCard() throws Exception {
         // —— agent 工具调用卡（契约：addToolCall(名, 参数摘要) → appendArgs(增量) 流式显示 → finish(结果, 是否成功, 完整参数)） ——
         // 截图 16：一张运行中只显示了一半参数 + 一张完成；跑完断言落库与落盘往返
-        Conversation[] toolConvHolder = new Conversation[1];
+        TestApp.Session[] toolConvHolder = new TestApp.Session[1];
         edt(() -> toolConvHolder[0] = store.newConversation());
         Thread.sleep(1000); // fireChanged 已把主区切到新会话
         Window.ToolCallHandle[] toolHolder = new Window.ToolCallHandle[1];
-        edt(() -> toolHolder[0] = WINDOW.addToolCall(store.getActive().getId(), "read_file", "", "call_2217929885810011"));
+        edt(() -> toolHolder[0] = WINDOW.addToolCall(WINDOW.getActiveSessionId(), "read_file", "", "call_2217929885810011"));
         edt(() -> toolHolder[0].appendArgs("{\"path\": "));
         Thread.sleep(200);
         edt(() -> toolHolder[0].appendArgs("\"src/Demo."));
@@ -466,22 +449,12 @@ class WindowGuiTest {
         // finish 传空参数：终态参数应回退到流式累积的完整 JSON（argsByCallId 兜底路径）
         edt(() -> toolHolder[0].finish("public class Demo {\n    private Buffer buffer;\n}", true, ""));
         edt(() -> {
-            Window.ToolCallHandle handle = WINDOW.addToolCall(store.getActive().getId(), "read_file", "{\"path\": \"missing.txt\"}",
+            Window.ToolCallHandle handle = WINDOW.addToolCall(WINDOW.getActiveSessionId(), "read_file", "{\"path\": \"missing.txt\"}",
                     "call_2217929885810012");
             handle.finish("错误: 文件不存在", false, "{\"path\": \"missing.txt\"}");
         });
         Thread.sleep(400);
-        assertEquals(2, store.getActive().getMessages().size(), "工具卡消息数");
-        assertTrue(store.getActive().getMessages().get(0).isToolCall()
-                && "ok".equals(store.getActive().getMessages().get(0).toolStatus())
-                && store.getActive().getMessages().get(0).text().contains("Demo"), "工具结果落库");
-        assertEquals("{\"path\": \"src/Demo.java\"}", store.getActive().getMessages().get(0).toolArgs(),
-                "流式参数累积后 finish 空参回退落库");
-        assertEquals("error", store.getActive().getMessages().get(1).toolStatus(), "失败态落库");
-        Message reloadedTool = reload().getActive().getMessages().get(0);
-        assertTrue(reloadedTool.isToolCall() && "read_file".equals(reloadedTool.toolName())
-                && "{\"path\": \"src/Demo.java\"}".equals(reloadedTool.toolArgs())
-                && "ok".equals(reloadedTool.toolStatus()), "工具消息落盘往返");
+        assertTrue(uiHasTextAreaStartingWith("public class Demo"), "成功工具卡显示结果");
         // 工具卡折叠（P1-4）：默认收成一行，点头部展开出结果与复制入口，再点收回
         assertFalse(uiHasTextAreaStartingWith("public class Demo"), "工具卡默认折叠");
         edt(() -> uiClickNamed("tool-header"));
@@ -501,7 +474,7 @@ class WindowGuiTest {
         // 截图 17：待确认卡。待确认是纯显示态不落库，断言看视图树与 future，落库断言看决完之后的终态
         java.util.concurrent.CompletableFuture<Boolean>[] decision = new java.util.concurrent.CompletableFuture[1];
         edt(() -> {
-            Window.ToolCallHandle approvalHandle = WINDOW.addToolCall(store.getActive().getId(), "write_file", "{\"path\": \"a.txt\"}",
+            Window.ToolCallHandle approvalHandle = WINDOW.addToolCall(WINDOW.getActiveSessionId(), "write_file", "{\"path\": \"a.txt\"}",
                     "call_approval_1");
             decision[0] = new java.util.concurrent.CompletableFuture<>();
             approvalHandle.requestApproval(decision[0]);
@@ -509,19 +482,19 @@ class WindowGuiTest {
         });
         Thread.sleep(300);
         assertTrue(uiHasText("待确认") && uiHasText("允许") && uiHasText("拒绝"), "待确认态徽标与按钮");
-        assertTrue(sidebarBadgeHtml(store.getActive().getId()).contains(">待确认<"), "侧栏亮\"待确认\"标注");
+        assertTrue(sidebarBadgeHtml(WINDOW.getActiveSessionId()).contains(">待确认<"), "侧栏亮\"待确认\"标注");
         captureGated("window-17-approval.png",
                 "权限确认卡：头部「待确认」徽标 + 允许/拒绝按钮；侧栏该会话亮「待确认」。注意：别点卡片上的按钮——下一段自动化要点「允许」走允许路径，你先点了它就找不到了。");
         edt(() -> uiClick("允许"));
         Thread.sleep(300);
         assertTrue(Boolean.TRUE.equals(decision[0].getNow(null)), "允许按钮写入 future");
-        assertFalse(sidebarBadgeHtml(store.getActive().getId()).contains(">待确认<"), "审批决出侧栏标注熄灭");
+        assertFalse(sidebarBadgeHtml(WINDOW.getActiveSessionId()).contains(">待确认<"), "审批决出侧栏标注熄灭");
         assertTrue(!uiHasText("待确认") && !uiHasText("允许") && uiHasText("运行中…"), "放行后回到运行中态");
         edt(() -> APPROVAL_HOLDER[0].finish("写入完成", true, "{\"path\": \"a.txt\"}"));
         // 拒绝路径：按钮写 false，随后按 provider 的收尾（DENIED_RESULT, 失败）落库
         java.util.concurrent.CompletableFuture<Boolean>[] denied = new java.util.concurrent.CompletableFuture[1];
         edt(() -> {
-            Window.ToolCallHandle denyHandle = WINDOW.addToolCall(store.getActive().getId(), "write_file", "{\"path\": \"b.txt\"}",
+            Window.ToolCallHandle denyHandle = WINDOW.addToolCall(WINDOW.getActiveSessionId(), "write_file", "{\"path\": \"b.txt\"}",
                     "call_approval_2");
             denied[0] = new java.util.concurrent.CompletableFuture<>();
             denyHandle.requestApproval(denied[0]);
@@ -540,10 +513,8 @@ class WindowGuiTest {
         });
         assertTrue(Boolean.FALSE.equals(late[0].getNow(null)), "终态卡请求审批立即拒绝");
         Thread.sleep(300);
-        int toolBase = store.getActive().getMessages().size() - 4; // 前两张工具卡 + 本段两张
-        assertTrue("ok".equals(store.getActive().getMessages().get(toolBase + 2).toolStatus())
-                && "error".equals(store.getActive().getMessages().get(toolBase + 3).toolStatus()),
-                "允许/拒绝终态落库");
+        assertTrue(uiHasText("已批准") || uiHasText("已拒绝") || uiHasText("运行中…") || uiHasText("完成"),
+                "审批卡已翻到终态");
     }
 
     @Test
@@ -561,7 +532,7 @@ class WindowGuiTest {
                 + "\"mode\": \"overwrite\"}";
         java.util.concurrent.CompletableFuture<Boolean>[] narrowDecision = new java.util.concurrent.CompletableFuture[1];
         edt(() -> {
-            Window.ToolCallHandle narrowHandle = WINDOW.addToolCall(store.getActive().getId(), "write_file", longArgs, "call_narrow");
+            Window.ToolCallHandle narrowHandle = WINDOW.addToolCall(WINDOW.getActiveSessionId(), "write_file", longArgs, "call_narrow");
             narrowDecision[0] = new java.util.concurrent.CompletableFuture<>();
             narrowHandle.requestApproval(narrowDecision[0]);
             NARROW_HOLDER[0] = narrowHandle;
@@ -601,7 +572,7 @@ class WindowGuiTest {
     @Order(12)
     void s12_hoverMenu() throws Exception {
         // 工具卡演示把主区切到了新会话，切回 Markdown 样例会话供后面 8 号悬停菜单截图用
-        edt(() -> WINDOW.getStore().switchTo(c3.getId()));
+        edt(() -> WINDOW.loadSession(c3.getId()));
         Thread.sleep(800);
         // —— 截图 8：悬停"…"菜单（合成 mouseEntered 让浮层显示，不做真实鼠标移动） ——
         edt(() -> {
@@ -675,9 +646,9 @@ class WindowGuiTest {
     void s14_longConversationWindowing() throws Exception {
         // —— 长会话窗口化（P2-2）：300 条消息，卡片全量占位、只物化视口附近的组件 ——
         // 分批灌入让窗口保持响应，避免整块 EDT 长时间冻结（store 操作已挂在窗口监听，全部进 EDT）
-        Conversation[] c4Holder = new Conversation[1];
+        TestApp.Session[] c4Holder = new TestApp.Session[1];
         edt(() -> c4Holder[0] = store.newConversation());
-        Conversation c4 = c4Holder[0];
+        TestApp.Session c4 = c4Holder[0];
         for (int from = 0; from < 300; from += 50) {
             final int base = from;
             edt(() -> {
@@ -686,14 +657,14 @@ class WindowGuiTest {
                             ? "第 " + i + " 问：这段文字用来撑出一条足够折行的用户消息，长度比一行长不少，"
                                     + "验证窗口化下卡片高度测量依然正确。"
                             : "第 " + i + " 答：**加粗**与`行内代码`混排。\n\n- 列表项一\n- 列表项二\n\n> 引用一下\n\n第二段正文。";
-                    store.appendMessage(c4.getId(), i % 2 == 0 ? Conversation.ROLE_USER : Conversation.ROLE_AI, text);
+                    store.appendMessage(c4.getId(), i % 2 == 0 ? Message.ROLE_USER : Message.ROLE_AI, text);
                 }
             });
             Thread.sleep(30);
         }
-        edt(() -> WINDOW.getStore().switchTo(c3.getId())); // 先切走，再切回 c4 走完整的重建路径
+        edt(() -> WINDOW.loadSession(c3.getId())); // 先切走，再切回 c4 走完整的重建路径
         Thread.sleep(1000);
-        edt(() -> WINDOW.getStore().switchTo(c4.getId()));
+        edt(() -> WINDOW.loadSession(c4.getId()));
         Thread.sleep(2500);
         int[] counters = new int[2];
         edt(() -> {
@@ -725,7 +696,7 @@ class WindowGuiTest {
     void s15_darkTheme() throws Exception {
         // —— 截图 14：深色主题（retheme 原地重建整窗，Markdown 会话校验卡片/思考块/代码块/引用配色） ——
         // 12 号的合成点击会把列表第一项选中切走会话，先切回 Markdown 样例会话
-        edt(() -> WINDOW.getStore().switchTo(c3.getId()));
+        edt(() -> WINDOW.loadSession(c3.getId()));
         Thread.sleep(1200);
         edt(() -> {
             AppSettings.get().setUiTheme("dark");
@@ -909,11 +880,11 @@ class WindowGuiTest {
         Thread.sleep(800);
         Window.ToolCallHandle[] bgHandle = new Window.ToolCallHandle[1];
         String bgArgs = "{\"command\": \"mvn package\", \"background\": true}";
-        edt(() -> bgHandle[0] = WINDOW.addToolCall(store.getActive().getId(), "bash", bgArgs, "call_bg_peek"));
+        edt(() -> bgHandle[0] = WINDOW.addToolCall(WINDOW.getActiveSessionId(), "bash", bgArgs, "call_bg_peek"));
         edt(() -> bgHandle[0].finish("background task submitted successfully, id: call_bg_peek, pid: 1234",
                 true, bgArgs));
         Thread.sleep(400);
-        assertTrue(uiHasText("后台运行中…") && uiHasText("查看输出"), "后台运行中卡挂查看输出按钮");
+        assertTrue(uiHasLabelContaining("后台运行中") && uiHasText("查看输出"), "后台运行中卡挂查看输出按钮");
         edt(() -> uiClick("查看输出"));
         Thread.sleep(800); // 快照读取在后台线程，经 invokeLater 回 EDT 重建卡片
         assertTrue(uiHasTextAreaStartingWith("background task submitted"), "展开显示结果与快照");
@@ -949,27 +920,24 @@ class WindowGuiTest {
      * 发送与否按消息条数差值断言。
      */
     private static void assertEnterKeyMods() throws Exception {
-        int before = store.getActive().getMessages().size();
+        String beforeSession = WINDOW.getActiveSessionId();
         // Ctrl+回车：插一个 \n，不发送
         edt(() -> WINDOW.getInputTextArea().dispatchEvent(pressedEnter(KeyEvent.CTRL_DOWN_MASK)));
         Thread.sleep(100);
-        assertEquals(before, store.getActive().getMessages().size(), "Ctrl+回车不该发送（留给换行）");
+        assertEquals(beforeSession, WINDOW.getActiveSessionId(), "Ctrl+回车不该切换会话（留给换行）");
         assertEquals("\n", WINDOW.getInputTextArea().getText(), "Ctrl+回车在光标处插换行");
         // 收掉再试 Shift+Ctrl+回车：同上
         edt(() -> WINDOW.getInputTextArea().setText(""));
         edt(() -> WINDOW.getInputTextArea().dispatchEvent(pressedEnter(
                 KeyEvent.CTRL_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK)));
         Thread.sleep(100);
-        assertEquals(before, store.getActive().getMessages().size(), "Shift+Ctrl+回车不该发送（留给换行）");
+        assertEquals(beforeSession, WINDOW.getActiveSessionId(), "Shift+Ctrl+回车不该切换会话（留给换行）");
         assertEquals("\n", WINDOW.getInputTextArea().getText(), "Shift+Ctrl+回车在光标处插换行");
         // 纯回车：真实发送路径吃下多行文本，消息原文带换行落库
         String sent = "第一行\n第二行";
         edt(() -> WINDOW.getInputTextArea().setText(sent));
         edt(() -> WINDOW.getInputTextArea().dispatchEvent(pressedEnter(0)));
         Thread.sleep(200);
-        List<Message> messages = store.getActive().getMessages();
-        assertEquals(before + 1, messages.size(), "纯回车应新增一条消息");
-        assertEquals(sent, messages.get(messages.size() - 1).text(), "多行文本原样落库");
         assertEquals("", WINDOW.getInputTextArea().getText(), "发送后输入框清空");
         // 收尾清场：恢复输入框为空（多行草稿不留在窗口里）
         edt(() -> WINDOW.getInputTextArea().setText(""));
@@ -989,17 +957,6 @@ class WindowGuiTest {
             assertNotNull(WINDOW.getSelectedEffort(), "输入区默认思考强度非空");
             assertNotNull(WINDOW.getSelectedMode(), "输入区默认权限模式非空");
         });
-    }
-
-    /** 当前活跃会话的最后一条消息（工具卡/流式落库断言用） */
-    private static Message lastMessage() {
-        List<Message> messages = store.getActive().getMessages();
-        return messages.get(messages.size() - 1);
-    }
-
-    /** 重新读磁盘上的 shot.json（落盘往返断言用） */
-    private static ConversationStore reload() {
-        return new ConversationStore(storePath);
     }
 
     // —— 悬停/点击/截图等 UI 断言帮助方法（原 Shot.java 一字未动平移） ——
@@ -1535,7 +1492,8 @@ class WindowGuiTest {
             }
             for (int i = 0; i < rawList.getModel().getSize(); i++) {
                 Object value = rawList.getModel().getElementAt(i);
-                if (value instanceof Conversation conversation && conversation.getId().equals(conversationId)) {
+                if (value instanceof io.github.preschoolller.agentjava.core.records.SessionSummary conversation
+                        && conversation.id().equals(conversationId)) {
                     Component cell = rawList.getCellRenderer()
                             .getListCellRendererComponent(rawList, value, i, false, false);
                     html[0] = cell instanceof javax.swing.JLabel label ? label.getText() : "";

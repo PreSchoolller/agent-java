@@ -1,8 +1,8 @@
 package io.github.preschoolller.agentjava.backend.provider;
 
 import io.github.preschoolller.agentjava.spi.provider.Provider;
-import io.github.preschoolller.agentjava.frontend.store.AppSettings;
-import io.github.preschoolller.agentjava.frontend.store.Profile;
+import io.github.preschoolller.agentjava.core.repository.AppSettings;
+import io.github.preschoolller.agentjava.core.repository.Profile;
 
 import java.util.Collections;
 import java.util.Map;

@@ -1,0 +1,389 @@
+package io.github.preschoolller.agentjava.core.repository;
+
+import io.github.preschoolller.agentjava.spi.enums.AgentMode;
+import io.github.preschoolller.agentjava.spi.enums.ReasoningEffortEnum;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.function.Supplier;
+
+/** 一段对话：标题 + 消息列表，首条用户消息会自动截取为标题。 */
+public class Conversation {
+
+    public static final Message.Role ROLE_USER = Message.Role.ROLE_USER;
+    public static final Message.Role ROLE_AI = Message.Role.ROLE_AI;
+    public static final Message.Role ROLE_TOOL = Message.Role.ROLE_TOOL;
+    /** 上下文压缩水位线标记：上下文管理插件把此标记之前的历史压缩后的边界。
+     *  请求构建按最后一个标记裁剪（标记本身与更早的消息不进请求），瀑布流/导出不渲染；
+     *  落盘按普通消息往返（role 字符串序列化，text 恒空串） */
+    public static final Message.Role ROLE_CONTEXT_MANAGER = Message.Role.ROLE_CONTEXT_MANAGER;
+
+    private final String id;
+    private String title;
+    private final long createdAt;
+    private long updatedAt;
+    private boolean pinned;
+    /** 工作区（规范化的绝对路径）：本会话里 agent 工具的相对路径基准；null = 默认工作区
+     *  （AppSettings.defaultWorkspace——默认位置以后可换，没绑过的会话跟着走） */
+    private String workspace;
+    /** 本会话最后使用的模型（裸模型名 + 所属方案名）：输入区下拉的会话级记忆，
+     *  切回会话/重启后恢复选中；null = 没记录（没发过消息的会话），随会话落盘 history */
+    private String modelName;
+    private String modelProfile;
+    /** 本会话最后使用的思考强度/权限模式（输入区下拉的会话级记忆，与模型记忆同一套路）：
+     *  发送/重新生成时盖戳、切回会话恢复、随会话落盘。链启动读这里而不是全局下拉——
+     *  后台会话续轮/补偿链若读下拉，读到的是当前显示会话的选择（串台）。
+     *  null = 没记录（旧会话/没发过消息），消费端回落输入区当前值 */
+    private ReasoningEffortEnum reasoningEffort;
+    private AgentMode agentMode;
+    /** 本会话最近一轮的用量（tokens/耗时），用量胶囊的会话级数据源：每轮 ResponseCompleteEvent
+     *  写入，切回会话时由 Window 据此恢复胶囊；随会话索引落盘——以后做上下文管理
+     *  （按会话 token 消耗裁剪/预估）也用这份数据。null = 本会话还没跑过轮（胶囊不占位）。
+     *  为什么放会话上而不是全局变量：后台会话 A 的轮次不该静默丢，也不该盖掉显示中会话 B 的胶囊 */
+    private Usage usage;
+
+    /** 一轮流式回复的用量：输入/输出 token 数 + 本轮耗时（秒，含 HTTP 建流）。
+     *  label() 是胶囊展示文本，Main 写入和 Window 切会话恢复共用同一份格式 */
+    public record Usage(long inputTokens, long outputTokens, double elapsedSeconds) {
+        public String label() {
+            return "tokens 输入 " + inputTokens + " · 输出 " + outputTokens + " · 耗时 " + elapsedSeconds + " 秒";
+        }
+    }
+    private final List<Message> messages = new ArrayList<>();
+    /** 消息是否已在内存。新建/分叉出来的会话天然为 true；从索引装载的为 false，首次触达时经 loader 补齐 */
+    private boolean loaded;
+    /** 单会话消息回读钩子（仓库装载索引时注入，消费一次即清空）；内存新建的会话为 null */
+    private Supplier<List<Message>> loader;
+    /** 落盘钩子（仓库持有本对象时注入）：元数据级变更（setUsage）用它即写盘 */
+    private Runnable saver;
+
+    /** 装载索引用构造：只有元数据，消息等按需加载（attachLoader 注入回读钩子） */
+    public Conversation(String id, String title, long createdAt, long updatedAt) {
+        this.id = id;
+        this.title = title;
+        this.createdAt = createdAt;
+        this.updatedAt = updatedAt;
+    }
+
+    public static Conversation create() {
+        long now = System.currentTimeMillis();
+        Conversation conversation = new Conversation(UUID.randomUUID().toString(), "新对话", now, now);
+        conversation.loaded = true;
+        return conversation;
+    }
+
+    /** 注入消息回读钩子（包内：只有仓库需要）；必须在首次触达消息之前调用 */
+    public void attachLoader(Supplier<List<Message>> loader) {
+        this.loader = loader;
+    }
+
+    /** 注入落盘钩子（包内：只有仓库需要，仓库持有本对象时立即装上）。
+     *  用量的落盘不走"随下次消息保存"搭车：链末轮的用量（ResponseCompleteEvent）到得
+     *  比消息写晚，等搭车就丢了——setUsage 自己触发保存，写完即盘 */
+    public void attachSaver(Runnable saver) {
+        this.saver = saver;
+    }
+
+    /** 消息当前是否已在内存（仓库落盘判断用：未加载的会话磁盘上就是对的，不必重写） */
+    public boolean isLoaded() {
+        return loaded;
+    }
+
+    /** 只有"确定加载过且为空"才算空；未加载的会话不触发读盘（落盘不变式：空会话从不进主文件） */
+    public boolean isKnownEmpty() {
+        return loaded && messages.isEmpty();
+    }
+
+    /** 首次触达时把磁盘上的消息读进来；loader 读失败按无消息处理（仓库侧已打日志）。
+     *  synchronized 只保证"读一次"：agent 后台线程和 EDT 可能先后触达同一会话。
+     *  loaded 先置位再读是刻意的：若读完再置位，loader 中途抛异常后二次触达会重读、
+     *  已 addAll 的一半加上重读的全部 = 重复追加；一次性语义更稳——前提是 loader 实现
+     *  自己吞掉所有异常（readSessionMessages 如此，换实现时别破坏这条契约）。 */
+    private synchronized List<Message> ensureLoaded() {
+        if (!loaded) {
+            loaded = true;
+            if (loader != null) {
+                messages.addAll(loader.get());
+                loader = null;
+            }
+        }
+        return messages;
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public long getCreatedAt() {
+        return createdAt;
+    }
+
+    public long getUpdatedAt() {
+        return updatedAt;
+    }
+
+    /** 置顶标记：侧栏排序时置顶优先（不 touch，updatedAt 保持"最后消息时间"语义） */
+    public boolean isPinned() {
+        return pinned;
+    }
+
+    public void setPinned(boolean pinned) {
+        this.pinned = pinned;
+    }
+
+    public String getWorkspace() {
+        return workspace;
+    }
+
+    public void setWorkspace(String workspace) {
+        this.workspace = workspace;
+    }
+
+    public String getModelName() {
+        return modelName;
+    }
+
+    public String getModelProfile() {
+        return modelProfile;
+    }
+
+    /** 记录本会话使用的模型（发送/重新生成时盖戳）；不 touch——元数据记忆不改变侧栏排序，
+     *  落盘跟着同一会话随后的消息写一起走 */
+    public void setModelOption(String profileName, String modelName) {
+        this.modelProfile = profileName;
+        this.modelName = modelName;
+    }
+
+    public ReasoningEffortEnum getReasoningEffort() {
+        return reasoningEffort;
+    }
+
+    public AgentMode getAgentMode() {
+        return agentMode;
+    }
+
+    /** 会话级偏好盖戳（发送/重新生成时从输入区调；与模型记忆一起随会话落盘） */
+    public void setDialogPreferences(ReasoningEffortEnum reasoningEffort, AgentMode agentMode) {
+        this.reasoningEffort = reasoningEffort;
+        this.agentMode = agentMode;
+    }
+
+    /** 最近一轮用量（EDT 上写入；写完即触发仓库落盘，见 attachSaver 注释） */
+    public Usage getUsage() {
+        return usage;
+    }
+
+    public void setUsage(Usage usage) {
+        this.usage = usage;
+        if (saver != null) {
+            saver.run();
+        }
+    }
+
+    /** 返回实时消息列表（未加载时先读盘补齐）；请勿在遍历时增删 */
+    public List<Message> getMessages() {
+        return ensureLoaded();
+    }
+
+    /** 消息是否已全在内存；未加载的会话会先触发读盘 */
+    public boolean isEmpty() {
+        return ensureLoaded().isEmpty();
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+        touch();
+    }
+
+    public Message addMessage(Message.Role role, String text) {
+        List<Message> loadedMessages = ensureLoaded();
+        Message message = new Message(role, text, System.currentTimeMillis());
+        loadedMessages.add(message);
+        touch();
+        if (Message.Role.ROLE_USER.equals(role) && loadedMessages.size() == 1) {
+            title = abbreviate(text, 20);
+        }
+        return message;
+    }
+
+    /** 追加一条工具调用消息（"运行中"占位，结果由 updateToolResult 回填），返回消息记录 */
+    public Message addToolCall(String toolName, String toolArgs, String callId) {
+        Message message = new Message(Message.Role.ROLE_TOOL, "", System.currentTimeMillis(), toolName, toolArgs, Message.ToolStatus.RUNNING, callId);
+        ensureLoaded().add(message);
+        touch();
+        return message;
+    }
+
+    /** 追加上下文压缩水位线标记（上下文管理插件在压缩轮结束时落库）：
+     *  下一轮请求构建以它为裁剪起点；标记本身不进请求，UI 也不渲染 */
+    public Message addContextMarker() {
+        Message message = new Message(Message.Role.ROLE_CONTEXT_MANAGER, "", System.currentTimeMillis());
+        ensureLoaded().add(message);
+        touch();
+        return message;
+    }
+
+    /** 删除最后一条消息（重新生成流程：后端先删旧回答再重新请求），返回被删消息；空会话返回 null */
+    public Message removeLast() {
+        List<Message> loadedMessages = ensureLoaded();
+        if (loadedMessages.isEmpty()) {
+            return null;
+        }
+        Message removed = loadedMessages.remove(loadedMessages.size() - 1);
+        touch();
+        return removed;
+    }
+
+    /** 从某次对话状态分叉出新会话：prefix 为分叉点之前（含分叉点那条 AI 回复）的消息，
+     *  标题沿用原会话标题加"（分叉）"后缀，工作区沿用源会话（分叉是同一工作区里继续对话），
+     *  侧栏里看得出来源 */
+    public static Conversation fork(List<Message> prefix, String sourceTitle, String workspace) {
+        Conversation forked = create();
+        for (Message message : prefix) {
+            forked.messages.add(message.copy());
+        }
+        forked.title = abbreviate(sourceTitle, 20) + "（分叉）";
+        forked.workspace = workspace;
+        return forked;
+    }
+
+    /** 工具调用完成：回填结果文本并写终态，返回替换后的新记录；没找到返回 null。
+     *  bash 后台提交是特例：成功翻 bg-running 等后台回调写终态；池满等提交失败（协议文案
+     *  "background task submitted failed" 开头，ToolCall 仍为 COMPLETE）显式翻 error；
+     *  前台任务被用户终止（结果带"(已手动终止)"标记）翻 bg-killed 复用"已终止"徽标 */
+    public Message updateToolResult(String targetId, String result, boolean success, String arguments) {
+        for (int i = 0; i < messages.size(); i++) {
+            if (Objects.equals(messages.get(i).messageId(), targetId)) {
+                Message target = messages.get(i);
+                Message.ToolStatus status = success ? Message.ToolStatus.OK : Message.ToolStatus.ERROR;
+                if (success && isBackGroundSubmission(target.toolName(), arguments, result)) {
+                    status = Message.ToolStatus.STATUS_BG_RUNNING;
+                } else if (success && isFailedBackGroundSubmission(target.toolName(), result)) {
+                    status = Message.ToolStatus.ERROR;
+                } else if (success && isManuallyTerminated(result)) {
+                    status = Message.ToolStatus.STATUS_BG_KILLED;
+                }
+                Message updated = target.withText(result).withArgs(arguments).withStatus(status);
+                messages.set(i, updated);
+                touch();
+                return updated;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 后台提交识别：bash 参数声明了 background=true，且返回的是提交成功文案（成功/失败靠
+     * 返回文案前缀区分——提交结果是给模型看的协议文案 ToolBash.executeBackGround，前端按
+     * 同一前缀识别；参数不是合法 JSON 按前台处理）。
+     */
+    private static boolean isBackGroundSubmission(String toolName, String arguments, String result) {
+        if (!"bash".equals(toolName) || arguments == null || result == null) {
+            return false;
+        }
+        if (!result.startsWith("background task submitted successfully")) {
+            return false;
+        }
+        try {
+            Object raw = JsonKit.parse(arguments);
+            return raw instanceof Map<?, ?> map && Boolean.TRUE.equals(map.get("background"));
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** 后台提交失败识别：协议文案 "background task submitted failed" 前缀（池满等拒绝路径）。
+     *  此时 ToolCall 状态仍为 COMPLETE，不显式翻 error 卡片会误显示"完成" */
+    private static boolean isFailedBackGroundSubmission(String toolName, String result) {
+        return "bash".equals(toolName) && result != null
+                && result.startsWith("background task submitted failed");
+    }
+
+    /** 前台任务被手动终止识别：ToolBash.executeForeGround 在结果尾部写 "(已手动终止)"
+     *  （exit code 是 kill 码没有参考价值），翻 bg-killed 复用"已终止"徽标。与后台提交
+     *  文案同为前后端协议字符串，改动需两侧同步 */
+    private static boolean isManuallyTerminated(String result) {
+        return result != null && result.contains("(已手动终止)");
+    }
+
+    /**
+     * 后台任务结束（markDone 回调，读线程 EOF 后触发，输出是完整缓冲）：按 callId 找
+     * "后台运行中"→ 翻 bg-done 追加输出段；或找"已手动终止"（kill 先翻的卡）→ 把输出补进
+     * 结果区、状态保持 bg-killed——终止快照拿不到管道排干的尾巴，完整输出以这里为准。
+     * markDone 每任务恰好一次（bg 线程 finally 单次），两个分支都不会二次追加。
+     * 其余情况返回 null（未知 callId）。返回非 null 时调用方负责注入通知与续轮。
+     */
+    public Message updateBackGroundResult(String callId, String output) {
+        List<Message> loadedMessages = ensureLoaded();
+        for (int i = loadedMessages.size() - 1; i >= 0; i--) {
+            Message target = loadedMessages.get(i);
+            if (callId == null || !callId.equals(target.callId())) {
+                continue;
+            }
+            if (Message.ToolStatus.STATUS_BG_RUNNING.equals(target.toolStatus())) {
+                String section = "—— 后台任务完成 ——\n"
+                        + (output == null || output.isBlank() ? "(无输出)" : output.strip());
+                Message updated = target.withText(target.text() + "\n" + section).withStatus(Message.ToolStatus.STATUS_BG_DONE);
+                loadedMessages.set(i, updated);
+                touch();
+                return updated;
+            }
+            if (Message.ToolStatus.STATUS_BG_KILLED.equals(target.toolStatus())) {
+                Message updated = output == null || output.isBlank() ? target
+                        : target.withText(target.text() + "\n" + output.strip()).withStatus(Message.ToolStatus.STATUS_BG_KILLED);
+                loadedMessages.set(i, updated);
+                touch();
+                return updated;
+            }
+        }
+        return null;
+    }
+
+    /** 后台任务被手动终止：按 callId 找最后一条"后台运行中"的工具消息，追加终止标记并翻
+     *  bg-killed 终态，返回替换后的新记录；没找到返回 null（重复终止/未知 callId）。
+     *  输出不在这里带——终止时读线程还没排干管道，markDone 的完整输出随后经
+     *  updateBackGroundResult 的 bg-killed 分支补进结果区 */
+    public Message updateBackGroundKilled(String callId) {
+        List<Message> loadedMessages = ensureLoaded();
+        for (int i = loadedMessages.size() - 1; i >= 0; i--) {
+            Message target = loadedMessages.get(i);
+            if (callId != null && callId.equals(target.callId())
+                    && Message.ToolStatus.STATUS_BG_RUNNING.equals(target.toolStatus())) {
+                Message updated = target.withText(target.text() + "\n—— 已手动终止 ——").withStatus(Message.ToolStatus.STATUS_BG_KILLED);
+                loadedMessages.set(i, updated);
+                touch();
+                return updated;
+            }
+        }
+        return null;
+    }
+
+    /** 流式结束：正文与独立思考一起替换，返回替换后的新记录；没找到返回 null */
+    public Message updateMessageContent(String target, String text, String thinking) {
+        for (int i = 0; i < messages.size(); i++) {
+            if (Objects.equals(messages.get(i).messageId(), target)) {
+                Message updated = messages.get(i).withContent(text, thinking);
+                messages.set(i, updated);
+                touch();
+                return updated;
+            }
+        }
+        return null;
+    }
+
+    private void touch() {
+        updatedAt = System.currentTimeMillis();
+    }
+
+    private static String abbreviate(String text, int max) {
+        String trimmed = text.strip();
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, max) + "…";
+    }
+}

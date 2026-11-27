@@ -1,8 +1,8 @@
 package io.github.preschoolller.agentjava.frontend.gui;
 
-import io.github.preschoolller.agentjava.frontend.store.Conversation;
-import io.github.preschoolller.agentjava.frontend.store.ConversationStore;
-import io.github.preschoolller.agentjava.frontend.store.Message;
+import io.github.preschoolller.agentjava.core.enums.Role;
+import io.github.preschoolller.agentjava.core.records.MessageView;
+import io.github.preschoolller.agentjava.core.records.SessionSummary;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -71,6 +71,25 @@ public class Sidebar extends JPanel {
         void onOpenSettings();
     }
 
+    /**
+     * 侧栏的数据源：只暴露投影与命令，不暴露仓库。
+     * 由组合根实现（把 {@code AgentApp} 的 snapshot/session 与命令接上）。
+     */
+    public interface Sessions {
+        List<SessionSummary> sessions();
+
+        String activeId();
+
+        /** 搜索与导出用：一次取该会话的消息投影 */
+        List<MessageView> messages(String sessionId);
+
+        void pin(String sessionId, boolean pinned);
+
+        void rename(String sessionId, String title);
+
+        void delete(String sessionId);
+    }
+
     public static final int EXPANDED_WIDTH = 240;
     public static final int COLLAPSED_WIDTH = 70;
 
@@ -78,10 +97,8 @@ public class Sidebar extends JPanel {
             DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault());
     private static final String SEARCH_HINT = "搜索对话";
 
-    private final ConversationStore store;
+    private final Sessions sessions;
     private final Callbacks callbacks;
-    /** 仓库变更监听：存字段是为了 detach 时能注销同一个实例 */
-    private final Runnable refreshListener = this::refresh;
     /** 行模型混装两类行：GroupRow（工作区分组头）+ Conversation（会话行）。
      *  批量重建：refresh 全清全建有 N+1 条 ListDataEvent，每条事件都会让模型监听链
      *  （UI Handler 的选择插行 + 挂在模型上的 Accessible 监听 + repaint 调度）整体走一遍，
@@ -176,8 +193,8 @@ public class Sidebar extends JPanel {
         this.badgeLookup = lookup;
     }
 
-    public Sidebar(ConversationStore store, Callbacks callbacks) {
-        this.store = store;
+    public Sidebar(Sessions sessions, Callbacks callbacks) {
+        this.sessions = sessions;
         this.callbacks = callbacks;
 
         setLayout(new BorderLayout(0, 8));
@@ -202,7 +219,6 @@ public class Sidebar extends JPanel {
         Ui.styleScrollPane(listScroll);
         add(listScroll, BorderLayout.CENTER);
 
-        store.addChangeListener(refreshListener);
         refresh();
         setExpanded(true);
 
@@ -212,9 +228,8 @@ public class Sidebar extends JPanel {
         setMaximumSize(new Dimension(520, Integer.MAX_VALUE));
     }
 
-    /** 主窗口重建（换主题）时调用：注销仓库监听，旧实例随之可整体回收 */
+    /** 主窗口重建（换主题）时调用：旧实例不再被引用，可整体回收 */
     void detach() {
-        store.removeChangeListener(refreshListener);
     }
 
     public boolean isExpanded() {
@@ -240,35 +255,35 @@ public class Sidebar extends JPanel {
         refreshingList = true;
         currentQuery = searchPlaceholder ? "" : searchField.getText().strip().toLowerCase();
         listModel.clear();
-        List<Conversation> conversations = new ArrayList<>(store.getConversations());
+        List<SessionSummary> conversations = new ArrayList<>(sessions.sessions());
         convRenderer.pruneCellLabels(conversations); // 会话删光后专属标签随之回收
-        Comparator<Conversation> pinnedFirst = Comparator
-                .comparingInt((Conversation c) -> c.isPinned() ? 0 : 1)
-                .thenComparing(Comparator.comparingLong(Conversation::getUpdatedAt).reversed());
+        Comparator<SessionSummary> pinnedFirst = Comparator
+                .comparingInt((SessionSummary c) -> c.pinned() ? 0 : 1)
+                .thenComparing(Comparator.comparingLong(SessionSummary::updatedAt).reversed());
         // 分组：键=会话绑定的工作区路径，null=默认工作区组（默认不落到会话上，跟随系统设置变化）
-        Map<String, List<Conversation>> groups = new LinkedHashMap<>();
-        for (Conversation conversation : conversations) {
+        Map<String, List<SessionSummary>> groups = new LinkedHashMap<>();
+        for (SessionSummary conversation : conversations) {
             if (!matches(conversation, currentQuery)) {
                 continue;
             }
             groups.computeIfAbsent(groupKey(conversation), key -> new ArrayList<>()).add(conversation);
         }
         // 组序=组内最近一次会话更新时间倒序；组内各自排成置顶优先+最近在前
-        List<Map.Entry<String, List<Conversation>>> ordered = new ArrayList<>(groups.entrySet());
+        List<Map.Entry<String, List<SessionSummary>>> ordered = new ArrayList<>(groups.entrySet());
         ordered.sort(Comparator.comparingLong(
-                (Map.Entry<String, List<Conversation>> entry) -> entry.getValue().stream()
-                        .mapToLong(Conversation::getUpdatedAt).max().orElse(Long.MIN_VALUE)).reversed());
+                (Map.Entry<String, List<SessionSummary>> entry) -> entry.getValue().stream()
+                        .mapToLong(SessionSummary::updatedAt).max().orElse(Long.MIN_VALUE)).reversed());
         // 批量重建：逐条 addElement 的事件在慢环境实测 1~11ms/条且随行序增长，折成一发 intervalAdded
         // （组内排序统一挪到加组头之前：收起态跳过排序会漏排，反正代价只有几百 ns）
         listModel.beginBatch();
         try {
-            for (Map.Entry<String, List<Conversation>> entry : ordered) {
+            for (Map.Entry<String, List<SessionSummary>> entry : ordered) {
                 String workspace = entry.getKey();
                 entry.getValue().sort(pinnedFirst);
                 listModel.addElement(new GroupRow(groupTitle(workspace), workspace, groupTooltip(workspace)));
                 // 收起的组只留组头（搜索激活时忽略收起态——结果整组藏掉等于搜索白做）
                 if (!collapsedGroups.contains(collapseKey(workspace)) || !currentQuery.isEmpty()) {
-                    for (Conversation conversation : entry.getValue()) {
+                    for (SessionSummary conversation : entry.getValue()) {
                         listModel.addElement(conversation);
                     }
                 }
@@ -276,8 +291,8 @@ public class Sidebar extends JPanel {
         } finally {
             listModel.endBatch();
         }
-        Conversation active = store.getActive();
-        if (matches(active, currentQuery)) {
+        SessionSummary active = activeSummary(conversations);
+        if (active != null && matches(active, currentQuery)) {
             convList.setSelectedValue(active, true);
         } else {
             convList.clearSelection(); // 过滤时当前会话不在结果里就不高亮，也不切换
@@ -287,8 +302,21 @@ public class Sidebar extends JPanel {
     }
 
     /** 分组键：绑定的工作区路径；null/空=默认工作区（同一组） */
-    private static String groupKey(Conversation conversation) {
-        String workspace = conversation.getWorkspace();
+    private SessionSummary activeSummary(List<SessionSummary> all) {
+        String activeId = sessions.activeId();
+        if (activeId == null) {
+            return null;
+        }
+        for (SessionSummary summary : all) {
+            if (summary.id().equals(activeId)) {
+                return summary;
+            }
+        }
+        return null;
+    }
+
+    private static String groupKey(SessionSummary conversation) {
+        String workspace = conversation.workspace();
         return workspace == null || workspace.isBlank() ? null : workspace;
     }
 
@@ -313,10 +341,10 @@ public class Sidebar extends JPanel {
 
     /** 侧栏折叠时汉堡按钮上的角标：有会话在生成/待审批时点个色点提示（待确认优先）。
      *  展开态条目上本来就有彩色标签，角标主要供折叠态看见 */
-    private void refreshCollapsedBadge(List<Conversation> conversations) {
+    private void refreshCollapsedBadge(List<SessionSummary> conversations) {
         Badge worst = null;
-        for (Conversation conversation : conversations) {
-            Badge badge = badgeLookup.apply(conversation.getId());
+        for (SessionSummary conversation : conversations) {
+            Badge badge = badgeLookup.apply(conversation.id());
             if (badge == Badge.APPROVAL) {
                 worst = Badge.APPROVAL;
                 break; // 最紧急，直接定
@@ -349,15 +377,16 @@ public class Sidebar extends JPanel {
     }
 
     /** 标题或任意消息内容包含关键词即命中 */
-    private boolean matches(Conversation conversation, String query) {
+    private boolean matches(SessionSummary conversation, String query) {
         if (query.isEmpty()) {
             return true;
         }
-        if (conversation.getTitle() != null && conversation.getTitle().toLowerCase().contains(query)) {
+        if (conversation.title() != null && conversation.title().toLowerCase().contains(query)) {
             return true;
         }
-        for (Message message : conversation.getMessages()) {
-            if (message.text().toLowerCase().contains(query)) {
+        for (MessageView message : sessions.messages(conversation.id())) {
+            String text = message.text();
+            if (text != null && text.toLowerCase().contains(query)) {
                 return true;
             }
         }
@@ -454,14 +483,14 @@ public class Sidebar extends JPanel {
             if (selected instanceof GroupRow) {
                 // 组头不可选：点到组头（非"＋"区）把选中拉回当前会话，保持"高亮=正在看的对话"
                 // 不切 store（switchTo 同 id 也会落盘重建，纯视觉行为不该惊动仓库）
-                Conversation active = store.getActive();
+                SessionSummary active = activeSummary(new ArrayList<>(sessions.sessions()));
                 if (active != null && matches(active, currentQuery)) {
                     convList.setSelectedValue(active, true);
                 } else {
                     convList.clearSelection();
                 }
-            } else if (selected instanceof Conversation conversation) {
-                callbacks.onSelectConversation(conversation.getId());
+            } else if (selected instanceof SessionSummary conversation) {
+                callbacks.onSelectConversation(conversation.id());
             }
         });
         convList.addMouseListener(new MouseAdapter() {
@@ -540,18 +569,18 @@ public class Sidebar extends JPanel {
         if (index < 0) {
             return;
         }
-        if (!(convList.getModel().getElementAt(index) instanceof Conversation conversation)) {
+        if (!(convList.getModel().getElementAt(index) instanceof SessionSummary conversation)) {
             return; // 组头行没有会话菜单（置顶/重命名/导出/删除都针对会话）
         }
         convList.setSelectedIndex(index);
 
-        JMenuItem pinItem = Ui.menuItem(conversation.isPinned() ? "取消置顶" : "置顶");
-        pinItem.addActionListener(ev -> store.setPinned(conversation.getId(), !conversation.isPinned()));
+        JMenuItem pinItem = Ui.menuItem(conversation.pinned() ? "取消置顶" : "置顶");
+        pinItem.addActionListener(ev -> sessions.pin(conversation.id(), !conversation.pinned()));
         JMenuItem renameItem = Ui.menuItem("重命名");
         renameItem.addActionListener(ev -> {
-            String title = Ui.promptDialog(this, "重命名", "新的对话标题", conversation.getTitle(), null);
+            String title = Ui.promptDialog(this, "重命名", "新的对话标题", conversation.title(), null);
             if (title != null && !title.isBlank()) {
-                store.rename(conversation.getId(), title);
+                sessions.rename(conversation.id(), title);
             }
         });
         JMenuItem exportItem = Ui.menuItem("导出 Markdown");
@@ -559,8 +588,8 @@ public class Sidebar extends JPanel {
         JMenuItem deleteItem = Ui.menuItem("删除", true);
         deleteItem.addActionListener(ev -> {
             if (Ui.confirmDialog(this, "删除",
-                    "删除对话「" + conversation.getTitle() + "」？", "删除", true)) {
-                store.remove(conversation.getId());
+                    "删除对话「" + conversation.title() + "」？", "删除", true)) {
+                sessions.delete(conversation.id());
             }
         });
         JPopupMenu popup = new JPopupMenu();
@@ -573,10 +602,10 @@ public class Sidebar extends JPanel {
     }
 
     /** 把整段对话导出为 Markdown 文件（用 AWT FileDialog 弹原生系统保存框，替代 Swing 仿制的 JFileChooser） */
-    private void exportMarkdown(Conversation conversation) {
+    private void exportMarkdown(SessionSummary conversation) {
         Frame owner = (Frame) SwingUtilities.windowForComponent(this);
         FileDialog dialog = new FileDialog(owner, "导出对话为 Markdown", FileDialog.SAVE);
-        dialog.setFile(safeFileName(conversation.getTitle()) + ".md");
+        dialog.setFile(safeFileName(conversation.title()) + ".md");
         dialog.setFilenameFilter((dir, name) -> name.toLowerCase().endsWith(".md"));
         dialog.setVisible(true);
         String fileName = dialog.getFile();
@@ -584,12 +613,9 @@ public class Sidebar extends JPanel {
             return; // 用户取消
         }
         File file = new File(dialog.getDirectory(), fileName);
-        StringBuilder md = new StringBuilder("# ").append(conversation.getTitle()).append("\n\n");
-        for (Message message : conversation.getMessages()) {
-            if (message.isContextMarker()) {
-                continue; // 压缩水位线标记不导出
-            }
-            String speaker = Conversation.ROLE_USER.equals(message.role()) ? "我" : "AI";
+        StringBuilder md = new StringBuilder("# ").append(conversation.title()).append("\n\n");
+        for (MessageView message : sessions.messages(conversation.id())) {
+            String speaker = Role.USER == message.role() ? "我" : "AI";
             md.append("**").append(speaker).append("：**").append("\n\n")
                     .append(message.text()).append("\n\n---\n\n");
         }
@@ -667,11 +693,15 @@ public class Sidebar extends JPanel {
         /** 每个会话一个专属行标签（按身份复用）：共享标签每次全表重算都对每行换文本，
          *  而异文 setText 会触发 BasicHTML.updateRenderer 重新解析整个 HTML 文档（实测 1~4ms/行，
          *  真实数据行行文本不同=全表都付）；专属标签文本稳定，同文 setText 走属性相等短路，全表免解析 */
-        private final Map<Conversation, SizingLabel> cellLabels = new java.util.IdentityHashMap<>();
+        private final Map<String, SizingLabel> cellLabels = new HashMap<>();
 
         /** 丢掉已删除会话的标签，防无界增长（refresh 全量调用） */
-        void pruneCellLabels(List<Conversation> alive) {
-            cellLabels.keySet().retainAll(new java.util.HashSet<>(alive));
+        void pruneCellLabels(List<SessionSummary> alive) {
+            java.util.Set<String> ids = new java.util.HashSet<>();
+            for (SessionSummary summary : alive) {
+                ids.add(summary.id());
+            }
+            cellLabels.keySet().retainAll(ids);
         }
 
         @Override
@@ -686,23 +716,23 @@ public class Sidebar extends JPanel {
                 headerCell.setToolTipText(group.tooltip + (collapsed ? "（已收起，点击展开）" : "（点击收起）"));
                 return headerCell;
             }
-            Conversation conversation = (Conversation) value;
-            SizingLabel label = cellLabels.computeIfAbsent(conversation, c -> new SizingLabel());
-            String title = conversation.getTitle() == null || conversation.getTitle().isBlank()
+            SessionSummary conversation = (SessionSummary) value;
+            SizingLabel label = cellLabels.computeIfAbsent(conversation.id(), id -> new SizingLabel());
+            String title = conversation.title() == null || conversation.title().isBlank()
                     ? "新对话"
-                    : conversation.getTitle();
-            String time = TIME_FORMAT.format(Instant.ofEpochMilli(conversation.getUpdatedAt()));
+                    : conversation.title();
+            String time = TIME_FORMAT.format(Instant.ofEpochMilli(conversation.updatedAt()));
             String secondary = Ui.hex(Ui.TEXT_SECONDARY);
             StringBuilder html = new StringBuilder("<html><body style='padding:2px 0'>");
             html.append(highlightHtml(title, currentQuery));
             html.append("<br><small><font color='").append(secondary).append("'>");
             // 状态标注与"置顶"同款式（彩色小字标签）；待确认比生成中更该被看见，优先显示
-            Badge badge = badgeLookup.apply(conversation.getId());
+            Badge badge = badgeLookup.apply(conversation.id());
             if (badge != null) {
                 html.append("<font color='").append(Ui.hex(badge == Badge.APPROVAL ? Ui.WARNING : Ui.ACCENT))
                         .append("'>").append(badge == Badge.APPROVAL ? "待确认" : "生成中").append("</font> · ");
             }
-            if (conversation.isPinned()) {
+            if (conversation.pinned()) {
                 html.append("<font color='").append(Ui.hex(Ui.ACCENT)).append("'>置顶</font> · ");
             }
             html.append(time).append("</font></small>");
@@ -799,9 +829,12 @@ public class Sidebar extends JPanel {
     }
 
     /** 标题未命中时取第一条命中消息的片段做预览（命中词同样高亮）；内容没命中返回 null */
-    private static String contentSnippet(Conversation conversation, String query) {
-        for (Message message : conversation.getMessages()) {
+    private String contentSnippet(SessionSummary conversation, String query) {
+        for (MessageView message : sessions.messages(conversation.id())) {
             String text = message.text();
+            if (text == null) {
+                continue;
+            }
             int hit = text.toLowerCase().indexOf(query);
             if (hit < 0) {
                 continue;
